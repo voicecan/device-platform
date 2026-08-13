@@ -1,0 +1,86 @@
+x-device-environment: &device-environment
+  VOICECAN_HOST: 0.0.0.0
+  VOICECAN_DEPLOYMENT_PROFILE: production
+  VOICECAN_PORT: 8787
+  VOICECAN_PUBLIC_BASE_URL: ${VOICECAN_PUBLIC_BASE_URL:?set the external HTTPS URL}
+  VOICECAN_DEVICE_WSS_URL: ${VOICECAN_DEVICE_WSS_URL:?set the external WSS URL}
+  VOICECAN_CONNECT_WEB_URL: ${VOICECAN_CONNECT_WEB_URL:-https://connect.voice-can.com/}
+  VOICECAN_DATABASE_URL: postgresql://voicecan:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/voicecan
+  VOICECAN_DATABASE_POOL_MAX: ${VOICECAN_DATABASE_POOL_MAX:-20}
+  VOICECAN_TRUST_PROXY: ${VOICECAN_TRUST_PROXY:-loopback,linklocal,uniquelocal}
+  VOICECAN_SETUP_TOKEN: ${VOICECAN_SETUP_TOKEN:?set a 32+ character setup secret}
+  VOICECAN_MASTER_KEYRING_JSON: ${VOICECAN_MASTER_KEYRING_JSON:?set the deployment keyring JSON}
+  VOICECAN_GROUP_TOKEN_PEPPER: ${VOICECAN_GROUP_TOKEN_PEPPER:?set a base64url 32-byte pepper}
+  VOICECAN_STORAGE_DRIVER: s3_direct
+  VOICECAN_DOWNLOAD_DELIVERY_MODE: external_object_only
+  VOICECAN_DOWNLOAD_GRANT_DEFAULT_TTL_SECONDS: ${VOICECAN_DOWNLOAD_GRANT_DEFAULT_TTL_SECONDS:-300}
+  VOICECAN_S3_DOWNLOAD_REDIRECT_TTL_SECONDS: ${VOICECAN_S3_DOWNLOAD_REDIRECT_TTL_SECONDS:-45}
+  VOICECAN_OAUTH_ACCESS_TOKEN_TTL_SECONDS: ${VOICECAN_OAUTH_ACCESS_TOKEN_TTL_SECONDS:-900}
+  VOICECAN_OAUTH_REFRESH_TOKEN_TTL_SECONDS: ${VOICECAN_OAUTH_REFRESH_TOKEN_TTL_SECONDS:-2592000}
+  VOICECAN_S3_ENDPOINT: ${VOICECAN_S3_ENDPOINT:-}
+  VOICECAN_S3_REGION: ${VOICECAN_S3_REGION:?set the S3 region}
+  VOICECAN_S3_BUCKET: ${VOICECAN_S3_BUCKET:?set the S3 bucket}
+  VOICECAN_S3_ACCESS_KEY_ID: ${VOICECAN_S3_ACCESS_KEY_ID:?set the S3 access key}
+  VOICECAN_S3_SECRET_ACCESS_KEY: ${VOICECAN_S3_SECRET_ACCESS_KEY:?set the S3 secret key}
+  VOICECAN_S3_FORCE_PATH_STYLE: ${VOICECAN_S3_FORCE_PATH_STYLE:-false}
+  VOICECAN_DRAIN_MS: ${VOICECAN_DRAIN_MS:-10000}
+  VOICECAN_LOG_LEVEL: ${VOICECAN_LOG_LEVEL:-info}
+
+x-device-server: &device-server
+  image: ${VOICECAN_DEVICE_IMAGE:?pin VOICECAN_DEVICE_IMAGE by digest}
+  environment: *device-environment
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  restart: unless-stopped
+  stop_grace_period: 45s
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
+    interval: 15s
+    timeout: 5s
+    retries: 5
+
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: voicecan
+      POSTGRES_USER: voicecan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - voicecan-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voicecan -d voicecan"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    image: ${VOICECAN_DEVICE_IMAGE:?pin VOICECAN_DEVICE_IMAGE by digest}
+    command: ["node", "packages/device-server/dist/cli.js", "migrate"]
+    environment: *device-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  device-server-a:
+    <<: *device-server
+
+  device-server-b:
+    <<: *device-server
+
+  gateway:
+    image: nginx:1.27.5-alpine
+    depends_on:
+      device-server-a: { condition: service_healthy }
+      device-server-b: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:${VOICECAN_GATEWAY_PORT:-8787}:8080"
+    volumes:
+      - ./production-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+volumes:
+  voicecan-postgres:

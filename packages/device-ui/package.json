@@ -1,0 +1,16 @@
+{
+  "name": "@voicecan/device-ui",
+  "version": "0.1.0-preview.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "scripts": { "build:bundle": "vite build" },
+  "dependencies": {
+    "@voicecan/device-web": "0.1.0-preview.0",
+    "lit": "^3.3.2"
+  },
+  "devDependencies": {
+    "vite": "^7.3.1"
+  }
+}

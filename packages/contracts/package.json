@@ -1,0 +1,19 @@
+{
+  "name": "@voicecan/contracts",
+  "version": "1.0.0",
+  "description": "Public TypeScript contracts for the Voicecan Device Platform.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist/**/*.js", "dist/**/*.d.ts", "dist/**/*.map"],
+  "sideEffects": false,
+  "engines": { "node": ">=24.15.0 <25" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "scripts": { "build": "tsc -b" }
+}

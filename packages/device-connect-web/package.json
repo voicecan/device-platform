@@ -1,0 +1,20 @@
+{
+  "name": "@voicecan/device-connect-web",
+  "version": "0.1.0-preview.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-lib/index.js",
+  "types": "dist-lib/index.d.ts",
+  "exports": { ".": "./dist-lib/index.js", "./protocol": "./dist-lib/protocol.js" },
+  "scripts": {
+    "build": "tsc -b && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@voicecan/device-core": "0.1.0-preview.18",
+    "@voicecan/device-ui": "0.1.0-preview.0",
+    "@voicecan/device-web": "0.1.0-preview.0"
+  },
+  "devDependencies": { "vite": "^7.3.1" }
+}

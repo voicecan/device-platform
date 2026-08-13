@@ -1,0 +1,11 @@
+.git
+.env
+data
+node_modules
+runtime
+**/dist
+**/dist-lib
+**/.tsbuildinfo
+coverage
+release-evidence
+*.log

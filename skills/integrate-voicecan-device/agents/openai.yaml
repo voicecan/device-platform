@@ -1,0 +1,4 @@
+interface:
+  display_name: "Integrate Voicecan Device"
+  short_description: "Choose, deploy, and diagnose Voicecan Device"
+  default_prompt: "Use $integrate-voicecan-device to ask me which installation method I want, then deploy and verify it safely."

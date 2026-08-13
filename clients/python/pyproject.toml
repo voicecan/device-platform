@@ -1,0 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "voicecan-device"
+version = "0.1.0.dev0"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.28,<1"]
+

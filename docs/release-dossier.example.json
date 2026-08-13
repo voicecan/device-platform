@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "candidate": {
+    "version": "0.1.0-preview.0",
+    "commit": "REPLACE_WITH_FULL_GIT_COMMIT"
+  },
+  "gates": {
+    "DP-01": {
+      "status": "pending",
+      "evidence": [],
+      "approved_by": "",
+      "approved_at": ""
+    }
+  }
+}

@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "voicecan.name" . }}
+  labels:
+    {{- include "voicecan.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels:
+      {{- include "voicecan.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "voicecan.labels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 45
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "voicecan.labels" . | nindent 20 }}
+      containers:
+        - name: device-server
+          image: {{ include "voicecan.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8787 }
+          envFrom:
+            - secretRef: { name: {{ .Values.existingSecret }} }
+          env:
+            - { name: VOICECAN_HOST, value: "0.0.0.0" }
+            - { name: VOICECAN_DEPLOYMENT_PROFILE, value: "production" }
+            - { name: VOICECAN_PORT, value: "8787" }
+            - { name: VOICECAN_PUBLIC_BASE_URL, value: {{ .Values.publicBaseUrl | quote }} }
+            - { name: VOICECAN_DEVICE_WSS_URL, value: {{ .Values.deviceWssUrl | quote }} }
+            - { name: VOICECAN_CONNECT_WEB_URL, value: {{ .Values.deviceConnectUrl | quote }} }
+            - { name: VOICECAN_DATABASE_POOL_MAX, value: {{ .Values.databasePoolMax | quote }} }
+            - { name: VOICECAN_TRUST_PROXY, value: {{ .Values.trustedProxies | quote }} }
+            - { name: VOICECAN_STORAGE_DRIVER, value: "s3_direct" }
+            - { name: VOICECAN_DOWNLOAD_DELIVERY_MODE, value: {{ .Values.downloadDeliveryMode | quote }} }
+            - { name: VOICECAN_DOWNLOAD_GRANT_DEFAULT_TTL_SECONDS, value: {{ .Values.downloadGrantDefaultTtlSeconds | quote }} }
+            - { name: VOICECAN_S3_DOWNLOAD_REDIRECT_TTL_SECONDS, value: {{ .Values.s3DownloadRedirectTtlSeconds | quote }} }
+            - { name: VOICECAN_OAUTH_ACCESS_TOKEN_TTL_SECONDS, value: {{ .Values.oauthAccessTokenTtlSeconds | quote }} }
+            - { name: VOICECAN_OAUTH_REFRESH_TOKEN_TTL_SECONDS, value: {{ .Values.oauthRefreshTokenTtlSeconds | quote }} }
+            - { name: VOICECAN_DRAIN_MS, value: {{ .Values.drainMs | quote }} }
+            - { name: VOICECAN_LOG_LEVEL, value: {{ .Values.logLevel | quote }} }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["/bin/sh", "-c", "sleep 2"] }
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

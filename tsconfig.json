@@ -1,0 +1,18 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/access-control" },
+    { "path": "packages/device-web" },
+    { "path": "packages/device-ui" },
+    { "path": "packages/device-connect-web" },
+    { "path": "packages/server-client" },
+    { "path": "packages/connector-runtime" },
+    { "path": "packages/device-server" },
+    { "path": "packages/device-mcp" },
+    { "path": "examples/fixture-consumer" },
+    { "path": "examples/meeting-assistant" },
+    { "path": "examples/voice-worklog" },
+    { "path": "examples/voice-router" }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@voicecan/server-client",
+  "version": "1.0.0",
+  "description": "Node.js client, secure recording download, and Webhook helpers for the Voicecan Device Platform.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist/**/*.js", "dist/**/*.d.ts", "dist/**/*.map"],
+  "sideEffects": false,
+  "engines": { "node": ">=24.15.0 <25" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "scripts": { "build": "tsc -b" },
+  "dependencies": { "@voicecan/contracts": "1.0.0" }
+}

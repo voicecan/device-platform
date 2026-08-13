@@ -1,0 +1,11 @@
+{
+  "package": "@voicecan/device-core",
+  "version": "0.1.0-preview.18",
+  "file": "vendor/voicecan-device-core-0.1.0-preview.18.tgz",
+  "sha256": "5cb5c268f53ff3c5314a3768a80707034b60a7db8acf8a50f4020767b1f5c307",
+  "protocol_abi": "voicecan-v1.2",
+  "supported_range": "1.2.x",
+  "conformance_hash": "sha256:679c97e5a4b4b0161f6df519c69a165e1ba7d9c8ae7ad02ff60b4b323ed2e166",
+  "browser_wasm_digest": "sha256:0cf40d0f62ca0e04ce6ab7bcc7a1a6064307921d05a2f30b971cbb7c8bedee00",
+  "node_wasm_digest": "sha256:0cf40d0f62ca0e04ce6ab7bcc7a1a6064307921d05a2f30b971cbb7c8bedee00"
+}

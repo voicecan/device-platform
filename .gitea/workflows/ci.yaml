@@ -1,0 +1,47 @@
+name: ci
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: voicecan_test
+          POSTGRES_USER: voicecan
+          POSTGRES_PASSWORD: voicecan_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U voicecan -d voicecan_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: https://git.voice-can.com/actions/checkout@v7
+      - uses: https://git.voice-can.com/actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          mirror: ${{ vars.NODE_DIST_MIRROR || 'https://npmmirror.com/mirrors/node' }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run ci
+      - run: npm run test:postgres
+        env:
+          VOICECAN_POSTGRES_TEST_URL: postgres://voicecan:voicecan_test_only@127.0.0.1:5432/voicecan_test
+      - run: docker compose -f deploy/docker-compose.yml config --quiet
+      - run: docker compose -f deploy/production-compose.yml config --quiet
+        env:
+          VOICECAN_DEVICE_IMAGE: voicecan/device-platform@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          VOICECAN_PUBLIC_BASE_URL: https://device.example.test
+          VOICECAN_DEVICE_WSS_URL: wss://device.example.test/device/v1/ws
+          POSTGRES_PASSWORD: integration_only
+          VOICECAN_SETUP_TOKEN: integration-only-setup-token-at-least-32-characters
+          VOICECAN_MASTER_KEYRING_JSON: '{"current_version":1,"keys":{"1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}'
+          VOICECAN_GROUP_TOKEN_PEPPER: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          VOICECAN_S3_REGION: us-east-1
+          VOICECAN_S3_BUCKET: integration-only
+          VOICECAN_S3_ACCESS_KEY_ID: integration-only
+          VOICECAN_S3_SECRET_ACCESS_KEY: integration-only
+      - uses: https://git.voice-can.com/actions/setup-helm@v5
+      - run: helm lint deploy/helm/voicecan-device-platform --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000

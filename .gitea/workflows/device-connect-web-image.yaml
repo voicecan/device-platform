@@ -1,0 +1,159 @@
+name: Build and Deploy Device Connect Web
+
+on:
+  push:
+    branches:
+      - test
+  workflow_dispatch:
+    inputs:
+      deploy_cluster:
+        description: "目标集群标识 (对应 Secret 后缀: TEST/PROD)"
+        required: true
+        default: "TEST"
+      deploy_namespace:
+        description: "K8s 命名空间"
+        required: true
+        default: "default"
+      image_tag:
+        description: "指定已有镜像 tag；留空则自动构建新镜像"
+        required: false
+        default: ""
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.REGISTRY_URL }}/runner-base:v1
+      credentials:
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+      options: "--network host"
+    env:
+      APP_NAME: "voicecan-device-connect-web"
+      DEPLOY_NAMESPACE: ${{ inputs.deploy_namespace || 'default' }}
+      DEPLOY_CLUSTER: ${{ inputs.deploy_cluster || 'TEST' }}
+      DEPLOY_BASE_PATH: "/nfs/app/ci"
+
+    steps:
+      - name: Checkout Code
+        uses: https://git.voice-can.com/actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Image Tag
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+            echo "Using provided image tag: ${IMAGE_TAG}"
+          else
+            IMAGE_TAG=$(date +"%Y%m%d%H%M")_$(git describe --tags --always)
+            echo "Generated tag: ${IMAGE_TAG}"
+          fi
+
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Docker Build and Push
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "image_tag provided; skipping docker build and push"
+            exit 0
+          fi
+
+          echo "${{ secrets.REGISTRY_PASSWORD }}" \
+            | docker login "${{ vars.REGISTRY_URL }}" \
+                -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+          FULL_IMAGE_NAME=$(echo "${{ vars.REGISTRY_URL }}/${APP_NAME}:${IMAGE_TAG}" \
+            | tr '[:upper:]' '[:lower:]')
+
+          docker buildx inspect mybuilder > /dev/null 2>&1 || \
+          docker buildx create --use --name mybuilder \
+            --driver-opt image=${{ vars.REGISTRY_URL }}/moby/buildkit:buildx-stable-1 \
+            --driver-opt network=host
+
+          echo "Building and pushing amd64 image: ${FULL_IMAGE_NAME}"
+          docker buildx build \
+            --platform linux/amd64 \
+            --network=host \
+            --cache-from type=registry,ref=${{ vars.REGISTRY_URL }}/${APP_NAME}:buildcache \
+            --cache-to type=registry,ref=${{ vars.REGISTRY_URL }}/${APP_NAME}:buildcache,mode=max \
+            -t "${FULL_IMAGE_NAME}" \
+            -f packages/device-connect-web/Dockerfile \
+            --push .
+
+      - name: Generate Deploy YAML
+        run: |
+          IMAGE_URL_LOWER=$(echo "${{ vars.REGISTRY_URL }}/${APP_NAME}" \
+            | tr '[:upper:]' '[:lower:]')
+
+          sed -e "s#{{APP_NAME}}#${APP_NAME}#g;\
+                  s#{{NAMESPACE}}#${DEPLOY_NAMESPACE}#g;\
+                  s#{{IMAGE_URL}}#${IMAGE_URL_LOWER}#g;\
+                  s#{{IMAGE_TAG}}#${IMAGE_TAG}#g" \
+            "packages/device-connect-web/deploy/deploy.template" \
+            > generated-device-connect-web-deploy.yaml
+
+          cat generated-device-connect-web-deploy.yaml
+
+      - name: Deploy via SSH
+        env:
+          SSH_USER: ${{ secrets[format('DEPLOY_SSH_USER_{0}', env.DEPLOY_CLUSTER)] }}
+          SSH_HOST: ${{ secrets[format('DEPLOY_IP_{0}', env.DEPLOY_CLUSTER)] }}
+          REMOTE_DIR: "${{ env.DEPLOY_BASE_PATH }}/${{ env.APP_NAME }}"
+        run: |
+          if [ -z "${SSH_HOST}" ] || [ -z "${SSH_USER}" ]; then
+            echo "ERROR: SSH_HOST or SSH_USER is empty — check deployment secrets for ${DEPLOY_CLUSTER}"
+            exit 1
+          fi
+
+          mkdir -pv ~/.ssh
+          echo "${{ secrets[format('DEPLOY_SSH_KEY_{0}', env.DEPLOY_CLUSTER)] }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "=== Job container network information ==="
+          ip addr show
+          ip route show
+          echo "--- hostname ---"
+          hostname
+
+          echo "=== TCP connectivity ==="
+          nc -zv -w 5 "${SSH_HOST}" 22 2>&1 && echo "TCP:22 OK" || echo "TCP:22 FAILED"
+
+          echo "=== MTU validation over TCP ==="
+          echo "--- 500 bytes ---"
+          dd if=/dev/urandom bs=500 count=1 2>/dev/null | nc -w 3 "${SSH_HOST}" 22 > /dev/null 2>&1 \
+            && echo "500B: OK" || echo "500B: FAILED"
+          echo "--- 1200 bytes ---"
+          dd if=/dev/urandom bs=1200 count=1 2>/dev/null | nc -w 3 "${SSH_HOST}" 22 > /dev/null 2>&1 \
+            && echo "1200B: OK" || echo "1200B: FAILED"
+          echo "--- 1400 bytes ---"
+          dd if=/dev/urandom bs=1400 count=1 2>/dev/null | nc -w 3 "${SSH_HOST}" 22 > /dev/null 2>&1 \
+            && echo "1400B: OK" || echo "1400B: FAILED"
+          echo "--- 1500 bytes ---"
+          dd if=/dev/urandom bs=1500 count=1 2>/dev/null | nc -w 3 "${SSH_HOST}" 22 > /dev/null 2>&1 \
+            && echo "1500B: OK" || echo "1500B: FAILED"
+
+          echo "=== ssh-keyscan ==="
+          ssh-keyscan -T 10 -H "${SSH_HOST}" >> ~/.ssh/known_hosts
+          echo "ssh-keyscan exit: $?"
+
+          SSH_OPTS="-T -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o RequestTTY=no -o IPQoS=none -o Ciphers=aes128-ctr,aes256-ctr -o MACs=hmac-sha2-256"
+
+          echo "Creating remote directory: ${REMOTE_DIR}"
+          ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+            "bash --noprofile --norc -c 'mkdir -pv ${REMOTE_DIR}'"
+          echo "Uploading deployment manifest"
+          scp -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o IPQoS=none \
+            -o Ciphers=aes128-ctr,aes256-ctr -o MACs=hmac-sha2-256 \
+            generated-device-connect-web-deploy.yaml \
+            "${SSH_USER}@${SSH_HOST}:${REMOTE_DIR}/${IMAGE_TAG}.yaml"
+
+          echo "Applying deployment"
+          ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+            "bash --noprofile --norc -c 'kubectl apply -f ${REMOTE_DIR}/${IMAGE_TAG}.yaml'"
+          echo "Waiting for rollout"
+          ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+            "bash --noprofile --norc -c 'kubectl rollout status deployment/${APP_NAME} -n ${DEPLOY_NAMESPACE} --timeout=3m'"

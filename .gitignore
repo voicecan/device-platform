@@ -1,0 +1,12 @@
+node_modules/
+runtime/
+dist/
+dist-lib/
+coverage/
+target/
+__pycache__/
+*.pyc
+.env
+data/
+*.log
+distribution/device-platform/LICENSE

@@ -1,0 +1,23 @@
+{
+  "name": "@voicecan/admin-web",
+  "version": "0.1.0-preview.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit --pretty false",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@voicecan/device-connect-web": "0.1.0-preview.0",
+    "@voicecan/device-web": "0.1.0-preview.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "vite": "^7.3.1"
+  }
+}

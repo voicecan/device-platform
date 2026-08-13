@@ -1,0 +1,48 @@
+name: device-platform-release-candidate
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-and-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://git.voice-can.com/actions/checkout@v7
+      - uses: https://git.voice-can.com/actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          mirror: ${{ vars.NODE_DIST_MIRROR || 'https://npmmirror.com/mirrors/node' }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run ci
+      - run: npm run release:evidence -- --output release-evidence
+      - uses: https://git.voice-can.com/actions/upload-artifact@v7
+        with:
+          name: device-platform-release-evidence-${{ github.run_id }}
+          path: release-evidence
+          retention-days: 30
+
+  build-oci-layout:
+    needs: verify-and-evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://git.voice-can.com/actions/checkout@v7
+      - uses: https://git.voice-can.com/actions/setup-qemu-action@v4
+      - uses: https://git.voice-can.com/actions/setup-buildx-action@v4
+      - uses: https://git.voice-can.com/actions/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=oci,dest=/tmp/voicecan-device-platform.oci.tar
+          provenance: mode=max
+          sbom: true
+          tags: voicecan/device-platform:release-candidate
+      - run: sha256sum /tmp/voicecan-device-platform.oci.tar > /tmp/voicecan-device-platform.oci.tar.sha256
+      - uses: https://git.voice-can.com/actions/upload-artifact@v7
+        with:
+          name: device-platform-oci-layout-${{ github.run_id }}
+          path: |
+            /tmp/voicecan-device-platform.oci.tar
+            /tmp/voicecan-device-platform.oci.tar.sha256
+          retention-days: 14

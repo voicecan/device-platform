@@ -1,0 +1,6 @@
+apiVersion: v2
+name: voicecan-device-platform
+description: Multi-instance Voicecan Device Server using PostgreSQL and immutable S3 storage
+type: application
+version: 0.1.0
+appVersion: 0.1.0-preview.0

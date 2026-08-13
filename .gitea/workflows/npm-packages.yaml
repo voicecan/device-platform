@@ -1,0 +1,36 @@
+name: publish-device-platform-npm-packages
+
+on:
+  push:
+    tags:
+      - "sdk-v*"
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: npm dist-tag
+        required: true
+        default: latest
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://git.voice-can.com/actions/checkout@v7
+      - uses: https://git.voice-can.com/actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          mirror: ${{ vars.NODE_DIST_MIRROR || 'https://npmmirror.com/mirrors/node' }}
+          cache: npm
+      - name: Configure official npm registry authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN"
+          printf '%s\n' '@voicecan:registry=https://registry.npmjs.org/' > "$RUNNER_TEMP/voicecan-npmrc"
+          printf '%s\n' "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" >> "$RUNNER_TEMP/voicecan-npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/voicecan-npmrc" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts
+      - name: Verify and publish packages in dependency order
+        env:
+          DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
+        run: node scripts/publish-npm-packages.mjs --tag "$DIST_TAG"

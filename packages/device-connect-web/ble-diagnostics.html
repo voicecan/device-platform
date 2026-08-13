@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voicecan BLE A/B 诊断</title>
+    <style>
+      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; background: #0c111b; color: #e9eef7; }
+      main { width: min(920px, calc(100% - 32px)); margin: 32px auto; }
+      h1 { margin-bottom: 8px; }
+      p { color: #aebbd0; line-height: 1.6; }
+      .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+      button { border: 1px solid #51627d; border-radius: 10px; padding: 12px 18px; background: #1a2639; color: inherit; cursor: pointer; font-weight: 650; }
+      button.primary { background: #2859db; border-color: #4d7cff; }
+      button:disabled { cursor: wait; opacity: .55; }
+      #summary { padding: 14px 16px; border-radius: 10px; background: #151e2d; color: #dce7fa; }
+      #summary[data-state="success"] { background: #123626; color: #baf3d1; }
+      #summary[data-state="error"] { background: #3a1820; color: #ffc3cb; }
+      pre { min-height: 320px; overflow: auto; padding: 16px; border-radius: 10px; background: #070a10; color: #c9d7ec; line-height: 1.55; white-space: pre-wrap; }
+      code { color: #e4edff; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Voicecan BLE A/B 诊断</h1>
+      <p>只测试 <code>连接 → 发现 1A10 服务 → 发现 2DD1/2DD0 特征 → 开启通知</code>，不发送协议帧、密钥或网络配置。</p>
+      <div class="actions">
+        <button id="legacy" class="primary" type="button">A：周三原始流程（零等待、单次）</button>
+        <button id="current" type="button">B：当前流程（等待、最多两次）</button>
+        <button id="disconnect" type="button">断开</button>
+        <button id="clear" type="button">清空日志</button>
+      </div>
+      <div id="summary" role="status">等待测试</div>
+      <pre id="log" aria-label="诊断日志"></pre>
+    </main>
+    <script type="module" src="/src/ble-diagnostics.ts"></script>
+  </body>
+</html>

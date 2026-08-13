@@ -1,0 +1,7 @@
+{
+  "name": "@voicecan/example-fixture-consumer",
+  "version": "0.1.0-preview.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@voicecan/server-client": "1.0.0" }
+}

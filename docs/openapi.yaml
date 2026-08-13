@@ -1,0 +1,1028 @@
+openapi: 3.1.0
+info:
+  title: Voicecan Independent Device Server
+  version: 0.1.0-preview.0
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    sessionCookie: { type: apiKey, in: cookie, name: vc_session }
+    groupToken: { type: http, scheme: bearer }
+    applicationToken: { type: http, scheme: bearer, bearerFormat: vcd_app_opaque }
+  schemas:
+    Envelope:
+      type: object
+      required: [success, code, message, data, request_id]
+      properties:
+        success: { const: true }
+        code: { const: "" }
+        message: { const: success }
+        data: {}
+        request_id: { type: string }
+    Error:
+      type: object
+      required: [success, code, message, request_id]
+      properties:
+        success: { const: false }
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
+        message: { type: string }
+        request_id: { type: string }
+    SetupStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [setup_pending, ready] }
+    AuthUser:
+      type: object
+      additionalProperties: false
+      required: [id, username, display_name, role, group_id, membership_role]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: [string, 'null'] }
+        role: { type: string, enum: [system_admin, user] }
+        group_id: { type: [string, 'null'] }
+        membership_role: { type: [string, 'null'], enum: [group_admin, member, null] }
+    Device:
+      type: object
+      required: [id, display_name, manufacturer, sn, model, hardware_version, firmware_version, group_id, ownership_epoch, online, last_seen_at, created_at, updated_at]
+      properties:
+        id: { type: string }
+        display_name: { type: [string, 'null'], maxLength: 80 }
+        manufacturer: { type: string }
+        sn: { type: string }
+        model: { type: [string, 'null'] }
+        hardware_version: { type: [string, 'null'] }
+        firmware_version: { type: [string, 'null'] }
+        group_id: { type: string }
+        ownership_epoch: { type: integer, minimum: 1 }
+        online: { type: boolean }
+        last_seen_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RecordingFile:
+      type: object
+      required: [id, device_id, session_id, attribute, revision, expected_size, actual_size, sha256, status, transport, media, timing, source_firmware_version, resource_version, created_at, synced_at, legal_hold, legal_hold_reason, deletion_status, deletion_requested_at, object_deleted_at]
+      properties:
+        id: { type: string }
+        device_id: { type: string }
+        session_id: { type: integer, minimum: 0 }
+        attribute: { type: integer, minimum: 0, maximum: 2 }
+        revision: { type: integer, minimum: 1 }
+        expected_size: { type: integer, minimum: 1 }
+        actual_size: { type: [integer, 'null'], minimum: 0 }
+        sha256: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$' }
+        status: { type: string, enum: [pending, syncing, synced, blocked, failed, identity_conflict, canceled] }
+        transport: { type: [string, 'null'], enum: [filesystem_http, s3_direct, server_relay, null] }
+        media: { $ref: '#/components/schemas/RecordingMediaDescriptor' }
+        timing: { $ref: '#/components/schemas/RecordingTiming' }
+        source_firmware_version: { type: [string, 'null'] }
+        resource_version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        synced_at: { type: [string, 'null'], format: date-time }
+        legal_hold: { type: boolean }
+        legal_hold_reason: { type: [string, 'null'] }
+        deletion_status: { type: string, enum: [active, requested, failed, object_deleted] }
+        deletion_requested_at: { type: [string, 'null'], format: date-time }
+        object_deleted_at: { type: [string, 'null'], format: date-time }
+    RecordingMediaDescriptor:
+      type: object
+      additionalProperties: false
+      required: [schema_version, container, codec, content_type, filename_extension, sample_rate_hz, channels, bit_depth, duration_ms, encoding_profile, source]
+      properties:
+        schema_version: { const: recording.media.v1 }
+        container: { type: [string, 'null'] }
+        codec: { type: [string, 'null'] }
+        content_type: { type: string, default: application/octet-stream }
+        filename_extension: { type: string, default: bin }
+        sample_rate_hz: { type: [integer, 'null'], minimum: 1 }
+        channels: { type: [integer, 'null'], minimum: 1 }
+        bit_depth: { type: [integer, 'null'], minimum: 1 }
+        duration_ms: { type: [integer, 'null'], minimum: 1 }
+        encoding_profile: { type: [string, 'null'] }
+        source: { type: string, enum: [device, firmware_mapping, server_verified, unknown] }
+    RecordingTiming:
+      type: object
+      additionalProperties: false
+      required: [device_started_at, device_ended_at, duration_ms, device_timezone_offset_minutes, discovered_at, synced_at]
+      properties:
+        device_started_at: { type: [string, 'null'], format: date-time }
+        device_ended_at: { type: [string, 'null'], format: date-time }
+        duration_ms: { type: [integer, 'null'], minimum: 1 }
+        device_timezone_offset_minutes: { type: [integer, 'null'], minimum: -840, maximum: 840 }
+        discovered_at: { type: string, format: date-time }
+        synced_at: { type: [string, 'null'], format: date-time }
+    DeviceCapabilityManifest:
+      type: object
+      additionalProperties: false
+      required: [schema_version, device_id, model, firmware_version, capability_version, source, changed_at, recording, sync, commands, unknown_capabilities]
+      properties:
+        schema_version: { const: device.capabilities.v1 }
+        device_id: { type: string }
+        model: { type: [string, 'null'] }
+        firmware_version: { type: [string, 'null'] }
+        capability_version: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+        source: { type: string, enum: [platform_reviewed, unknown] }
+        changed_at: { type: [string, 'null'], format: date-time }
+        recording: { type: object, required: [supported, media_profiles, max_duration_seconds], properties: { supported: { type: boolean }, media_profiles: { type: array, items: { type: string } }, max_duration_seconds: { type: [integer, 'null'], minimum: 1 } } }
+        sync: { type: object, required: [manual_trigger, inventory], properties: { manual_trigger: { type: boolean }, inventory: { type: boolean } } }
+        commands: { type: array, items: { const: recording.sync } }
+        unknown_capabilities: { type: array, items: { type: string } }
+    DeviceEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, api_version, created_at, data]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        api_version: { const: '2026-08-07' }
+        created_at: { type: string, format: date-time }
+        data: { type: object, additionalProperties: true }
+    Command:
+      type: object
+      additionalProperties: false
+      required: [id, type, device_id, status, idempotency_key, requested_at, dispatched_at, started_at, completed_at, expires_at, result_code, error_code, resource_version]
+      properties:
+        id: { type: string }
+        type: { const: recording.sync }
+        device_id: { type: string }
+        status: { type: string, enum: [queued, dispatched, running, succeeded, failed, expired] }
+        idempotency_key: { type: string }
+        requested_at: { type: string, format: date-time }
+        dispatched_at: { type: [string, 'null'], format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        expires_at: { type: string, format: date-time }
+        result_code: { type: [string, 'null'] }
+        error_code: { type: [string, 'null'] }
+        resource_version: { type: integer, minimum: 1 }
+    CursorPageFiles:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor, count, total_count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/RecordingFile' } }
+        next_cursor: { type: [string, 'null'] }
+        count: { type: integer, minimum: 0 }
+        total_count: { type: integer, minimum: 0 }
+    CursorPageEvents:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/DeviceEvent' } }
+        next_cursor: { type: [string, 'null'] }
+    ProvisioningGrant:
+      type: object
+      additionalProperties: false
+      required: [id, provisioning_token, expires_at]
+      properties:
+        id: { type: string }
+        provisioning_token: { type: string, writeOnly: true }
+        expires_at: { type: string, format: date-time }
+    ProvisioningClaim:
+      type: object
+      additionalProperties: false
+      required: [provisioning_session_id, continuation_token, device_id, device_token, wss_url]
+      properties:
+        provisioning_session_id: { type: string }
+        continuation_token: { type: string, writeOnly: true }
+        device_id: { type: string }
+        display_name: { type: [string, 'null'] }
+        device_token: { type: string, writeOnly: true }
+        wss_url: { type: string, format: uri, pattern: '^wss?://' }
+        recovered: { type: boolean, description: True when the encrypted temporary credential from an earlier incomplete attempt was safely reused. }
+    DeviceAccessSettings:
+      type: object
+      additionalProperties: false
+      required: [ble_name_prefix]
+      properties:
+        ble_name_prefix: { type: string, minLength: 1, maxLength: 24 }
+    TransferOutGrant:
+      type: object
+      additionalProperties: false
+      required: [id, transfer_token, expires_at]
+      properties:
+        id: { type: string }
+        transfer_token: { type: string, writeOnly: true }
+        expires_at: { type: string, format: date-time }
+    TransferOutClaim:
+      type: object
+      additionalProperties: false
+      required: [id, continuation_token, device_id, manufacturer, serial_number, sealed_device_token, algorithm]
+      properties:
+        id: { type: string }
+        continuation_token: { type: string, writeOnly: true }
+        device_id: { type: string }
+        manufacturer: { type: string }
+        serial_number: { type: string }
+        sealed_device_token: { type: string, writeOnly: true }
+        algorithm: { const: RSA-OAEP-256 }
+    EventEndpoint:
+      type: object
+      required: [id, group_id, url, enabled, created_at]
+      properties:
+        id: { type: string }
+        group_id: { type: string }
+        url: { type: string, format: uri }
+        enabled: { type: boolean }
+        secret_id: { type: string }
+        next_secret_id: { type: [string, 'null'] }
+        next_activates_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    Delivery:
+      type: object
+      required: [id, event_id, status, attempts, created_at]
+      properties:
+        id: { type: string }
+        event_id: { type: string }
+        replay_namespace: { type: [string, 'null'] }
+        status: { type: string, enum: [pending, delivered, dead, canceled] }
+        attempts: { type: integer, minimum: 0 }
+        next_attempt_at: { type: [string, 'null'], format: date-time }
+        delivered_at: { type: [string, 'null'], format: date-time }
+        last_error: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    StorageState:
+      type: object
+      required: [driver, driver_source, driver_change_requires_restart, supported_drivers, deployment_profile, max_file_bytes, max_storage_bytes, warning_ratio, stop_ratio, active_transfers, stored_bytes]
+      properties:
+        driver: { type: string, enum: [filesystem_http, s3_direct, server_relay] }
+        driver_source: { const: deployment_environment }
+        driver_change_requires_restart: { const: true }
+        supported_drivers: { type: array, items: { type: string, enum: [filesystem_http, s3_direct, server_relay] } }
+        deployment_profile: { type: string, enum: [development, edge, production] }
+        max_file_bytes: { type: integer, minimum: 1 }
+        max_storage_bytes: { type: integer, minimum: 1 }
+        warning_ratio: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+        stop_ratio: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+        settings_updated_at: { type: [string, 'null'], format: date-time }
+        active_transfers: { type: integer, minimum: 0 }
+        stored_bytes: { type: integer, minimum: 0 }
+        capacity: { type: [object, 'null'] }
+    OpenPlatformApplication:
+      type: object
+      required: [id, group_id, name, environment, status, channels, owner_user_id, version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        group_id: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        environment: { type: string, enum: [development, staging, production] }
+        status: { type: string, enum: [active, suspended, archived] }
+        channels: { type: array, items: { type: string, enum: [rest, mcp_stdio, mcp_remote, webhook] } }
+        owner_user_id: { type: string }
+        version: { type: integer, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RecordingDownloadLink:
+      type: object
+      additionalProperties: false
+      required: [grant_id, download_url, expires_at, purpose, content_length, content_type, filename, sha256, range_supported, delivery]
+      properties:
+        grant_id: { type: string }
+        download_url: { type: string, format: uri, writeOnly: true }
+        expires_at: { type: string, format: date-time }
+        purpose: { const: download }
+        content_length: { type: integer, minimum: 0 }
+        content_type: { type: string }
+        filename: { type: string }
+        sha256: { type: [string, 'null'] }
+        range_supported: { type: boolean }
+        delivery: { const: external_temporary_url }
+    SetupAdminRequest:
+      type: object
+      additionalProperties: false
+      required: [setup_token, username, password]
+      properties:
+        setup_token: { type: string, writeOnly: true }
+        username: { type: string, minLength: 1, maxLength: 64 }
+        password: { type: string, minLength: 12, maxLength: 256, writeOnly: true }
+        display_name: { type: string, maxLength: 128 }
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 64 }
+        password: { type: string, maxLength: 256, writeOnly: true }
+    PublicCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties: { kind: { const: sync } }
+    ProvisioningGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [allowed_origin]
+      properties:
+        group_id: { type: string }
+        allowed_origin: { type: string, format: uri }
+        connector_origin: { type: string, format: uri, description: Trusted configured Device Connect origin used when an HTTP LAN Admin proxies a secure remote provisioning flow. }
+        expected_sn: { type: string, maxLength: 128 }
+    ProvisioningClaimRequest:
+      type: object
+      additionalProperties: false
+      required: [provisioning_token, manufacturer, serial_number]
+      properties:
+        provisioning_token: { type: string, writeOnly: true }
+        manufacturer: { type: string, maxLength: 64 }
+        serial_number: { type: string, maxLength: 128 }
+        bluetooth_name: { type: string, maxLength: 248, description: Bluetooth advertised name used as the initial device display name. Existing display names are never overwritten. }
+        model: { type: string, maxLength: 64 }
+        firmware_version: { type: string, maxLength: 64 }
+        device_ws_url: { type: string, format: uri, pattern: '^wss?://', description: Optional per-provisioning override; otherwise the Server uses its configured URL, request host, or detected LAN IP. }
+    ProvisioningProgressRequest:
+      type: object
+      additionalProperties: false
+      required: [continuation_token, stage]
+      properties:
+        continuation_token: { type: string, writeOnly: true }
+        stage: { type: string, enum: [ble_authenticated, configured, failed] }
+        failure_code: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
+    TransferOutGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [allowed_origin, reason]
+      properties:
+        allowed_origin: { type: string, format: uri }
+        reason: { type: string, minLength: 1, maxLength: 256 }
+    TransferOutClaimRequest:
+      type: object
+      additionalProperties: false
+      required: [transfer_token, public_key_jwk]
+      properties:
+        transfer_token: { type: string, writeOnly: true }
+        public_key_jwk: { type: object, additionalProperties: true, writeOnly: true }
+    TransferOutCompleteRequest:
+      type: object
+      additionalProperties: false
+      required: [continuation_token, serial_number, result]
+      properties:
+        continuation_token: { type: string, writeOnly: true }
+        serial_number: { type: string, maxLength: 128 }
+        result: { type: string, enum: [ack, failed] }
+        failure_code: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
+    SetupStatusEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/SetupStatus' } }
+    AuthUserEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/AuthUser' } }
+    DeviceEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/Device' } }
+    DeviceListEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { type: array, items: { $ref: '#/components/schemas/Device' } } }
+    FileEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/RecordingFile' } }
+    FilePageEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/CursorPageFiles' } }
+    EventPageEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/CursorPageEvents' } }
+    CommandEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/Command' } }
+    ProvisioningGrantEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/ProvisioningGrant' } }
+    ProvisioningClaimEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/ProvisioningClaim' } }
+    TransferOutGrantEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/TransferOutGrant' } }
+    TransferOutClaimEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/Envelope' }
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/TransferOutClaim' } }
+paths:
+  /.well-known/oauth-authorization-server:
+    servers: [{ url: / }]
+    get:
+      summary: OAuth Authorization Server Metadata including Dynamic Client Registration discovery
+      responses:
+        '200':
+          description: OAuth server metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [issuer, authorization_endpoint, token_endpoint, registration_endpoint]
+                properties:
+                  issuer: { type: string, format: uri }
+                  authorization_endpoint: { type: string, format: uri }
+                  token_endpoint: { type: string, format: uri }
+                  registration_endpoint: { type: string, format: uri }
+  /oauth/register:
+    servers: [{ url: / }]
+    post:
+      summary: Dynamically register an unprivileged public Remote MCP OAuth client (RFC 7591)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [redirect_uris]
+              properties:
+                redirect_uris: { type: array, minItems: 1, maxItems: 10, items: { type: string, format: uri } }
+                client_name: { type: string, maxLength: 120 }
+                token_endpoint_auth_method: { const: none, default: none }
+                grant_types: { type: array, items: { type: string, enum: [authorization_code, refresh_token] } }
+                response_types: { type: array, items: { const: code } }
+                scope: { type: string }
+                application_type: { type: string, enum: [native, web] }
+      responses:
+        '201': { description: Public client metadata with client_id and no client secret }
+        '400': { description: RFC 7591 invalid_redirect_uri or invalid_client_metadata error }
+        '429': { description: Anonymous registration rate limit exceeded }
+  /setup/status:
+    get:
+      summary: Check setup state
+      responses:
+        '200':
+          description: setup_pending or ready
+          content: { application/json: { schema: { $ref: '#/components/schemas/SetupStatusEnvelope' } } }
+  /setup/admin:
+    post:
+      summary: Atomically create the first System Admin
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SetupAdminRequest' } } }
+      responses: { '201': { description: Created }, '403': { description: Invalid, expired, or consumed setup token } }
+  /auth/login:
+    post:
+      summary: Create a human session
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } }
+      responses: { '200': { description: Session cookie and CSRF token }, '401': { description: Invalid credentials }, '429': { description: Rate limited } }
+  /auth/logout:
+    post: { summary: Revoke current session, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked } } }
+  /auth/me:
+    get:
+      summary: Current user and membership
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Current identity
+          content: { application/json: { schema: { $ref: '#/components/schemas/AuthUserEnvelope' } } }
+  /auth/csrf:
+    get:
+      summary: Refresh the CSRF token for the current human session
+      security: [{ sessionCookie: [] }]
+      responses: { '200': { description: Refreshed CSRF token and same-origin cookie }, '401': { description: Session expired } }
+  /settings/device-access:
+    get:
+      summary: Read the server-wide nearby-device discovery settings
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Device access settings
+          content: { application/json: { schema: { $ref: '#/components/schemas/DeviceAccessSettings' } } }
+    patch:
+      summary: Update nearby-device discovery settings as System Admin
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/DeviceAccessSettings' } } }
+      responses: { '200': { description: Updated }, '400': { description: Invalid BLE name prefix }, '403': { description: System Admin required } }
+  /auth/change-password:
+    post: { summary: Change current password and revoke sessions, security: [{ sessionCookie: [] }], responses: { '200': { description: Changed } } }
+  /users:
+    get: { summary: List local users, security: [{ sessionCookie: [] }], responses: { '200': { description: Users } } }
+    post: { summary: Create a local user, security: [{ sessionCookie: [] }], responses: { '201': { description: Created } } }
+  /users/{id}:
+    patch: { summary: Update role, identity, or disabled state with last-admin guards, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated }, '409': { description: Lifecycle guard } } }
+    delete: { summary: Delete an unused local user, security: [{ sessionCookie: [] }], responses: { '200': { description: Deleted }, '409': { description: User has dependencies } } }
+  /users/{id}/password:
+    put: { summary: Set a local user password and revoke sessions, security: [{ sessionCookie: [] }], responses: { '200': { description: Changed }, '404': { description: Missing or unauthorized } } }
+  /user-groups:
+    get: { summary: List visible groups, security: [{ sessionCookie: [] }], responses: { '200': { description: Groups } } }
+    post: { summary: Create group with one administrator, security: [{ sessionCookie: [] }], responses: { '201': { description: Created } } }
+  /user-groups/{id}:
+    patch: { summary: Rename or archive a dependency-free group, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated }, '409': { description: Group still owns devices } } }
+  /user-groups/{id}/members:
+    get: { summary: List active members, security: [{ sessionCookie: [] }], responses: { '200': { description: Members } } }
+    put: { summary: Add an active member, security: [{ sessionCookie: [] }], responses: { '201': { description: Added } } }
+  /user-groups/{id}/members/{userId}:
+    delete: { summary: Remove a non-admin member and revoke sessions, security: [{ sessionCookie: [] }], responses: { '200': { description: Removed }, '409': { description: Member cannot be removed } } }
+  /user-groups/{id}/transfer-admin:
+    post: { summary: Atomically transfer the active Group Admin role, security: [{ sessionCookie: [] }], responses: { '200': { description: Transferred } } }
+  /user-groups/{id}/api-tokens:
+    get: { summary: List token metadata without token material, security: [{ sessionCookie: [] }], responses: { '200': { description: Tokens } } }
+    post: { summary: Create a scoped token shown once, security: [{ sessionCookie: [] }], responses: { '201': { description: Token shown once } } }
+  /user-groups/{id}/api-tokens/{tokenId}/rotate:
+    post: { summary: Atomically revoke and replace a group token with rotation lineage, security: [{ sessionCookie: [] }], responses: { '201': { description: Replacement token shown once } } }
+  /user-groups/{id}/api-tokens/{tokenId}:
+    delete: { summary: Revoke a group token, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked }, '404': { description: Missing or unauthorized } } }
+  /provisioning-sessions:
+    post:
+      summary: Create one-time provisioning grant
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ProvisioningGrantRequest' } } }
+      responses:
+        '201':
+          description: Grant shown once
+          content: { application/json: { schema: { $ref: '#/components/schemas/ProvisioningGrantEnvelope' } } }
+  /provisioning-sessions/{id}:
+    get: { summary: Read an administrator-visible provisioning state, security: [{ sessionCookie: [] }], responses: { '200': { description: Current state }, '404': { description: Missing or unauthorized } } }
+  /provisioning-sessions/claim:
+    post:
+      summary: Reserve one device and temporary credential using an exact-Origin-bound provisioning grant
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ProvisioningClaimRequest' } } }
+      responses:
+        '201':
+          description: Device and continuation credentials shown once
+          content: { application/json: { schema: { $ref: '#/components/schemas/ProvisioningClaimEnvelope' } } }
+        '403': { description: Invalid origin, grant, or serial }
+  /provisioning-sessions/{id}/progress:
+    post:
+      summary: Advance reserved provisioning through BLE authenticated/configured or fail and release it
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ProvisioningProgressRequest' } } }
+      responses: { '200': { description: Stage accepted }, '409': { description: Stale or terminal stage } }
+  /provisioning-sessions/{id}/observe:
+    post: { summary: Origin-bound polling endpoint for authoritative online/completed state, responses: { '200': { description: Current state }, '404': { description: Invalid continuation credential } } }
+  /devices:
+    get:
+      summary: List group-scoped devices
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      responses:
+        '200':
+          description: Devices
+          content: { application/json: { schema: { $ref: '#/components/schemas/DeviceListEnvelope' } } }
+  /devices/{id}:
+    get:
+      summary: Read group-scoped device metadata
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: Device
+          content: { application/json: { schema: { $ref: '#/components/schemas/DeviceEnvelope' } } }
+        '404':
+          description: Missing or unauthorized
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    patch:
+      summary: Update the user-facing device name without changing its serial identity
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { display_name: { type: [string, 'null'], maxLength: 80 }, reason: { type: string, maxLength: 256 } } } } }
+      responses: { '200': { description: Updated device }, '403': { description: Group administrator required }, '404': { description: Missing or unauthorized } }
+  /devices/{id}/capabilities:
+    get:
+      summary: Read the stable reviewed public Capability Manifest
+      security: [{ applicationToken: [devices:read] }, { sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Device capability manifest }, '404': { description: Missing or unauthorized } }
+  /devices/{id}/status:
+    get:
+      summary: Read the latest server-polled or explicitly reported BLE device status
+      security: [{ sessionCookie: [] }, { groupToken: [devices:read] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Device and latest status snapshot }, '404': { description: Missing or unauthorized } }
+  /devices/{id}/status/refresh:
+    post:
+      summary: Request an immediate reviewed status refresh over the device WebSocket
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '202': { description: Refresh accepted }, '409': { description: Device is offline or busy } }
+  /devices/{id}/ble-maintenance-session:
+    post:
+      summary: System Admin obtains a memory-only credential handoff for nearby BLE maintenance
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Short-lived browser memory handoff }, '403': { description: System Admin required } }
+  /devices/{id}/ble-status:
+    post:
+      summary: System Admin reports authenticated BLE device information and a complete status snapshot
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: BLE snapshot stored }, '409': { description: Bluetooth serial does not match } }
+  /devices/{id}/control:
+    post:
+      summary: Dispatch a reviewed semantic device control over an active WebSocket connection
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
+      responses: { '202': { description: Control dispatched }, '400': { description: Unsupported semantic control }, '409': { description: Device is offline or its WebSocket disconnected before dispatch } }
+  /admin/firmware-packages:
+    get:
+      summary: System Admin lists the local firmware repository
+      security: [{ sessionCookie: [] }]
+      responses: { '200': { description: Local uploaded and officially imported firmware packages } }
+  /admin/firmware-packages/upload:
+    post:
+      summary: System Admin streams a custom firmware binary into the local repository
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { in: query, name: hardware_version, required: true, schema: { type: string, maxLength: 64 } }
+        - { in: query, name: channel, schema: { type: string, enum: [production, developer], default: production } }
+        - { in: query, name: version, required: true, schema: { type: string, maxLength: 16 } }
+        - { in: query, name: crc16, required: true, schema: { type: integer, minimum: 0, maximum: 65535 } }
+        - { in: query, name: max_ble_chunk, schema: { type: integer, minimum: 0, maximum: 1480, default: 0 } }
+        - { in: query, name: release_notes, schema: { type: string, maxLength: 2000 } }
+      requestBody:
+        required: true
+        content: { application/octet-stream: { schema: { type: string, format: binary, maxLength: 134217728 } } }
+      responses: { '201': { description: Firmware stored locally with computed SHA-256 }, '409': { description: Version already exists for hardware and channel } }
+  /admin/firmware-packages/import-official:
+    post:
+      summary: System Admin imports and verifies the latest firmware from the configured official source into the local repository
+      security: [{ sessionCookie: [] }]
+      responses: { '200': { description: Firmware was already imported }, '201': { description: Official firmware was downloaded, verified, and stored locally }, '502': { description: Official source or package verification failed } }
+  /admin/firmware-packages/{id}/archive:
+    post:
+      summary: System Admin archives a local firmware package so it is no longer selected for OTA
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Firmware archived }, '404': { description: Firmware not found or already archived } }
+  /devices/{id}/firmware/latest:
+    get:
+      summary: Fetch latest production or explicitly selected developer firmware metadata from the local repository
+      security: [{ sessionCookie: [] }, { groupToken: [devices:read] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: query, name: channel, schema: { type: string, enum: [production, developer], default: production } }]
+      responses: { '200': { description: Verified channel metadata }, '409': { description: Hardware version has not been observed } }
+  /devices/{id}/firmware/package:
+    get:
+      summary: System Admin downloads a size- and SHA-256-verified local firmware package for nearby BLE transfer
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: query, name: channel, schema: { type: string, enum: [production, developer], default: production } }]
+      responses:
+        '200':
+          description: Verified binary with Voicecan firmware metadata response headers
+          content: { application/octet-stream: { schema: { type: string, format: binary } } }
+        '403': { description: System Admin required }
+        '502': { description: Official firmware could not be verified }
+  /devices/{id}/ota:
+    post:
+      summary: System Admin verifies and transfers local firmware to an online device
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
+      responses: { '202': { description: OTA transfer started }, '409': { description: Device is offline, busy, or already current }, '502': { description: Official firmware could not be verified } }
+  /devices/{id}/commands:
+    get:
+      summary: List recent reviewed semantic commands with duration and terminal event correlation
+      security: [{ applicationToken: [commands:read] }, { sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Recent commands }, '404': { description: Missing or unauthorized } }
+  /devices/{id}/transfer-out-sessions:
+    post:
+      summary: Source System Admin creates a five-minute near-field release grant; no old credential is returned
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TransferOutGrantRequest' } } }
+      responses:
+        '201':
+          description: One-time transfer grant
+          content: { application/json: { schema: { $ref: '#/components/schemas/TransferOutGrantEnvelope' } } }
+        '409': { description: Active transfer blocks release }
+  /transfer-out-sessions/{id}/claim:
+    post:
+      summary: Exact-Origin provisioner seals the old device credential to an ephemeral RSA-OAEP public key
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TransferOutClaimRequest' } } }
+      responses:
+        '200':
+          description: One-time sealed credential and continuation token
+          content: { application/json: { schema: { $ref: '#/components/schemas/TransferOutClaimEnvelope' } } }
+        '404': { description: Invalid, expired, or consumed grant }
+  /transfer-out-sessions/{id}/complete:
+    post:
+      summary: Commit release only after nearby device confirms non-erasing unbind
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/TransferOutCompleteRequest' } } }
+      responses: { '200': { description: Released or safely failed }, '409': { description: Device/session state changed } }
+  /devices/{id}/sync:
+    post:
+      summary: Queue an idempotent sync command
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
+      responses: { '202': { description: Queued }, '409': { description: Idempotency conflict } }
+  /devices/{id}/recording-sync:
+    get:
+      summary: Read Device connection state and recording synchronization health
+      security: [{ applicationToken: [devices:read, recordings:read] }, { sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Connection, aggregate status, recent recordings and latest sync command }, '404': { description: Missing or unauthorized } }
+  /devices/{id}/recording-sync/reset:
+    post:
+      summary: Non-destructively reset failed or stale recording synchronization and request a fresh inventory
+      security: [{ applicationToken: [devices:sync] }, { sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { mode: { type: string, enum: [failed, failed_and_stale], default: failed }, reason: { type: string, minLength: 1, maxLength: 256 } } } } } }
+      responses: { '202': { description: Attempts reset; synchronized recordings preserved; inventory command queued }, '400': { description: Invalid reset mode } }
+  /devices/{id}/commands:
+    post:
+      summary: Submit a reviewed public command (currently sync only; no raw or destructive commands)
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PublicCommandRequest' } } }
+      responses: { '202': { description: Queued or dispatched }, '400': { description: Command is not in the public allowlist }, '409': { description: Idempotency conflict } }
+  /commands/{id}:
+    get:
+      summary: Read a group-scoped command state
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: Command
+          content: { application/json: { schema: { $ref: '#/components/schemas/CommandEnvelope' } } }
+        '404':
+          description: Missing or unauthorized
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /devices/{id}/transfer-preview:
+    post: { summary: Preview historical authorization transfer, security: [{ sessionCookie: [] }], parameters: [{ in: path, name: id, required: true, schema: { type: string } }], responses: { '200': { description: Version and confirmation token } } }
+  /devices/{id}/group:
+    put: { summary: CAS transfer Device and all historical file access, security: [{ sessionCookie: [] }], parameters: [{ in: path, name: id, required: true, schema: { type: string } }], responses: { '200': { description: Transferred }, '409': { description: Preview stale } } }
+  /files:
+    get:
+      summary: List files through current Device ownership with stable scoped cursors
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters:
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: deletion_status, description: Non-active values require System Admin, schema: { type: string, enum: [active, requested, failed, object_deleted] } }
+        - { in: query, name: device_id, schema: { type: string } }
+        - { in: query, name: attribute, schema: { type: integer, minimum: 0, maximum: 2 } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: search, schema: { type: string, maxLength: 128 } }
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        '200':
+          description: Cursor page with count and total_count
+          content: { application/json: { schema: { $ref: '#/components/schemas/FilePageEnvelope' } } }
+        '410':
+          description: Invalid or scope/filter-mismatched cursor
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /files/{id}:
+    get:
+      summary: Read file metadata
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: File
+          content: { application/json: { schema: { $ref: '#/components/schemas/FileEnvelope' } } }
+        '404':
+          description: Missing or unauthorized
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    delete:
+      summary: Delete the exact immutable storage object after a confirmed preview; retain metadata tombstone and never delete the device source
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, resource_version, confirmation_token]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 256 }
+                resource_version: { type: string }
+                confirmation_token: { type: string }
+      responses:
+        '200': { description: Exact object deleted and metadata tombstone retained }
+        '409': { description: Preview stale, legal hold, or lifecycle conflict }
+        '503': { description: Object deletion failed and remains retryable }
+  /files/{id}/legal-hold:
+    put:
+      summary: Set or clear a System Admin legal hold with an audit reason
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled, reason]
+              properties:
+                enabled: { type: boolean }
+                reason: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200': { description: Updated file lifecycle metadata }
+        '409': { description: Deletion already in progress or completed }
+  /files/{id}/deletion-preview:
+    post:
+      summary: Preview object-only deletion and issue a resource-version-bound confirmation
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Confirmation token and exact deletion scope }
+        '409': { description: Legal hold blocks deletion }
+  /files/{id}/content:
+    get:
+      summary: Deprecated legacy content stream; Application Tokens receive 410 and must create a temporary link
+      deprecated: true
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Range, schema: { type: string, pattern: '^bytes=\\d*-\\d*$' } }]
+      responses: { '200': { description: Full binary stream }, '206': { description: Partial binary stream }, '404': { description: Missing or unauthorized }, '416': { description: Invalid or unsatisfiable range } }
+  /event-endpoints:
+    get: { summary: List endpoints, security: [{ sessionCookie: [] }], responses: { '200': { description: Endpoints } } }
+    post: { summary: Create endpoint and return signing secret once, security: [{ sessionCookie: [] }], responses: { '201': { description: Created } } }
+  /event-endpoints/{id}/rotate-secret:
+    post: { summary: Stage a next signing secret and activation time, security: [{ sessionCookie: [] }], responses: { '200': { description: Next secret shown once }, '409': { description: Rotation already pending } } }
+  /event-endpoints/{id}:
+    patch: { summary: Update URL or enabled state; disabling cancels pending deliveries, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated }, '404': { description: Missing or unauthorized } } }
+    delete: { summary: Lifecycle-safe disable retaining audit and delivery history, security: [{ sessionCookie: [] }], responses: { '200': { description: Disabled }, '404': { description: Missing or unauthorized } } }
+  /event-endpoints/{id}/deliveries:
+    get: { summary: Inspect pending, delivered, canceled, or dead deliveries, security: [{ sessionCookie: [] }], responses: { '200': { description: Delivery ledger } } }
+  /event-deliveries/{id}/replay:
+    post: { summary: Replay a dead or canceled delivery with an audit reason, security: [{ sessionCookie: [] }], responses: { '202': { description: Requeued } } }
+  /event-endpoints/{id}/backfill-preview:
+    post: { summary: Preview an ownership-safe historical backfill, security: [{ sessionCookie: [] }], responses: { '200': { description: Count, resource version, and confirmation token } } }
+  /event-endpoints/{id}/backfill:
+    post: { summary: Create a confirmed replay namespace, security: [{ sessionCookie: [] }], responses: { '202': { description: Backfill created } } }
+  /events:
+    get:
+      summary: Pull group-scoped events by cursor
+      security: [{ sessionCookie: [] }, { groupToken: [] }]
+      parameters:
+        - { in: query, name: cursor, schema: { type: string } }
+        - { in: query, name: event_type, schema: { type: string } }
+        - { in: query, name: device_id, schema: { type: string } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Cursor page
+          content: { application/json: { schema: { $ref: '#/components/schemas/EventPageEnvelope' } } }
+  /audit-logs:
+    get: { summary: Query immutable audit records in the current administrative scope, security: [{ sessionCookie: [] }], responses: { '200': { description: Audit records } } }
+  /admin/storage:
+    get: { summary: Inspect storage driver, runtime capacity policy, physical capacity, and active transfers, security: [{ sessionCookie: [] }], responses: { '200': { description: Storage state } } }
+    patch:
+      summary: Update the audited runtime storage capacity policy as System Admin; the deployment-level driver remains unchanged
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [max_storage_bytes, warning_ratio, stop_ratio, reason]
+              properties:
+                max_storage_bytes: { type: integer, minimum: 1 }
+                warning_ratio: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+                stop_ratio: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200': { description: Updated storage state }
+        '400': { description: Invalid capacity or watermark ordering }
+  /admin/reconcile:
+    post: { summary: Expire attempts and recover immutable objects after a crash, security: [{ sessionCookie: [] }], responses: { '200': { description: Reconciliation counters } } }
+  /capabilities:
+    get: { summary: Describe the authenticated Application, scopes, channel, quotas and safe delivery features, security: [{ applicationToken: [] }], responses: { '200': { description: Capabilities without credential material } } }
+  /recordings:
+    get: { summary: Cursor-page recording metadata; never returns recording bytes or temporary URLs, security: [{ applicationToken: [recordings:read] }], responses: { '200': { description: Recording metadata page } } }
+  /recordings/{id}:
+    get: { summary: Read recording metadata without content or a URL, security: [{ applicationToken: [recordings:read] }], responses: { '200': { description: Recording metadata }, '404': { description: Missing or outside the Application Group } } }
+  /recordings/{id}/retry:
+    post:
+      summary: Reset one failed recording synchronization and request a fresh Device inventory
+      security: [{ applicationToken: [devices:sync] }, { sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 256 } } } } } }
+      responses: { '202': { description: Recording returned to pending and sync command queued }, '409': { description: Recording is not failed/retryable } }
+  /recordings/{id}/download-links:
+    post:
+      summary: Create a one-use short-lived recording Download Grant
+      security: [{ applicationToken: [recordings:download_link:create] }]
+      parameters: [{ in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { purpose: { const: download }, ttl_seconds: { type: integer, minimum: 60, maximum: 900 }, reason: { type: string, minLength: 1, maxLength: 256 } } } } }
+      responses: { '201': { description: Temporary external URL, content: { application/json: { schema: { allOf: [{ $ref: '#/components/schemas/Envelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/RecordingDownloadLink' } } }] } } } }, '429': { description: Grant quota exceeded } }
+  /recording-download-links/{id}:
+    delete: { summary: Revoke a Download Grant created by this Application, security: [{ applicationToken: [recordings:download_link:revoke] }], responses: { '200': { description: Revoked }, '404': { description: Missing or owned by another Application } } }
+  /recording-download-grants/{id}:
+    get: { summary: Read Download Grant state without its URL token, security: [{ applicationToken: [recordings:download_link:revoke] }], responses: { '200': { description: Grant state }, '404': { description: Missing or owned by another Application } } }
+  /recording-download-grants/{id}/revoke:
+    post:
+      summary: Revoke a Download Grant owned by this Application
+      security: [{ applicationToken: [recordings:download_link:revoke] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 256 } } } } } }
+      responses: { '200': { description: Revoked }, '404': { description: Missing or owned by another Application } }
+  /open-platform/permission-catalog:
+    get: { summary: Shared REST/MCP permission catalog and templates, security: [{ sessionCookie: [] }], responses: { '200': { description: Catalog } } }
+  /open-platform/overview:
+    get: { summary: Application, credential, call, download and alert summary, security: [{ sessionCookie: [] }], responses: { '200': { description: Open-platform overview } } }
+  /open-platform/applications:
+    get: { summary: List visible Applications, security: [{ sessionCookie: [] }], responses: { '200': { description: Applications } } }
+    post: { summary: Create an Application with channels, permissions and default policies, security: [{ sessionCookie: [] }], responses: { '201': { description: Application created } } }
+  /open-platform/applications/{id}:
+    get: { summary: Complete Application control-plane detail, security: [{ sessionCookie: [] }], responses: { '200': { description: Application detail } } }
+    patch: { summary: Version-guarded Application metadata/status/channel update, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated }, '409': { description: Version conflict } } }
+    delete: { summary: Archive Application and revoke its credentials, OAuth tokens and grants, security: [{ sessionCookie: [] }], responses: { '200': { description: Archived } } }
+  /open-platform/applications/{id}/permissions:
+    get: { summary: Read maximum Application permissions, security: [{ sessionCookie: [] }], responses: { '200': { description: Permissions } } }
+    put: { summary: Version-guarded permission update that immediately narrows credential scopes, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated } } }
+  /open-platform/applications/{id}/collaborators:
+    get: { summary: List Application collaborators, security: [{ sessionCookie: [] }], responses: { '200': { description: Collaborators } } }
+    post: { summary: Add or update an owner/developer/viewer, security: [{ sessionCookie: [] }], responses: { '201': { description: Collaborator added } } }
+  /open-platform/applications/{id}/collaborators/{userId}:
+    delete: { summary: Remove a non-owner collaborator, security: [{ sessionCookie: [] }], responses: { '200': { description: Removed } } }
+  /open-platform/applications/{id}/owner:
+    put: { summary: Transfer Application ownership atomically, security: [{ sessionCookie: [] }], responses: { '200': { description: Ownership transferred } } }
+  /open-platform/applications/{id}/policies:
+    get: { summary: Read quota, IP and download policies, security: [{ sessionCookie: [] }], responses: { '200': { description: Policies } } }
+    put: { summary: Update bounded Application policies, security: [{ sessionCookie: [] }], responses: { '200': { description: Policies updated } } }
+  /open-platform/applications/{id}/credentials:
+    get: { summary: List credential metadata without secrets, security: [{ sessionCookie: [] }], responses: { '200': { description: Credentials } } }
+    post: { summary: Create an API or MCP stdio Token shown once, security: [{ sessionCookie: [] }], responses: { '201': { description: Secret shown once } } }
+  /open-platform/applications/{id}/credentials/{credentialId}/rotate:
+    post: { summary: Rotate a credential with a bounded grace period, security: [{ sessionCookie: [] }], responses: { '201': { description: Replacement secret shown once } } }
+  /open-platform/applications/{id}/credentials/{credentialId}/finish-rotation:
+    post: { summary: Finish rotation and revoke the old credential, security: [{ sessionCookie: [] }], responses: { '200': { description: Rotation finished } } }
+  /open-platform/applications/{id}/credentials/{credentialId}/suspend:
+    post: { summary: Suspend or resume a credential, security: [{ sessionCookie: [] }], responses: { '200': { description: Status changed } } }
+  /open-platform/applications/{id}/credentials/{credentialId}/mark-leaked:
+    post: { summary: Revoke a leaked credential and create a security alert, security: [{ sessionCookie: [] }], responses: { '200': { description: Credential revoked as leaked } } }
+  /open-platform/applications/{id}/credentials/{credentialId}:
+    delete: { summary: Revoke a credential and its active Download Grants, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked } } }
+  /open-platform/applications/{id}/oauth-clients:
+    get: { summary: List approved remote MCP OAuth clients, security: [{ sessionCookie: [] }], responses: { '200': { description: OAuth clients } } }
+    post: { summary: Register a public PKCE-only MCP OAuth client, security: [{ sessionCookie: [] }], responses: { '201': { description: Client created } } }
+  /open-platform/applications/{id}/oauth-clients/{clientId}:
+    patch: { summary: Update MCP client redirect URIs, scope or status, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated } } }
+    delete: { summary: Revoke an MCP client and all token families, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked } } }
+  /open-platform/oauth-clients:
+    get: { summary: List visible MCP OAuth clients, security: [{ sessionCookie: [] }], responses: { '200': { description: Clients } } }
+  /open-platform/applications/{id}/webhooks:
+    get: { summary: List Application Webhooks, security: [{ sessionCookie: [] }], responses: { '200': { description: Webhooks } } }
+    post: { summary: Create an Application Webhook and show its signing secret once, security: [{ sessionCookie: [] }], responses: { '201': { description: Webhook created } } }
+  /open-platform/applications/{id}/webhooks/{endpointId}:
+    patch: { summary: Update Application Webhook URL/status, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated } } }
+    delete: { summary: Disable an Application Webhook, security: [{ sessionCookie: [] }], responses: { '200': { description: Disabled } } }
+  /open-platform/applications/{id}/webhooks/{endpointId}/rotate-secret:
+    post: { summary: Schedule Webhook signing-secret rotation, security: [{ sessionCookie: [] }], responses: { '200': { description: Next secret shown once } } }
+  /open-platform/applications/{id}/webhooks/{endpointId}/test:
+    post: { summary: Queue a signed Application-scoped test event, security: [{ sessionCookie: [] }], responses: { '202': { description: Test delivery queued } } }
+  /open-platform/applications/{id}/webhooks/{endpointId}/deliveries:
+    get: { summary: Inspect delivery attempts and endpoint health, security: [{ sessionCookie: [] }], responses: { '200': { description: Delivery ledger and health } } }
+  /open-platform/applications/{id}/webhook-deliveries/{deliveryId}/replay:
+    post: { summary: Replay with a new delivery ID while preserving event.id, security: [{ sessionCookie: [] }], responses: { '202': { description: Replay queued } } }
+  /open-platform/applications/{id}/webhooks/{endpointId}/backfill-preview:
+    post: { summary: Preview a bounded filter-aware backfill, security: [{ sessionCookie: [] }], responses: { '200': { description: Count, version, and confirmation token } } }
+  /open-platform/applications/{id}/webhooks/{endpointId}/backfill:
+    post: { summary: Confirm a bounded filter-aware backfill, security: [{ sessionCookie: [] }], responses: { '202': { description: Backfill queued } } }
+  /open-platform/applications/{id}/usage:
+    get: { summary: Application quota buckets and 24-hour call summary, security: [{ sessionCookie: [] }], responses: { '200': { description: Usage } } }
+  /open-platform/applications/{id}/audit:
+    get: { summary: Application-dimensional immutable audit records, security: [{ sessionCookie: [] }], responses: { '200': { description: Audit records } } }
+  /open-platform/call-logs:
+    get: { summary: Redacted REST/MCP request logs, security: [{ sessionCookie: [] }], responses: { '200': { description: Call logs } } }
+  /open-platform/download-grants:
+    get: { summary: List temporary grants without URL tokens, security: [{ sessionCookie: [] }], responses: { '200': { description: Download grants } } }
+  /open-platform/download-grants/{id}:
+    delete: { summary: Administratively revoke a temporary grant, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked } } }
+  /open-platform/security-alerts:
+    get: { summary: List open-platform security alerts, security: [{ sessionCookie: [] }], responses: { '200': { description: Alerts } } }
+  /open-platform/security-alerts/{id}/resolve:
+    post: { summary: Resolve a reviewed security alert with a reason, security: [{ sessionCookie: [] }], responses: { '200': { description: Resolved } } }

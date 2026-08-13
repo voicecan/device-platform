@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["replicaCount", "image", "existingSecret", "publicBaseUrl", "deviceWssUrl", "deviceConnectUrl"],
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 2 },
+    "image": {
+      "type": "object",
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "existingSecret": { "type": "string", "minLength": 1 },
+    "publicBaseUrl": { "type": "string", "pattern": "^https://" },
+    "deviceWssUrl": { "type": "string", "pattern": "^wss://" },
+    "deviceConnectUrl": { "type": "string", "pattern": "^https://" },
+    "databasePoolMax": { "type": "integer", "minimum": 1 },
+    "trustedProxies": { "type": "string", "minLength": 1 },
+    "drainMs": { "type": "integer", "minimum": 1000 },
+    "downloadDeliveryMode": { "type": "string", "enum": ["gateway", "external_object_only"] },
+    "downloadGrantDefaultTtlSeconds": { "type": "integer", "minimum": 60, "maximum": 900 },
+    "s3DownloadRedirectTtlSeconds": { "type": "integer", "minimum": 1, "maximum": 45 },
+    "oauthAccessTokenTtlSeconds": { "type": "integer", "minimum": 60, "maximum": 3600 },
+    "oauthRefreshTokenTtlSeconds": { "type": "integer", "minimum": 3600 }
+  }
+}

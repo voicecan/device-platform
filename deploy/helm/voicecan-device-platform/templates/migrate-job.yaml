@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "voicecan.name" . }}-migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "voicecan.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "voicecan.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ include "voicecan.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "packages/device-server/dist/cli.js", "migrate"]
+          envFrom:
+            - secretRef: { name: {{ .Values.existingSecret }} }
+          env:
+            - { name: VOICECAN_STORAGE_DRIVER, value: "s3_direct" }

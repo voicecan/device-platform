@@ -1,0 +1,38 @@
+services:
+  migrate:
+    build: ..
+    image: ${VOICECAN_DEVICE_IMAGE:-voicecan-device-server:local}
+    command: ["node", "packages/device-server/dist/cli.js", "migrate"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      VOICECAN_DATA_DIR: /data
+    volumes:
+      - voicecan-device-data:/data
+    restart: "no"
+
+  device-server:
+    build: ..
+    image: ${VOICECAN_DEVICE_IMAGE:-voicecan-device-server:local}
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      VOICECAN_DATA_DIR: /data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${VOICECAN_PORT:-8787}:8787"
+    volumes:
+      - voicecan-device-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  voicecan-device-data:

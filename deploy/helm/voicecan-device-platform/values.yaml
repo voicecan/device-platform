@@ -1,0 +1,37 @@
+replicaCount: 2
+
+image:
+  repository: voicecan/device-platform
+  digest: ""
+  pullPolicy: IfNotPresent
+
+existingSecret: voicecan-device-platform
+
+service:
+  port: 8787
+
+ingress:
+  enabled: false
+  className: ""
+  host: device.example.com
+  tlsSecretName: voicecan-device-tls
+
+publicBaseUrl: https://device.example.com
+deviceWssUrl: wss://device.example.com/device/v1/ws
+deviceConnectUrl: https://connect.voice-can.com/
+databasePoolMax: 20
+trustedProxies: loopback,linklocal,uniquelocal
+drainMs: 10000
+logLevel: info
+downloadDeliveryMode: external_object_only
+downloadGrantDefaultTtlSeconds: 300
+s3DownloadRedirectTtlSeconds: 45
+oauthAccessTokenTtlSeconds: 900
+oauthRefreshTokenTtlSeconds: 2592000
+
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { cpu: "2", memory: 2Gi }
+
+podDisruptionBudget:
+  minAvailable: 1

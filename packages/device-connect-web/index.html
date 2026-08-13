@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <title>Voicecan 设备连接</title>
+  </head>
+  <body>
+    <main class="connect-shell">
+      <header class="connect-header">
+        <a class="brand" href="./" aria-label="Voicecan"><span>V○</span><strong>Voicecan</strong></a>
+        <span id="connection-state" class="state-pill">等待管理端连接</span>
+      </header>
+      <section class="connect-intro">
+        <p id="connect-eyebrow" class="eyebrow">SECURE DEVICE CONNECTOR</p>
+        <h1 id="connect-title">在这台电脑上连接附近设备</h1>
+        <p id="connect-description">蓝牙操作只发生在当前浏览器。授权和设备归属仍由你的 Voicecan Platform 决定。</p>
+      </section>
+      <section id="connect-mount" class="connect-mount" aria-live="polite">
+        <div class="waiting-card"><span class="spinner"></span><div><h2 id="waiting-title">正在建立安全会话</h2><p id="waiting-description">请从 Voicecan 管理端打开此页面。</p></div></div>
+      </section>
+      <footer id="connect-footer">一次性会话 · 凭证不写入 URL · 无第三方脚本</footer>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "@voicecan/example-voice-router",
+  "version": "0.1.0-preview.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@voicecan/connector-runtime": "1.0.0",
+    "@voicecan/contracts": "1.0.0",
+    "@voicecan/server-client": "1.0.0"
+  }
+}

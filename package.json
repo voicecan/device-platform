@@ -1,0 +1,44 @@
+{
+  "name": "voicecan-device-platform",
+  "version": "0.1.0-preview.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0 <25"
+  },
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "tsc -b && npm run build:bundle --workspace @voicecan/device-ui && npm run build --workspace @voicecan/device-connect-web && npm run build --workspace @voicecan/admin-web",
+    "verify:core": "node scripts/verify-core-artifact.mjs",
+    "check:public": "node scripts/check-public-boundary.mjs",
+    "ci": "npm run check:public && npm run verify:core && npm run typecheck && npm test",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -b --pretty false && npm run typecheck --workspace @voicecan/admin-web",
+    "test": "npm run build && node --import tsx --test packages/*/test/*.test.ts examples/*/test/*.test.ts scripts/*.test.mjs skills/*/test/*.test.mjs",
+    "test:postgres": "node --import tsx --test packages/device-server/test/postgres.integration.test.ts",
+    "migrate": "tsx packages/device-server/src/cli.ts migrate",
+    "dev": "tsx watch packages/device-server/src/cli.ts serve",
+    "dev:admin": "npm run dev --workspace @voicecan/admin-web",
+    "start": "node packages/device-server/dist/cli.js serve",
+    "smoke": "node skills/integrate-voicecan-device/scripts/smoke-test.mjs",
+    "release:evidence": "node scripts/generate-release-evidence.mjs",
+    "release:check": "node scripts/check-release-readiness.mjs",
+    "npm:pack:check": "node scripts/check-npm-packages.mjs",
+    "npm:publish:release": "node scripts/publish-npm-packages.mjs --tag latest",
+    "npm:platform:pack": "npm run build && npm pack ./distribution/device-platform",
+    "npm:platform:test": "npm run build && node scripts/test-device-platform-package.mjs",
+    "npm:platform:publish": "node scripts/publish-device-platform.mjs"
+  },
+  "dependencies": {
+    "@voicecan/device-core": "file:vendor/voicecan-device-core-0.1.0-preview.18.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "tsx": "^4.20.6",
+    "typescript": "^6.0.2"
+  }
+}

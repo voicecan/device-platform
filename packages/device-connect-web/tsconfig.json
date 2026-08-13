@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist-lib",
+    "tsBuildInfoFile": "dist-lib/.tsbuildinfo",
+    "declarationMap": false,
+    "lib": ["ES2024", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "references": [
+    { "path": "../device-web" },
+    { "path": "../device-ui" }
+  ]
+}

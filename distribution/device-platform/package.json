@@ -1,0 +1,56 @@
+{
+  "name": "@voicecan/device-platform",
+  "version": "1.0.0",
+  "description": "Self-contained Voicecan Device Platform server, Admin UI, device UI, and initialization CLI.",
+  "type": "module",
+  "private": false,
+  "license": "Apache-2.0",
+  "bin": {
+    "voicecan-device": "runtime/device-server/dist/cli.js"
+  },
+  "files": [
+    "runtime/**",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=24.15.0 <25"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/voicecan/device-platform.git"
+  },
+  "homepage": "https://github.com/voicecan/device-platform",
+  "keywords": [
+    "voicecan",
+    "device-platform",
+    "iot",
+    "web-bluetooth",
+    "edge-server"
+  ],
+  "scripts": {
+    "prepack": "node ../../scripts/prepare-device-platform-package.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.894.0",
+    "@aws-sdk/s3-request-presigner": "^3.894.0",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/websocket": "^11.2.0",
+    "@voicecan/access-control": "0.1.0-preview.0",
+    "@voicecan/contracts": "1.0.0",
+    "@voicecan/device-core": "0.1.0-preview.18",
+    "fastify": "^5.6.2",
+    "pino": "^10.3.1",
+    "pg": "^8.22.0"
+  },
+  "bundleDependencies": [
+    "@voicecan/access-control",
+    "@voicecan/device-core"
+  ]
+}

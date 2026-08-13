@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://voice-can.com/schemas/open-platform-foundation.schema.json",
+  "title": "Voicecan Open Platform Foundation Contracts",
+  "$defs": {
+    "recordingMedia": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "container", "codec", "content_type", "filename_extension", "sample_rate_hz", "channels", "bit_depth", "duration_ms", "encoding_profile", "source"],
+      "properties": {
+        "schema_version": { "const": "recording.media.v1" },
+        "container": { "type": ["string", "null"] },
+        "codec": { "type": ["string", "null"] },
+        "content_type": { "type": "string" },
+        "filename_extension": { "type": "string" },
+        "sample_rate_hz": { "type": ["integer", "null"], "minimum": 1 },
+        "channels": { "type": ["integer", "null"], "minimum": 1 },
+        "bit_depth": { "type": ["integer", "null"], "minimum": 1 },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 1 },
+        "encoding_profile": { "type": ["string", "null"] },
+        "source": { "enum": ["device", "firmware_mapping", "server_verified", "unknown"] }
+      }
+    },
+    "recordingTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_started_at", "device_ended_at", "duration_ms", "device_timezone_offset_minutes", "discovered_at", "synced_at"],
+      "properties": {
+        "device_started_at": { "type": ["string", "null"], "format": "date-time" },
+        "device_ended_at": { "type": ["string", "null"], "format": "date-time" },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 1 },
+        "device_timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
+        "discovered_at": { "type": "string", "format": "date-time" },
+        "synced_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "deviceCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "device_id", "model", "firmware_version", "capability_version", "source", "changed_at", "recording", "sync", "commands", "unknown_capabilities"],
+      "properties": {
+        "schema_version": { "const": "device.capabilities.v1" },
+        "device_id": { "type": "string" },
+        "model": { "type": ["string", "null"] },
+        "firmware_version": { "type": ["string", "null"] },
+        "capability_version": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "source": { "enum": ["platform_reviewed", "unknown"] },
+        "changed_at": { "type": ["string", "null"], "format": "date-time" },
+        "recording": { "type": "object" },
+        "sync": { "type": "object" },
+        "commands": { "type": "array", "items": { "const": "recording.sync" } },
+        "unknown_capabilities": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "eventSubscriptionFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_types"],
+      "properties": {
+        "event_types": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "device_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "attributes": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 0, "maximum": 2 } }
+      }
+    },
+    "publicCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "device_id", "status", "idempotency_key", "requested_at", "dispatched_at", "started_at", "completed_at", "expires_at", "result_code", "error_code", "resource_version"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "recording.sync" },
+        "device_id": { "type": "string" },
+        "status": { "enum": ["queued", "dispatched", "running", "succeeded", "failed", "expired"] },
+        "idempotency_key": { "type": "string" },
+        "requested_at": { "type": "string", "format": "date-time" },
+        "dispatched_at": { "type": ["string", "null"], "format": "date-time" },
+        "started_at": { "type": ["string", "null"], "format": "date-time" },
+        "completed_at": { "type": ["string", "null"], "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "result_code": { "type": ["string", "null"] },
+        "error_code": { "type": ["string", "null"] },
+        "resource_version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "lifecycleEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "api_version", "created_at", "data"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": {
+          "enum": [
+            "recording.discovered", "recording.sync_started", "file.synced", "recording.sync_failed",
+            "recording.deleted", "recording.legal_hold_changed", "device.online", "device.offline",
+            "device.capabilities_changed", "command.succeeded", "command.failed", "command.expired", "webhook.test"
+          ]
+        },
+        "api_version": { "const": "2026-08-07" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "data": { "type": "object" }
+      }
+    }
+  }
+}
