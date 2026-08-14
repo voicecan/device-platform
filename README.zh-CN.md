@@ -42,7 +42,7 @@ Open Platform 文档：
 从官方 npm Registry 安装本地 Edge/SQLite 实例：
 
 ```sh
-npm install --global @voicecan/device-platform@1.0.0
+npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard
 ```
 

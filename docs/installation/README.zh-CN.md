@@ -8,7 +8,7 @@
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
-npm install --global @voicecan/device-platform@1.0.0
+npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard
 ```
 

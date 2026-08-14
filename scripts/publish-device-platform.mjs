@@ -21,7 +21,7 @@ function run(args, options = {}) {
   if (result.status !== 0) throw new Error(`npm ${args.join(' ')} failed`);
 }
 
-if (manifest.name !== '@voicecan/device-platform' || manifest.version !== '1.0.0') throw new Error('Unexpected Device Platform package identity');
+if (manifest.name !== '@voicecan/device-platform' || manifest.version !== '1.0.1') throw new Error('Unexpected Device Platform package identity');
 if (manifest.license !== 'Apache-2.0' || !existsSync(resolve(root, 'LICENSE')) || !existsSync(resolve(packageRoot, 'NOTICE'))) {
   throw new Error('The repository licensing gate is unresolved; Apache-2.0 LICENSE and NOTICE are required before publishing');
 }

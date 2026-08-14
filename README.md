@@ -42,7 +42,7 @@ Requirements: Node.js `>=24.15.0 <25`, npm, and a private local data directory.
 For a local Edge/SQLite installation from the official npm registry, run:
 
 ```sh
-npm install --global @voicecan/device-platform@1.0.0
+npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard
 ```
 

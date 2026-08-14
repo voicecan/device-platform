@@ -1,6 +1,6 @@
 {
   "name": "@voicecan/device-platform",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Self-contained Voicecan Device Platform server, Admin UI, device UI, and initialization CLI.",
   "type": "module",
   "private": false,
@@ -24,7 +24,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/voicecan/device-platform.git"
+    "url": "git+https://github.com/voicecan/device-platform.git"
   },
   "homepage": "https://github.com/voicecan/device-platform",
   "keywords": [

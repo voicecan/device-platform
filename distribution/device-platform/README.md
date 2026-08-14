@@ -11,7 +11,7 @@ Install the CLI and create a persistent per-user Profile:
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
-npm install --global @voicecan/device-platform@1.0.0
+npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard
 ```
 
@@ -32,7 +32,7 @@ automation output.
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
-npm install --global @voicecan/device-platform@1.0.0
+npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard
 ```
 
@@ -52,7 +52,7 @@ An agent may install and initialize a local instance by executing:
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
-npm install --global @voicecan/device-platform@1.0.0
+npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard --no-open --output json
 ```
 
