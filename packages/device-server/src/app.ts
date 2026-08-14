@@ -54,6 +54,7 @@ type LocalFirmware = OfficialFirmware & { source: 'uploaded' | 'official'; objec
 // after the URL/ticket has already expired.
 const deviceUploadCredentialTtlMs = 46 * 60_000;
 const deviceUploadCredentialTtlSeconds = deviceUploadCredentialTtlMs / 1_000;
+const deviceProvisioningCredentialTtlMs = 30 * 60_000;
 
 export type DeviceServerInstance = FastifyInstance & {
   beginDrain: () => void;
@@ -930,7 +931,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
     catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
     const settings = await db.get<{ ble_name_prefix: string }>('SELECT ble_name_prefix FROM server_settings WHERE singleton=1');
-    const intentId = id('bind'); const launchToken = `vcd_bind_${opaqueToken()}`; const timestamp = now(); const expiresAt = plus(10 * 60_000);
+    const intentId = id('bind'); const launchToken = `vcd_bind_${opaqueToken()}`; const timestamp = now(); const expiresAt = plus(deviceProvisioningCredentialTtlMs);
     await db.run("INSERT INTO binding_intents(id,group_id,created_by,idempotency_key,expected_sn,display_name,ble_name_prefix,resolved_device_ws_url,network_mode,locale,allowed_origin,status,launch_token_hash,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,?)", [intentId, groupId, context.actorId, idempotencyKey, optionalString(body, 'expected_sn', 128), optionalString(body, 'display_name', 80), settings?.ble_name_prefix ?? 'CAPSO-', deviceWsUrl, networkMode, locale, allowedOrigin, tokenHash(launchToken), expiresAt, timestamp, timestamp]);
     const launchUrl = new URL('/admin', config.publicBaseUrl); launchUrl.searchParams.set('view', 'provision'); launchUrl.searchParams.set('binding_intent', intentId); launchUrl.hash = `launch=${encodeURIComponent(launchToken)}`;
     await audit(request, context, 'binding_intent.created', 'binding_intent', intentId, groupId);
@@ -981,8 +982,8 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.post('/api/v1/provisioning-sessions', async (request, reply) => {
     const context = await resolveAccess(request, true); const body = bodyOf(request); const groupId = context.isSystemAdmin ? requiredString(body, 'group_id', 80) : requireGroup(context); if (!context.isSystemAdmin) requireGroupAdmin(context, groupId);
     const allowedOrigin = validatedProvisioningOrigin(requiredString(body, 'allowed_origin', 300), optionalString(body, 'connector_origin', 300), config.deviceConnectUrl, config.deploymentProfile === 'intranet');
-    const sessionId = id('provision'); const raw = `vcd_prov_${opaqueToken()}`; const timestamp = now(); await db.run('INSERT INTO provisioning_sessions(id,public_token_hash,allowed_origin,expected_sn,group_id,created_by,expires_at,status,updated_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)', [sessionId, tokenHash(raw), allowedOrigin, optionalString(body, 'expected_sn', 128), groupId, context.actorId, plus(10 * 60_000), 'pending', timestamp, timestamp]);
-    await audit(request, context, 'provisioning.created', 'provisioning_session', sessionId, groupId); reply.header('Cache-Control', 'no-store'); return success(reply, { id: sessionId, provisioning_token: raw, expires_at: plus(10 * 60_000) }, 201);
+    const sessionId = id('provision'); const raw = `vcd_prov_${opaqueToken()}`; const timestamp = now(); const expiresAt = plus(deviceProvisioningCredentialTtlMs); await db.run('INSERT INTO provisioning_sessions(id,public_token_hash,allowed_origin,expected_sn,group_id,created_by,expires_at,status,updated_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)', [sessionId, tokenHash(raw), allowedOrigin, optionalString(body, 'expected_sn', 128), groupId, context.actorId, expiresAt, 'pending', timestamp, timestamp]);
+    await audit(request, context, 'provisioning.created', 'provisioning_session', sessionId, groupId); reply.header('Cache-Control', 'no-store'); return success(reply, { id: sessionId, provisioning_token: raw, expires_at: expiresAt }, 201);
   });
   app.get('/api/v1/provisioning-sessions/:id', async (request, reply) => {
     const context = await resolveAccess(request); const sessionId = String((request.params as Row).id); const groupId = context.isSystemAdmin ? null : requireGroup(context); const row = await db.get<Row>(`SELECT id,status,device_id,expires_at,consumed_at FROM provisioning_sessions WHERE id=? ${groupId ? 'AND group_id=?' : ''}`, groupId ? [sessionId, groupId] : [sessionId]); if (!row) throw new AccessDeniedError(); return success(reply, row);

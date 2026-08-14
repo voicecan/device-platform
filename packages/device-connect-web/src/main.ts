@@ -11,6 +11,7 @@ const connectionStateLabel: HTMLElement = stateLabel;
 
 let initialized = false;
 let locale: 'zh-CN' | 'en' = globalThis.navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+const provisioningStatusPollMs = 10_000;
 
 const pageText = {
   'zh-CN': { title: 'Voicecan 设备绑定', state: '等待管理端连接', connected: '安全会话已连接', heading: '在这台电脑上绑定附近设备', description: '蓝牙操作只发生在当前浏览器。授权和设备归属仍由你的 Voicecan Platform 决定，网络配置仅是绑定流程中需要时执行的一步。', waiting: '正在建立安全会话', openFromAdmin: '请从 Voicecan 管理端打开此页面。', startTitle: '选择要绑定的 Voicecan 设备', startDescription: '点击后浏览器会打开系统蓝牙设备选择器。出于浏览器安全限制，必须由你在此页面主动触发这一步。', startButton: '选择设备并开始绑定', selecting: '正在选择附近设备', footer: '一次性会话 · 凭证不写入 URL · 无第三方脚本' },
@@ -70,7 +71,7 @@ function remoteBroker(port: MessagePort): { broker: ProvisioningBroker; request<
         const data = await request<{ status: string; failureCode?: string }>('observe', { ...claim }, 10_000);
         if (data.status === 'completed') return true;
         if (data.status === 'failed') throw new Error(data.failureCode ?? 'PROVISIONING_FAILED');
-        await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
+        await new Promise((resolve) => globalThis.setTimeout(resolve, provisioningStatusPollMs));
       }
       return false;
     },

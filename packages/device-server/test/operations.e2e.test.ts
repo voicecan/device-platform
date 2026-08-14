@@ -71,6 +71,8 @@ test('P0 lifecycle, rate limit, sync recovery, backup restore and key rotation',
 
     const grant = await app.inject({ method: 'POST', url: '/api/v1/provisioning-sessions', headers, payload: { group_id: groupId, allowed_origin: 'https://trusted.test', expected_sn: 'ORIGIN-0001' } });
     assert.equal(grant.statusCode, 201, grant.body);
+    const provisioningTtlMs = Date.parse(grant.json().data.expires_at) - Date.now();
+    assert.ok(provisioningTtlMs > 29 * 60_000 && provisioningTtlMs <= 30 * 60_000, `unexpected provisioning TTL: ${provisioningTtlMs}ms`);
     const grantToken = grant.json().data.provisioning_token as string;
     const relayedGrant = await app.inject({ method: 'POST', url: '/api/v1/provisioning-sessions', headers, payload: { group_id: groupId, allowed_origin: 'http://192.168.50.10:8787', connector_origin: 'https://connect.voice-can.com', expected_sn: 'REMOTE-0001' } });
     assert.equal(relayedGrant.statusCode, 201, relayedGrant.body);

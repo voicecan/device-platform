@@ -51,5 +51,6 @@ test('public connector requires a visible user gesture before opening Web Blueto
   assert.match(source, /await connector\.element\.startProvisioning\(\)/);
   assert.match(source, /connector\.element\.addEventListener\('provisionerror'/);
   assert.match(source, /connector\.element\.hidden = true/);
+  assert.match(source, /const provisioningStatusPollMs = 10_000/);
   assert.match(style, /\.connect-start-button/);
 });

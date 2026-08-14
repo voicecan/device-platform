@@ -37,7 +37,7 @@ Device Connect Web 使用 Web Bluetooth 与 Voicecan 设备的 BLE GATT 服务�
 
 ## 使用流程
 
-1. 管理员在 `/admin?view=provision` 选择目标用户组，创建 10 分钟设备绑定凭证。
+1. 管理员在 `/admin?view=provision` 选择目标用户组，创建 30 分钟设备绑定凭证。
 2. 管理端检查 `isSecureContext` 和 `navigator.bluetooth`。
 3. 若当前管理端可直接使用 Web Bluetooth，则在管理页面内完成设备绑定。
 4. 若不可用，则用户点击“开始绑定”时直接打开配置的公网 HTTPS 连接页。

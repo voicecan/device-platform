@@ -53,6 +53,10 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(app, /Use user groups to assign devices and recordings to a shared access boundary/);
   assert.match(deviceIntegration, /device_ws_url/);
   assert.match(deviceIntegration, /observeOnline/);
+  assert.match(deviceIntegration, /const provisioningStatusPollMs = 10_000/);
+  assert.match(connectPage, /const provisioningStatusPollMs = 10_000/);
+  assert.match(workspaces, /const bindingIntentPollMs = 10_000/);
+  assert.match(workspaces, /void run\(async \(\) => \{ await start\(createGrant\); return true; \}\)/);
   assert.match(deviceIntegration, /DEVICE_ALREADY_CLAIMED/);
   assert.match(deviceIntegration, /onAlreadyClaimed/);
   assert.match(deviceIntegration, /resolveAccessibleClaimedDeviceId/);

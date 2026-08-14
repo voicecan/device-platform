@@ -23,6 +23,8 @@ export const navGroups: readonly { label: string; items: readonly View[] }[] = [
   { label: 'Operations', items: ['events', 'inspector', 'storage', 'audit'] },
 ];
 
+const bindingIntentPollMs = 10_000;
+
 function deviceConnectUrl(): string {
   const configured = document.querySelector<HTMLMetaElement>('meta[name="voicecan-connect-url"]')?.content.trim();
   return configured && configured !== '__VOICECAN_CONNECT_URL__' ? configured : 'https://connect.voice-can.com/';
@@ -115,7 +117,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate
       if (!active) return;
       setBindingIntent(intent); setGroupId(intent.group_id); setSerial(intent.expected_sn ?? ''); setBleNamePrefix(intent.ble_name_prefix); setDeviceWsUrl(intent.device_ws_url);
       if (intent.status === 'completed' && intent.device_id) { onNavigateDevice(intent.device_id); return; }
-      if (['user_action', 'ble_selected', 'claimed', 'configured'].includes(intent.status)) timer = globalThis.setTimeout(() => void loadIntent(), 1_000);
+      if (['user_action', 'ble_selected', 'claimed', 'configured'].includes(intent.status)) timer = globalThis.setTimeout(() => void loadIntent(), bindingIntentPollMs);
     };
     const loadIntent = async (): Promise<void> => { applyIntent(await api<BindingIntent>(`/binding-intents/${encodeURIComponent(bindingIntentId)}/browser`)); };
     const fragment = new URLSearchParams(globalThis.location.hash.slice(1)); const launchToken = fragment.get('launch');
@@ -135,7 +137,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate
   const beginBinding = (): void => {
     if (!groupId) return;
     setStarted(true); setDeviceStep(0);
-    if (localBluetooth) { const start = startConnector.current; if (!start) { setStarted(false); return; } void start(createGrant); return; }
+    if (localBluetooth) { const start = startConnector.current; if (!start) { setStarted(false); return; } void run(async () => { await start(createGrant); return true; }); return; }
     const start = startRemoteConnector.current; if (!start) { setStarted(false); return; }
     void run(async () => { await start(createGrant); return true; }).then((opened) => { if (!opened) setStarted(false); });
   };

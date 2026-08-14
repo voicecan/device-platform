@@ -64,7 +64,7 @@ export function defaultProfileConfig(profile: string, port = 8787): ProfileConfi
   return {
     schema_version: 1,
     profile,
-    server: { host: '127.0.0.1', port, public_base_url: `http://127.0.0.1:${port}` },
+    server: { host: '0.0.0.0', port, public_base_url: `http://127.0.0.1:${port}` },
     data_dir: paths.dataDir,
     connect: { public_connector_url: 'https://connect.voice-can.com/' },
     deployment_profile: 'edge',

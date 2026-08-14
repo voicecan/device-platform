@@ -34,6 +34,8 @@ test('binding intent survives browser refresh and remains server-authoritative w
 
   const created = await app.inject({ method: 'POST', url: '/api/v1/binding-intents', headers: adminHeaders, payload: { group_id: groupId, allowed_origin: 'http://127.0.0.1:8787', expected_sn: 'INTENT-0001', display_name: 'AI prepared recorder', network_mode: 'existing', locale: 'en', idempotency_key: 'binding-test-1' } });
   assert.equal(created.statusCode, 201, created.body);
+  const bindingIntentTtlMs = Date.parse(created.json().data.expires_at) - Date.now();
+  assert.ok(bindingIntentTtlMs > 29 * 60_000 && bindingIntentTtlMs <= 30 * 60_000, `unexpected binding intent TTL: ${bindingIntentTtlMs}ms`);
   const intentId = created.json().data.id as string;
   const launchUrl = new URL(created.json().data.launch_url as string);
   assert.equal(launchUrl.searchParams.get('binding_intent'), intentId);
