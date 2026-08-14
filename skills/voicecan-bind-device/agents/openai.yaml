@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bind Voicecan Device"
+  short_description: "Prepare and observe resumable device binding"
+  default_prompt: "Use $voicecan-bind-device to bind a device with only the Bluetooth selection left to me."

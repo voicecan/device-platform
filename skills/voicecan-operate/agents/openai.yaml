@@ -1,0 +1,4 @@
+interface:
+  display_name: "Operate Voicecan"
+  short_description: "Inspect and operate a running device platform"
+  default_prompt: "Use $voicecan-operate to inspect and operate my Voicecan Device Platform."

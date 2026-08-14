@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install Voicecan"
+  short_description: "Install and run the platform persistently"
+  default_prompt: "Use $voicecan-install to install and start Voicecan Device Platform."

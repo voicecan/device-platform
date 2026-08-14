@@ -31,6 +31,7 @@ export type ServerConfig = {
   masterKeys: ReadonlyMap<number, Buffer>;
   externallyManagedKeys: boolean;
   groupTokenPepper: Buffer;
+  localOperatorKey?: Buffer;
   allowPrivateWebhooks: boolean;
   allowHttpWebhooks: boolean;
   simulatorEnabled: boolean;
@@ -238,6 +239,9 @@ export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): 
     groupTokenPepper: environment.VOICECAN_GROUP_TOKEN_PEPPER
       ? parseSecret(environment.VOICECAN_GROUP_TOKEN_PEPPER.trim(), 'VOICECAN_GROUP_TOKEN_PEPPER')
       : await loadOrCreateSecret(resolve(dataDir, 'token-pepper.key'), 32),
+    ...(environment.VOICECAN_LOCAL_OPERATOR_KEY
+      ? { localOperatorKey: parseSecret(environment.VOICECAN_LOCAL_OPERATOR_KEY.trim(), 'VOICECAN_LOCAL_OPERATOR_KEY') }
+      : deploymentProfile === 'production' ? {} : { localOperatorKey: await loadOrCreateSecret(resolve(dataDir, 'local-operator.key'), 32) }),
     allowPrivateWebhooks,
     allowHttpWebhooks,
     simulatorEnabled: environment.VOICECAN_SIMULATOR === 'true',

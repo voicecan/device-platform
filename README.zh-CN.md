@@ -42,10 +42,18 @@ Open Platform 文档：
 从官方 npm Registry 安装本地 Edge/SQLite 实例：
 
 ```sh
-npx --yes @voicecan/device-platform@1.0.0 init
+npm install --global @voicecan/device-platform@1.0.0
+voicecan-device onboard
 ```
 
-该命令会显式迁移 SQLite、启动 Server，并打开 `http://127.0.0.1:8787/admin`。持久化状态保存在 `./data`；请在应当持有该数据的目录中运行命令。无界面主机使用 `--no-open`。npm 包没有会修改状态的 `postinstall` Hook，普通的 `serve` 永远不会运行迁移。
+`onboard` 会创建稳定的用户级 Profile、显式迁移 SQLite、安装用户级后台服务（systemd user、launchd 或 Windows 计划任务）、等待 Readiness、打开 Admin，然后退出。数据不再依赖当前工作目录。无界面主机使用 `--no-open`。`init` 保持为兼容别名；只有临时开发进程才使用 `init --foreground`。npm 包没有会修改状态的 `postinstall` Hook，普通的 `serve` 永远不会运行迁移。
+
+```sh
+voicecan-device service status --output json
+voicecan-device doctor --output json
+```
+
+详见[安装与后台服务](docs/installation/README.zh-CN.md)和 [AI 自动化](docs/installation/ai-automation.md)。
 
 每个安装实例只能选择一种安装方式。npm、Docker、专用 Node 与源码安装各有独立生命周期边界；除非遵循迁移手册，否则不要让它们共用同一数据目录。
 

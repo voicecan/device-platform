@@ -47,8 +47,8 @@ export function Button({ children, icon, kind = 'primary', className = '', ...pr
 
 export type SelectOption = { value: string; label: string; description?: string | undefined; meta?: string | undefined; disabled?: boolean | undefined };
 
-export function Select({ id, value, options, onChange, placeholder = 'Select', ariaLabel, compact = false, searchable }: {
-  id?: string | undefined; value: string; options: readonly SelectOption[]; onChange: (value: string) => void; placeholder?: string | undefined; ariaLabel?: string | undefined; compact?: boolean | undefined; searchable?: boolean | undefined;
+export function Select({ id, value, options, onChange, placeholder = 'Select', ariaLabel, compact = false, searchable, disabled = false }: {
+  id?: string | undefined; value: string; options: readonly SelectOption[]; onChange: (value: string) => void; placeholder?: string | undefined; ariaLabel?: string | undefined; compact?: boolean | undefined; searchable?: boolean | undefined; disabled?: boolean | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -64,19 +64,19 @@ export function Select({ id, value, options, onChange, placeholder = 'Select', a
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
   }, []);
   return <div ref={root} className={`select ${compact ? 'select-compact' : ''} ${open ? 'select-open' : ''}`}>
-    <button id={id} type="button" className="select-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => { setOpen((current) => !current); setQuery(''); }}>
+    <button id={id} type="button" className="select-trigger" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={() => { setOpen((current) => !current); setQuery(''); }}>
       <span className="select-value"><strong>{selected?.label ?? placeholder}</strong>{selected?.description ? <small>{selected.description}</small> : null}</span>{selected?.meta ? <span className="select-meta">{selected.meta}</span> : null}<Icon name="arrow" size={15}/>
     </button>
     {open ? <div className="select-popover">{showSearch ? <input className="select-search" autoFocus placeholder="Search…" value={query} onChange={(event) => setQuery(event.target.value)}/> : null}<div className="select-options" role="listbox" aria-label={ariaLabel}>{visibleOptions.map((option) => <button type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} className="select-option" key={option.value} onClick={() => { onChange(option.value); setOpen(false); setQuery(''); }}><span><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</span>{option.meta ? <span className="select-option-meta">{option.meta}</span> : null}{option.value === value ? <Icon name="check" size={15}/> : null}</button>)}{visibleOptions.length === 0 ? <div className="select-empty">No matching options</div> : null}</div></div> : null}
   </div>;
 }
 
-export function Field({ label, hint, value, onChange, type = 'text', options, id, required = false, wide = false, placeholder, minLength, maxLength, children }: {
-  label: string; hint?: string; value?: string; onChange?: (value: string) => void; type?: string; options?: readonly SelectOption[]; id?: string; required?: boolean; wide?: boolean; placeholder?: string; minLength?: number; maxLength?: number; children?: ReactNode;
+export function Field({ label, hint, value, onChange, type = 'text', options, id, required = false, wide = false, placeholder, minLength, maxLength, disabled = false, children }: {
+  label: string; hint?: string; value?: string; onChange?: (value: string) => void; type?: string; options?: readonly SelectOption[]; id?: string; required?: boolean; wide?: boolean; placeholder?: string; minLength?: number; maxLength?: number; disabled?: boolean; children?: ReactNode;
 }) {
   return <label className={`field ${wide ? 'field-wide' : ''}`} htmlFor={id}><span className="field-label">{label}{required ? <span className="required"> *</span> : null}</span>{hint ? <span className="field-hint">{hint}</span> : null}{children ?? (options
-    ? <Select id={id} ariaLabel={label} value={value ?? ''} options={options} placeholder={placeholder ?? label} onChange={(next) => onChange?.(next)}/>
-    : <input id={id} value={value} type={type} required={required} minLength={minLength} maxLength={maxLength} placeholder={placeholder} autoComplete={type === 'password' ? 'off' : undefined} onChange={(event) => onChange?.(event.target.value)} />)}</label>;
+    ? <Select id={id} ariaLabel={label} value={value ?? ''} options={options} placeholder={placeholder ?? label} disabled={disabled} onChange={(next) => onChange?.(next)}/>
+    : <input id={id} value={value} type={type} required={required} minLength={minLength} maxLength={maxLength} placeholder={placeholder} disabled={disabled} autoComplete={type === 'password' ? 'off' : undefined} onChange={(event) => onChange?.(event.target.value)} />)}</label>;
 }
 
 export type DeviceWsCandidate = { url: string; host: string; preferred: boolean };
@@ -172,7 +172,7 @@ export function DataTable({ data, t, emptyMessage, onSelect, maxRows, pageSize =
   return <div className={`table-wrap ${className}`.trim()}><table className="data-table"><thead><tr>{columns.map((column) => <th key={column}>{t(column.replaceAll('_', ' '))}</th>)}<th><span className="sr-only">{t('Actions')}</span></th></tr></thead><tbody>{visibleRecords.map((record, index) => { const key = String(record.id ?? currentPage * pageSize + index); const isExpanded = expanded === key; return <Fragment key={key}><tr className="row-interactive" onClick={() => onSelect ? onSelect(record) : setExpanded(isExpanded ? '' : key)}>{columns.map((column) => <td key={column}>{isStatusColumn(column) ? <span className={`status-pill status-${String(record[column]).toLowerCase().replaceAll('_', '-')}`}>{displayValue(column, record[column], t)}</span> : displayValue(column, record[column], t)}</td>)}<td className={`row-arrow ${isExpanded ? 'is-expanded' : ''}`}><Icon name="arrow" /></td></tr>{isExpanded && !onSelect ? <tr className="table-detail-row"><td colSpan={columns.length + 1}><div className="table-record-detail"><dl>{Object.entries(record).filter(([field]) => !secretKey.test(field)).map(([field, value]) => <div key={field}><dt>{t(field.replaceAll('_', ' '))}</dt><dd>{idKey.test(field) ? <code>{String(value ?? '—')}</code> : displayValue(field, value, t)}</dd></div>)}</dl></div></td></tr> : null}</Fragment>; })}</tbody></table>{maxRows && records.length > maxRows ? <div className="table-limit-note">{t('Showing the latest {count} items.', { count: maxRows })}</div> : null}{!maxRows && totalPages > 1 ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={currentPage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>{t('Previous')}</Button><span>{t('Page {page} of {total}', { page: currentPage + 1, total: totalPages })}</span><Button kind="ghost" disabled={currentPage >= totalPages - 1} onClick={() => setPage((value) => Math.min(totalPages - 1, value + 1))}>{t('Next')}</Button></nav> : null}</div>;
 }
 
-export function ResourcePicker({ label, endpoint, value, onChange, t, id, required = false, emptyLabel, selectFirst = false }: { label: string; endpoint: string; value: string; onChange: (value: string) => void; t: Translate; id: string; required?: boolean; emptyLabel?: string; selectFirst?: boolean }) {
+export function ResourcePicker({ label, endpoint, value, onChange, t, id, required = false, emptyLabel, selectFirst = false, disabled = false }: { label: string; endpoint: string; value: string; onChange: (value: string) => void; t: Translate; id: string; required?: boolean; emptyLabel?: string; selectFirst?: boolean; disabled?: boolean }) {
   const [items, setItems] = useState<readonly Record<string, unknown>[]>([]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   useEffect(() => {
@@ -183,7 +183,7 @@ export function ResourcePicker({ label, endpoint, value, onChange, t, id, requir
   const title = (item: Record<string, unknown>): string => String(item.display_name ?? item.name ?? item.username ?? item.sn ?? item.url ?? t('Unnamed resource'));
   const description = (item: Record<string, unknown>): string => [item.display_name ? item.sn : null, item.model, item.username !== title(item) ? item.username : null, item.role].filter(Boolean).map(String).join(' · ');
   const options = items.map((item) => ({ value: String(item.id), label: title(item), description: description(item) || undefined, meta: item.online === undefined ? item.status ? t(String(item.status)) : undefined : t(item.online ? 'Online' : 'Offline') }));
-  return <Field label={label} id={id} required={required}><Select id={id} value={value} options={options} ariaLabel={label} searchable placeholder={state === 'loading' ? t('Loading options…') : state === 'error' ? t('Could not load options') : emptyLabel ?? t('Select a resource')} onChange={onChange}/></Field>;
+  return <Field label={label} id={id} required={required}><Select id={id} value={value} options={options} ariaLabel={label} searchable disabled={disabled} placeholder={state === 'loading' ? t('Loading options…') : state === 'error' ? t('Could not load options') : emptyLabel ?? t('Select a resource')} onChange={onChange}/></Field>;
 }
 
 export function Stepper({ steps, current, t }: { steps: readonly string[]; current: number; t: Translate }) {

@@ -1,10 +1,36 @@
 # Voicecan Device MCP Server
 
-Voicecan supports local stdio MCP and remote stateless Streamable HTTP MCP. Both expose the same bounded service methods as REST and derive available tools from the authenticated scope set.
+Voicecan has two intentionally separate MCP permission planes:
 
-## stdio
+- **Local Admin MCP** operates the installation through the owner-only local automation channel.
+- **Application MCP** exposes least-privilege device, recording, command, and event capabilities through stdio or remote OAuth.
 
-Create an Application credential with kind `mcp_stdio_token`, then configure the Host's secret environment:
+An Application credential never gains host administration, and the local operator credential is never accepted by the remote MCP endpoint.
+
+## Local Admin MCP
+
+```json
+{
+  "mcpServers": {
+    "voicecan-admin": {
+      "command": "voicecan-device",
+      "args": ["admin-mcp", "stdio"]
+    }
+  }
+}
+```
+
+The server registers read, safe-write, and user-action tools for service status, Doctor, Binding Intents, Applications, and MCP connection plans. Destructive commands are omitted. Binding preparation opens the single-use launch page locally; the launch secret is not returned in Tool output. The stdio process delegates to the same JSON CLI catalog and loopback-only owner key used by local automation.
+
+## Application stdio MCP
+
+The recommended CLI flow creates the `mcp_stdio_token`, saves it as an owner-only Secret Reference, and returns a configuration with no plaintext token:
+
+```bash
+voicecan-device mcp connect --application <application-id> --client generic --output json
+```
+
+The resulting Host entry invokes `voicecan-device mcp run --credential-ref <path>`. For an external secret manager, the equivalent direct configuration is:
 
 ```json
 {

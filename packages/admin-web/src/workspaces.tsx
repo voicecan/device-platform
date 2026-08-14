@@ -91,6 +91,10 @@ function UsersWorkspace({ t, run }: { t: Translate; run: Runner }) {
 }
 
 function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate; run: Runner; locale: Locale; onNavigateDevice: (deviceId: string) => void }) {
+  type BindingIntent = { id: string; group_id: string; expected_sn?: string | null; display_name?: string | null; ble_name_prefix: string; device_ws_url: string; network_mode: 'existing' | 'ask'; provisioning_session_id?: string | null; device_id?: string | null; status: string; failure_code?: string | null; expires_at: string };
+  const initialIntentId = new URLSearchParams(globalThis.location.search).get('binding_intent') ?? '';
+  const [bindingIntentId] = useState(initialIntentId);
+  const [bindingIntent, setBindingIntent] = useState<BindingIntent>();
   const [groupId, setGroupId] = useState('');
   const [serial, setSerial] = useState('');
   const [deviceWsUrl, setDeviceWsUrl] = useState('');
@@ -104,9 +108,29 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate
   const connectorUrl = deviceConnectUrl();
   const startRemoteConnector = useRef<StartRemoteProvisioning | undefined>(undefined);
   useEffect(() => { let active = true; void api<{ ble_name_prefix: string; preferred_device_ws_url: string; device_ws_urls: DeviceWsCandidate[] }>('/settings/device-access').then((settings) => { if (active) { setBleNamePrefix(settings.ble_name_prefix); setDeviceWsCandidates(settings.device_ws_urls); setDeviceWsUrl((currentUrl) => currentUrl || settings.preferred_device_ws_url); } }, () => undefined); return () => { active = false; }; }, []);
+  useEffect(() => {
+    if (!bindingIntentId) return;
+    let active = true; let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const applyIntent = (intent: BindingIntent): void => {
+      if (!active) return;
+      setBindingIntent(intent); setGroupId(intent.group_id); setSerial(intent.expected_sn ?? ''); setBleNamePrefix(intent.ble_name_prefix); setDeviceWsUrl(intent.device_ws_url);
+      if (intent.status === 'completed' && intent.device_id) { onNavigateDevice(intent.device_id); return; }
+      if (['user_action', 'ble_selected', 'claimed', 'configured'].includes(intent.status)) timer = globalThis.setTimeout(() => void loadIntent(), 1_000);
+    };
+    const loadIntent = async (): Promise<void> => { applyIntent(await api<BindingIntent>(`/binding-intents/${encodeURIComponent(bindingIntentId)}/browser`)); };
+    const fragment = new URLSearchParams(globalThis.location.hash.slice(1)); const launchToken = fragment.get('launch');
+    if (launchToken) {
+      fragment.delete('launch'); const clean = new URL(globalThis.location.href); clean.hash = fragment.toString(); globalThis.history.replaceState(globalThis.history.state, '', clean);
+      void api<BindingIntent>('/binding-intents/exchange', { method: 'POST', body: JSON.stringify({ launch_token: launchToken }) }).then(applyIntent, reportError);
+    } else void loadIntent().catch(reportError);
+    return () => { active = false; if (timer !== undefined) globalThis.clearTimeout(timer); };
+  }, [bindingIntentId]);
   const steps = ['Choose ownership', 'Connect nearby device', 'Configure network', 'Binding complete'];
   const current = !groupId ? 0 : !started || deviceStep === 0 ? 1 : deviceStep === 1 || deviceStep === 2 ? 2 : 3;
-  const createGrant = async (): Promise<{ expires_at: string; provisioning_token: string }> => { const expectedSn = serial.trim(); return api('/provisioning-sessions', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, ...(!localBluetooth ? { connector_origin: new URL(connectorUrl).origin } : {}), ...(expectedSn ? { expected_sn: expectedSn } : {}) }) }); };
+  const createGrant = async (): Promise<{ expires_at: string; provisioning_token: string }> => {
+    if (bindingIntentId) return api(`/binding-intents/${encodeURIComponent(bindingIntentId)}/grant`, { method: 'POST', body: '{}' });
+    const expectedSn = serial.trim(); return api('/provisioning-sessions', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, ...(!localBluetooth ? { connector_origin: new URL(connectorUrl).origin } : {}), ...(expectedSn ? { expected_sn: expectedSn } : {}) }) });
+  };
   const reportError = (integrationError: unknown): void => { setStarted(false); setDeviceStep(0); const message = integrationError instanceof Error ? integrationError.message : 'Device selection failed unexpectedly.'; void run(() => Promise.reject(new Error(t(message)))); };
   const beginBinding = (): void => {
     if (!groupId) return;
@@ -115,7 +139,8 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate
     const start = startRemoteConnector.current; if (!start) { setStarted(false); return; }
     void run(async () => { await start(createGrant); return true; }).then((opened) => { if (!opened) setStarted(false); });
   };
-  return <div className="flow-layout"><Stepper steps={steps} current={current} t={t}/>{!started ? <div className="flow-stage"><form className="form-grid provision-form" onSubmit={(event) => event.preventDefault()}><ResourcePicker id="provision-group" label={t('Destination group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required selectFirst/><Field id="provision-sn" label={t('Expected serial (optional)')} hint={t('Use the serial printed on the device to reduce nearby-device mistakes.')} value={serial} onChange={setSerial}/><DeviceWsCandidatePicker candidates={deviceWsCandidates} value={deviceWsUrl} onChange={setDeviceWsUrl} t={t}/><Field id="provision-device-ws-url" label={t('Device WebSocket URL')} hint={t('Use an address reachable from the device network, for example a LAN IP or public domain.')} type="url" value={deviceWsUrl} onChange={setDeviceWsUrl} wide required/><Actions><Button id="create-provision" icon="provision" disabled={!groupId || !deviceWsUrl.trim() || !connectorReady} onClick={beginBinding}>{t('Start binding')}</Button></Actions></form></div> : null}{localBluetooth ? <EmbeddedDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} hidden={!started} registerStart={(start) => { startConnector.current = start; setConnectorReady(Boolean(start)); }} onStepChange={setDeviceStep} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice} onError={reportError}/> : <RemoteDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} connectorUrl={connectorUrl} hidden={!started} registerStart={(start) => { startRemoteConnector.current = start; setConnectorReady(Boolean(start)); }} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice}/>}</div>;
+  const intentWaiting = bindingIntent?.status === 'configured';
+  return <div className="flow-layout"><Stepper steps={steps} current={intentWaiting ? 2 : current} t={t}/>{intentWaiting ? <div className="flow-stage"><div className="loading-panel" role="status"><span className="spinner"/><span>{t('The device configuration is complete. Waiting for the server to confirm it online…')}</span></div></div> : !started ? <div className="flow-stage"><form className="form-grid provision-form" onSubmit={(event) => event.preventDefault()}>{bindingIntent ? <div className="impact-note field-wide"><strong>{t('AI-prepared binding')}</strong><p>{t('Configuration is ready. Select the nearby Bluetooth device; the remaining steps run automatically.')}</p></div> : null}<ResourcePicker id="provision-group" label={t('Destination group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required selectFirst disabled={Boolean(bindingIntent)}/><Field id="provision-sn" label={t('Expected serial (optional)')} hint={t('Use the serial printed on the device to reduce nearby-device mistakes.')} value={serial} onChange={setSerial} disabled={Boolean(bindingIntent)}/>{!bindingIntent ? <><DeviceWsCandidatePicker candidates={deviceWsCandidates} value={deviceWsUrl} onChange={setDeviceWsUrl} t={t}/><Field id="provision-device-ws-url" label={t('Device WebSocket URL')} hint={t('Use an address reachable from the device network, for example a LAN IP or public domain.')} type="url" value={deviceWsUrl} onChange={setDeviceWsUrl} wide required/></> : <Field id="provision-device-ws-url" label={t('Device WebSocket URL')} value={deviceWsUrl} onChange={setDeviceWsUrl} wide disabled/>}<Actions><Button id="create-provision" icon="provision" disabled={!groupId || !deviceWsUrl.trim() || !connectorReady} onClick={beginBinding}>{bindingIntent ? t('Select Bluetooth device') : t('Start binding')}</Button></Actions></form></div> : null}{localBluetooth ? <EmbeddedDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} hidden={!started || intentWaiting} registerStart={(start) => { startConnector.current = start; setConnectorReady(Boolean(start)); }} onStepChange={setDeviceStep} onProvisioned={() => { setDeviceStep(3); if (bindingIntentId) void api<BindingIntent>(`/binding-intents/${encodeURIComponent(bindingIntentId)}/browser`).then((intent) => { setBindingIntent(intent); if (intent.device_id) onNavigateDevice(intent.device_id); }); }} onAlreadyClaimed={onNavigateDevice} onError={reportError}/> : <RemoteDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} connectorUrl={connectorUrl} hidden={!started || intentWaiting} registerStart={(start) => { startRemoteConnector.current = start; setConnectorReady(Boolean(start)); }} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice}/>}</div>;
 }
 
 function DeviceAccessSettingsWorkspace({ t, run }: { t: Translate; run: Runner }) {

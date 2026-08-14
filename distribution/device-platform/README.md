@@ -7,64 +7,66 @@ browser device binding UI, and the reviewed compiled protocol runtime.
 
 Requirements: Node.js `>=24.15.0 <25` (Node.js 24.19.0 is recommended) and npm.
 
-Run this command in the directory where you want to keep the local `data/`
-directory:
+Install the CLI and create a persistent per-user Profile:
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
-npx --yes @voicecan/device-platform@1.0.0 init
+npm install --global @voicecan/device-platform@1.0.0
+voicecan-device onboard
 ```
 
 The first command also replaces an older Gitea npm-scope setting, if present.
 
-The command installs the package, explicitly migrates the local SQLite database,
-starts the server, and opens `http://127.0.0.1:8787/admin`. Keep the terminal
-running. On a headless machine, use:
+`onboard` explicitly migrates the local SQLite database, installs and starts a
+current-user background service, opens `http://127.0.0.1:8787/admin`, and exits.
+On a headless machine, use:
 
 ```bash
-npx --yes @voicecan/device-platform@1.0.0 init --no-open
+voicecan-device onboard --no-open
 ```
 
-The terminal prints the setup-token file and the command for reading it. Enter
-that temporary token in the opened page and create the first administrator.
+Complete trusted setup in the opened page. Do not copy setup secrets into
+automation output.
 
 ## Persistent global installation
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
 npm install --global @voicecan/device-platform@1.0.0
-voicecan-device init
+voicecan-device onboard
 ```
 
-Later starts do not run migrations automatically:
+The service persists after the terminal exits. Inspect it with:
 
 ```bash
-voicecan-device migrate
-voicecan-device serve
+voicecan-device service status --output json
+voicecan-device service restart --output json
+voicecan-device doctor --output json
 ```
 
 Open <http://127.0.0.1:8787/admin> after the server reports ready.
 
 ## Exact instructions for an AI coding agent
 
-An agent may install and initialize a local development instance by executing:
+An agent may install and initialize a local instance by executing:
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
-npx --yes @voicecan/device-platform@1.0.0 init --no-open
+npm install --global @voicecan/device-platform@1.0.0
+voicecan-device onboard --no-open --output json
 ```
 
-It must wait for `Voicecan Device Server is ready`, then open
-`http://127.0.0.1:8787/admin` for the user. It must not delete an existing
-`data/` directory, print secrets into chat, or run a production migration
-without explicit authorization.
+It must use the returned `next_actions` to open Admin for the user. It must not
+delete an existing Profile, print secrets into chat, or run a production
+migration without explicit authorization.
 
 Useful commands:
 
 ```bash
 voicecan-device --help
-voicecan-device show-setup-token
-voicecan-device doctor
+voicecan-device capabilities --output json
+voicecan-device service status --output json
+voicecan-device admin-mcp stdio
 ```
 
 ## Configuration
@@ -74,7 +76,7 @@ environment variables include:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VOICECAN_DATA_DIR` | `./data` | Database, secrets, logs, and local objects |
+| `VOICECAN_DATA_DIR` | Profile `data/` | Database, secrets, logs, and local objects |
 | `VOICECAN_PORT` | `8787` | HTTP and device WebSocket port |
 | `VOICECAN_PUBLIC_BASE_URL` | `http://127.0.0.1:8787` | Browser-facing URL |
 | `VOICECAN_HOST` | `0.0.0.0` | Listen address |

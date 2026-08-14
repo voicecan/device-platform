@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export const schemaSql = `
 PRAGMA journal_mode = WAL;
@@ -278,6 +278,34 @@ CREATE TABLE IF NOT EXISTS provisioning_sessions (
   updated_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS binding_intents (
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL REFERENCES user_groups(id),
+  created_by TEXT NOT NULL REFERENCES users(id),
+  idempotency_key TEXT,
+  expected_sn TEXT,
+  display_name TEXT,
+  ble_name_prefix TEXT NOT NULL,
+  resolved_device_ws_url TEXT NOT NULL,
+  network_mode TEXT NOT NULL CHECK (network_mode IN ('existing','ask')),
+  locale TEXT NOT NULL CHECK (locale IN ('en','zh-CN')),
+  allowed_origin TEXT NOT NULL,
+  provisioning_session_id TEXT REFERENCES provisioning_sessions(id),
+  device_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending','user_action','ble_selected','claimed','configured','completed','failed','expired','canceled')),
+  failure_code TEXT,
+  launch_token_hash TEXT UNIQUE,
+  browser_session_hash TEXT UNIQUE,
+  launch_consumed_at TEXT,
+  expires_at TEXT NOT NULL,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(created_by,idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS binding_intents_status_idx ON binding_intents(status,expires_at);
+CREATE INDEX IF NOT EXISTS binding_intents_provisioning_idx ON binding_intents(provisioning_session_id);
 
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,

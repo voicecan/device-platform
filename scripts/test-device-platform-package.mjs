@@ -62,7 +62,7 @@ try {
     VOICECAN_PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
     VOICECAN_LOG_FILE: 'false',
   };
-  const server = spawn(process.execPath, [cli, 'init', '--no-open'], { cwd: installation, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  const server = spawn(process.execPath, [cli, 'init', '--foreground', '--no-open'], { cwd: installation, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   server.stdout.on('data', (chunk) => { output += chunk; });
   server.stderr.on('data', (chunk) => { output += chunk; });

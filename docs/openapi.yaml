@@ -7,6 +7,7 @@ servers:
 components:
   securitySchemes:
     sessionCookie: { type: apiKey, in: cookie, name: vc_session }
+    bindingBrowser: { type: apiKey, in: cookie, name: vc_binding }
     groupToken: { type: http, scheme: bearer }
     applicationToken: { type: http, scheme: bearer, bearerFormat: vcd_app_opaque }
   schemas:
@@ -545,6 +546,30 @@ paths:
     post: { summary: Atomically revoke and replace a group token with rotation lineage, security: [{ sessionCookie: [] }], responses: { '201': { description: Replacement token shown once } } }
   /user-groups/{id}/api-tokens/{tokenId}:
     delete: { summary: Revoke a group token, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked }, '404': { description: Missing or unauthorized } } }
+  /binding-intents:
+    post:
+      summary: Prepare a resumable server-authoritative device binding Intent
+      security: [{ sessionCookie: [] }]
+      responses: { '201': { description: Intent and one-time browser launch URL }, '409': { description: Setup or Group state prevents binding } }
+  /binding-intents/exchange:
+    post:
+      summary: Exchange a single-use launch fragment for an HttpOnly binding browser session
+      responses: { '200': { description: Browser session established }, '403': { description: Launch is invalid, expired, reused, or from another Origin } }
+  /binding-intents/{id}/browser:
+    get:
+      summary: Resume a Binding Intent after refresh without an Admin session
+      security: [{ bindingBrowser: [] }]
+      responses: { '200': { description: Authoritative binding state }, '401': { description: Binding browser session required } }
+  /binding-intents/{id}/grant:
+    post:
+      summary: Create or replace the short-lived provisioning session behind a Binding Intent
+      security: [{ bindingBrowser: [] }]
+      responses: { '200': { description: One-time provisioning credential }, '409': { description: Intent is terminal or expired } }
+  /binding-intents/{id}:
+    get:
+      summary: Observe an authoritative Binding Intent from Admin or local automation
+      security: [{ sessionCookie: [] }]
+      responses: { '200': { description: Binding state }, '404': { description: Missing or unauthorized } }
   /provisioning-sessions:
     post:
       summary: Create one-time provisioning grant

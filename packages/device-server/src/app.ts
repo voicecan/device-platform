@@ -393,6 +393,18 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const authorization = request.headers.authorization;
     if (authorization?.startsWith('Bearer ')) {
       const raw = authorization.slice(7);
+      if (raw.startsWith('vcd_local_')) {
+        const supplied = Buffer.from(raw.slice('vcd_local_'.length), 'base64url');
+        const loopback = request.ip === '127.0.0.1' || request.ip === '::1' || request.ip === '::ffff:127.0.0.1';
+        if (!config.localOperatorKey || !loopback || supplied.length !== config.localOperatorKey.length || !timingSafeEqual(supplied, config.localOperatorKey)) throw new HttpError(401, 'UNAUTHENTICATED', 'Authentication required');
+        const row = await db.get<AuthRow>(`SELECT u.id AS user_id,u.role
+          FROM users u JOIN server_settings s ON s.singleton=1 AND s.setup_completed_at IS NOT NULL
+          WHERE u.role='system_admin' AND u.disabled_at IS NULL ORDER BY u.created_at,u.id LIMIT 1`);
+        if (!row?.user_id) throw new HttpError(409, 'SETUP_REQUIRED', 'Complete trusted local setup before using local automation');
+        const context: AccessContext = { actorId: row.user_id, actorType: 'user', isSystemAdmin: true, groupId: null, isGroupAdmin: false, scopes: new Set<string>(), channel: 'admin' };
+        requestAccess.set(request, context);
+        return context;
+      }
       if (raw.startsWith('vcd_app_')) {
         const row = await db.get<AuthRow & { application_allowed_ip_cidrs_json?: string }>(`SELECT c.id AS credential_id,c.application_id,c.group_id,c.kind AS credential_kind,c.scopes_json,c.allowed_ip_cidrs_json,c.status AS credential_status,c.not_before,c.expires_at,c.replaced_by_id,c.grace_ends_at,a.status AS app_status,a.channels_json AS application_channels_json,p.allowed_ip_cidrs_json AS application_allowed_ip_cidrs_json
           FROM application_credentials c JOIN open_platform_applications a ON a.id=c.application_id JOIN application_policies p ON p.application_id=a.id
@@ -884,6 +896,88 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const result = await db.run('UPDATE group_api_tokens SET revoked_at=? WHERE id=? AND group_id=? AND revoked_at IS NULL', [now(), String(params.tokenId), groupId]); if (!result.changes) throw new AccessDeniedError(); await audit(request, context, 'group_token.revoked', 'group_api_token', String(params.tokenId), groupId); return success(reply, {});
   });
 
+  const bindingIntentState = async (intent: Row): Promise<Row> => {
+    let status = String(intent.status); let deviceId = intent.device_id === null || intent.device_id === undefined ? null : String(intent.device_id); let failureCode = intent.failure_code === null || intent.failure_code === undefined ? null : String(intent.failure_code);
+    if (String(intent.expires_at) <= now() && !['completed', 'canceled'].includes(status)) status = 'expired';
+    if (intent.provisioning_session_id) {
+      const session = await db.get<Row>('SELECT status,device_id,failure_code,completed_at FROM provisioning_sessions WHERE id=?', [intent.provisioning_session_id]);
+      if (session) {
+        deviceId = session.device_id === null || session.device_id === undefined ? deviceId : String(session.device_id);
+        failureCode = session.failure_code === null || session.failure_code === undefined ? failureCode : String(session.failure_code);
+        const provisioningStatus = String(session.status);
+        if (provisioningStatus === 'completed') status = 'completed';
+        else if (provisioningStatus === 'configured' || provisioningStatus === 'online') status = 'configured';
+        else if (['reserved', 'ble_authenticated'].includes(provisioningStatus)) status = 'claimed';
+        else if (provisioningStatus === 'failed') status = 'failed';
+      }
+    }
+    if (status !== intent.status || deviceId !== intent.device_id || failureCode !== intent.failure_code) await db.run('UPDATE binding_intents SET status=?,device_id=?,failure_code=?,completed_at=CASE WHEN ?=\'completed\' THEN COALESCE(completed_at,?) ELSE completed_at END,updated_at=? WHERE id=?', [status, deviceId, failureCode, status, now(), now(), intent.id]);
+    return { id: intent.id, group_id: intent.group_id, expected_sn: intent.expected_sn, display_name: intent.display_name, ble_name_prefix: intent.ble_name_prefix, device_ws_url: intent.resolved_device_ws_url, network_mode: intent.network_mode, locale: intent.locale, provisioning_session_id: intent.provisioning_session_id, device_id: deviceId, status, failure_code: failureCode, expires_at: intent.expires_at, completed_at: status === 'completed' ? (intent.completed_at ?? now()) : intent.completed_at };
+  };
+
+  app.post('/api/v1/binding-intents', async (request, reply) => {
+    const context = await resolveAccess(request, true); if (context.actorType !== 'user') throw new AccessDeniedError(); const body = bodyOf(request);
+    const groupId = context.isSystemAdmin ? requiredString(body, 'group_id', 80) : requireGroup(context); if (!context.isSystemAdmin) requireGroupAdmin(context, groupId);
+    const allowedOrigin = validatedProvisioningOrigin(requiredString(body, 'allowed_origin', 300), optionalString(body, 'connector_origin', 300), config.deviceConnectUrl, config.deploymentProfile === 'intranet');
+    const idempotencyKey = optionalString(body, 'idempotency_key', 200);
+    if (idempotencyKey) {
+      const existing = await db.get<Row>('SELECT * FROM binding_intents WHERE created_by=? AND idempotency_key=?', [context.actorId, idempotencyKey]);
+      if (existing) return success(reply, { ...(await bindingIntentState(existing)), launch_url: null, reused: true });
+    }
+    const networkMode = body.network_mode === undefined || body.network_mode === 'existing' ? 'existing' : body.network_mode === 'ask' ? 'ask' : (() => { throw new HttpError(400, 'INVALID_NETWORK_MODE', 'network_mode must be existing or ask'); })();
+    const locale = body.locale === 'zh-CN' ? 'zh-CN' : 'en';
+    let deviceWsUrl: string;
+    try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
+    catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
+    const settings = await db.get<{ ble_name_prefix: string }>('SELECT ble_name_prefix FROM server_settings WHERE singleton=1');
+    const intentId = id('bind'); const launchToken = `vcd_bind_${opaqueToken()}`; const timestamp = now(); const expiresAt = plus(10 * 60_000);
+    await db.run("INSERT INTO binding_intents(id,group_id,created_by,idempotency_key,expected_sn,display_name,ble_name_prefix,resolved_device_ws_url,network_mode,locale,allowed_origin,status,launch_token_hash,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,?)", [intentId, groupId, context.actorId, idempotencyKey, optionalString(body, 'expected_sn', 128), optionalString(body, 'display_name', 80), settings?.ble_name_prefix ?? 'CAPSO-', deviceWsUrl, networkMode, locale, allowedOrigin, tokenHash(launchToken), expiresAt, timestamp, timestamp]);
+    const launchUrl = new URL('/admin', config.publicBaseUrl); launchUrl.searchParams.set('view', 'provision'); launchUrl.searchParams.set('binding_intent', intentId); launchUrl.hash = `launch=${encodeURIComponent(launchToken)}`;
+    await audit(request, context, 'binding_intent.created', 'binding_intent', intentId, groupId);
+    reply.header('cache-control', 'private, no-store'); return success(reply, { id: intentId, status: 'pending', expires_at: expiresAt, launch_url: launchUrl.href, reused: false }, 201);
+  });
+
+  app.post('/api/v1/binding-intents/exchange', async (request, reply) => {
+    const launchToken = requiredString(bodyOf(request), 'launch_token', 512); const origin = String(request.headers.origin ?? ''); const browserToken = `vcd_bind_browser_${opaqueToken()}`; const timestamp = now();
+    const intent = await db.get<Row>("SELECT * FROM binding_intents WHERE launch_token_hash=? AND status='pending' AND launch_consumed_at IS NULL AND expires_at>?", [tokenHash(launchToken), timestamp]);
+    if (!intent || origin !== intent.allowed_origin) throw new HttpError(403, 'BINDING_LAUNCH_INVALID', 'Binding launch is invalid or expired');
+    const changed = await db.run("UPDATE binding_intents SET launch_token_hash=NULL,launch_consumed_at=?,browser_session_hash=?,status='user_action',updated_at=? WHERE id=? AND launch_consumed_at IS NULL", [timestamp, tokenHash(browserToken), timestamp, intent.id]);
+    if (changed.changes !== 1) throw new HttpError(409, 'BINDING_LAUNCH_USED', 'Binding launch was already used');
+    reply.setCookie('vc_binding', browserToken, { ...browserCookieOptions, httpOnly: true, maxAge: 600 });
+    reply.header('cache-control', 'private, no-store'); return success(reply, await bindingIntentState({ ...intent, status: 'user_action', launch_consumed_at: timestamp, browser_session_hash: tokenHash(browserToken) }));
+  });
+
+  const requireBrowserIntent = async (request: FastifyRequest, intentId: string): Promise<Row> => {
+    const browserToken = request.cookies.vc_binding; if (!browserToken) throw new HttpError(401, 'BINDING_SESSION_REQUIRED', 'Binding browser session is required');
+    const intent = await db.get<Row>('SELECT * FROM binding_intents WHERE id=? AND browser_session_hash=?', [intentId, tokenHash(browserToken)]);
+    if (!intent) throw new HttpError(401, 'BINDING_SESSION_INVALID', 'Binding browser session is invalid');
+    return intent;
+  };
+
+  app.get('/api/v1/binding-intents/:id/browser', async (request, reply) => {
+    const intent = await requireBrowserIntent(request, String((request.params as Row).id)); reply.header('cache-control', 'private, no-store'); return success(reply, await bindingIntentState(intent));
+  });
+
+  app.post('/api/v1/binding-intents/:id/grant', async (request, reply) => {
+    const intentId = String((request.params as Row).id); const intent = await requireBrowserIntent(request, intentId); const state = await bindingIntentState(intent);
+    if (!['user_action', 'failed', 'ble_selected', 'claimed'].includes(String(state.status)) || String(intent.expires_at) <= now()) throw new HttpError(409, 'BINDING_NOT_CLAIMABLE', 'Binding intent is not ready to claim');
+    const sessionId = id('provision'); const raw = `vcd_prov_${opaqueToken()}`; const timestamp = now();
+    const statements: SqlStatement[] = [];
+    if (intent.provisioning_session_id) statements.push({ sql: "UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code='SUPERSEDED_BY_BINDING_RESUME',updated_at=? WHERE id=? AND status IN ('pending','reserved','ble_authenticated','failed')", params: [timestamp, timestamp, intent.provisioning_session_id] });
+    statements.push(
+      { sql: "INSERT INTO provisioning_sessions(id,public_token_hash,allowed_origin,expected_sn,group_id,created_by,expires_at,status,updated_at,created_at) VALUES(?,?,?,?,?,?,?,'pending',?,?)", params: [sessionId, tokenHash(raw), intent.allowed_origin, intent.expected_sn, intent.group_id, intent.created_by, intent.expires_at, timestamp, timestamp], expectChanges: 1 },
+      { sql: "UPDATE binding_intents SET provisioning_session_id=?,status='ble_selected',failure_code=NULL,updated_at=? WHERE id=?", params: [sessionId, timestamp, intentId], expectChanges: 1 },
+    );
+    await db.batch(statements);
+    reply.header('cache-control', 'private, no-store'); return success(reply, { id: intentId, provisioning_session_id: sessionId, provisioning_token: raw, expires_at: intent.expires_at, device_ws_url: intent.resolved_device_ws_url, network_mode: intent.network_mode });
+  });
+
+  app.get('/api/v1/binding-intents/:id', async (request, reply) => {
+    const context = await resolveAccess(request); const intentId = String((request.params as Row).id); const groupId = context.isSystemAdmin ? null : requireGroup(context);
+    const intent = await db.get<Row>(`SELECT * FROM binding_intents WHERE id=? ${groupId ? 'AND group_id=?' : ''}`, groupId ? [intentId, groupId] : [intentId]); if (!intent) throw new AccessDeniedError();
+    return success(reply, await bindingIntentState(intent));
+  });
+
   app.post('/api/v1/provisioning-sessions', async (request, reply) => {
     const context = await resolveAccess(request, true); const body = bodyOf(request); const groupId = context.isSystemAdmin ? requiredString(body, 'group_id', 80) : requireGroup(context); if (!context.isSystemAdmin) requireGroupAdmin(context, groupId);
     const allowedOrigin = validatedProvisioningOrigin(requiredString(body, 'allowed_origin', 300), optionalString(body, 'connector_origin', 300), config.deviceConnectUrl, config.deploymentProfile === 'intranet');
@@ -894,11 +988,13 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const context = await resolveAccess(request); const sessionId = String((request.params as Row).id); const groupId = context.isSystemAdmin ? null : requireGroup(context); const row = await db.get<Row>(`SELECT id,status,device_id,expires_at,consumed_at FROM provisioning_sessions WHERE id=? ${groupId ? 'AND group_id=?' : ''}`, groupId ? [sessionId, groupId] : [sessionId]); if (!row) throw new AccessDeniedError(); return success(reply, row);
   });
   app.post('/api/v1/provisioning-sessions/claim', async (request, reply) => {
-    const body = bodyOf(request); const rawGrant = requiredString(body, 'provisioning_token'); const manufacturer = requiredString(body, 'manufacturer', 64); const sn = requiredString(body, 'serial_number', 128); const scannedBluetoothName = optionalString(body, 'bluetooth_name', 248); const defaultDisplayName = scannedBluetoothName ? scannedBluetoothName.slice(0, 80) : null;
+    const body = bodyOf(request); const rawGrant = requiredString(body, 'provisioning_token'); const manufacturer = requiredString(body, 'manufacturer', 64); const sn = requiredString(body, 'serial_number', 128); const scannedBluetoothName = optionalString(body, 'bluetooth_name', 248);
     let deviceWsUrl: string;
     try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
     catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
     const session = await db.get<{ id: string; expected_sn: string | null; group_id: string; allowed_origin: string; expires_at: string; status: string; consumed_at: string | null }>("SELECT id,expected_sn,group_id,allowed_origin,expires_at,status,consumed_at FROM provisioning_sessions WHERE public_token_hash=? AND status IN ('pending','failed') AND expires_at>?", [tokenHash(rawGrant), now()]); if (!session || request.headers.origin !== session.allowed_origin || (session.expected_sn && session.expected_sn !== sn)) throw new HttpError(403, 'PROVISIONING_TOKEN_INVALID', 'Provisioning session is invalid');
+    const bindingIntent = await db.get<{ display_name: string | null }>('SELECT display_name FROM binding_intents WHERE provisioning_session_id=?', [session.id]);
+    const defaultDisplayName = bindingIntent?.display_name ?? (scannedBluetoothName ? scannedBluetoothName.slice(0, 80) : null);
     const existing = await db.get<{ id: string; display_name: string | null; group_id: string; claim_status: string; credential_id: string | null; token_ciphertext: string | null; key_version: number | null }>(`SELECT d.id,d.display_name,d.group_id,d.claim_status,c.id AS credential_id,c.token_ciphertext,c.key_version
       FROM devices d LEFT JOIN device_credentials c ON c.device_id=d.id AND c.status='temporary' AND c.revoked_at IS NULL
       WHERE d.manufacturer=? AND d.sn=? AND d.deleted_at IS NULL ORDER BY c.credential_epoch DESC LIMIT 1`, [manufacturer, sn]);

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Configure Voicecan"
+  short_description: "Configure and diagnose a Voicecan profile"
+  default_prompt: "Use $voicecan-configure to configure my Voicecan Device Platform profile."

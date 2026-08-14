@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Voicecan Application"
+  short_description: "Create least-privilege platform Applications"
+  default_prompt: "Use $voicecan-create-application to create a least-privilege Voicecan Application."

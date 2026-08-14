@@ -1,0 +1,4 @@
+interface:
+  display_name: "Connect Voicecan MCP"
+  short_description: "Connect Admin or Application MCP safely"
+  default_prompt: "Use $voicecan-connect-mcp to connect Voicecan to my AI host without exposing tokens."

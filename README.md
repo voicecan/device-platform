@@ -42,14 +42,25 @@ Requirements: Node.js `>=24.15.0 <25`, npm, and a private local data directory.
 For a local Edge/SQLite installation from the official npm registry, run:
 
 ```sh
-npx --yes @voicecan/device-platform@1.0.0 init
+npm install --global @voicecan/device-platform@1.0.0
+voicecan-device onboard
 ```
 
-This explicitly migrates SQLite, starts the Server, and opens
-`http://127.0.0.1:8787/admin`. It stores persistent state in `./data`; run it
-from the directory that should own that data. Use `--no-open` on a headless
-host. The npm package has no mutating `postinstall` hook, and ordinary `serve`
-never runs migrations.
+`onboard` creates a stable per-user Profile, explicitly migrates SQLite,
+installs a current-user background service (systemd user, launchd, or Windows
+Scheduled Task), waits for readiness, opens Admin, and exits. State no longer
+depends on the current directory. Use `--no-open` on a headless host. The npm
+package has no mutating `postinstall` hook, and ordinary `serve` never runs
+migrations. `init` is a compatible alias; use `init --foreground` only for a
+temporary development process.
+
+```sh
+voicecan-device service status --output json
+voicecan-device doctor --output json
+```
+
+See [installation and background services](docs/installation/README.md) and
+[AI automation](docs/installation/ai-automation.md).
 
 Choose exactly one installation method for an installation. The npm, Docker,
 private-Node, and source methods have separate lifecycle boundaries; do not

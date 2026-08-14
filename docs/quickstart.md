@@ -20,24 +20,25 @@ the same installation directory.
 
 ### One-command npm install
 
-Run these commands from the directory that should retain the local `data/`
-directory:
+Install the CLI, then let onboarding create a stable per-user Profile:
 
 ```sh
 npm config set @voicecan:registry https://registry.npmjs.org/
-npx --yes @voicecan/device-platform@1.0.0 init
+npm install --global @voicecan/device-platform@1.0.0
+voicecan-device onboard
 ```
 
 The registry command replaces any older Gitea setting for the `@voicecan`
-scope. `init` explicitly runs the idempotent SQLite migration, starts the
-Server, and opens `http://127.0.0.1:8787/admin`. Use `--no-open` on a headless
-host. Installation itself has no migration or other mutating `postinstall`
-hook; later starts remain explicit:
+scope. `onboard` explicitly runs the idempotent SQLite migration, installs and
+starts a current-user background service, waits for readiness, opens Admin,
+and exits. Use `--no-open` on a headless host. Installation itself has no
+migration or other mutating `postinstall` hook. The service entrypoint remains
+`serve`, so restarts never migrate implicitly:
 
 ```sh
-npm install --global @voicecan/device-platform@1.0.0
-voicecan-device migrate
-voicecan-device serve
+voicecan-device service status --output json
+voicecan-device service restart --output json
+voicecan-device service logs
 ```
 
 ### One-command Docker install
@@ -95,7 +96,7 @@ npm run migrate
 npm start
 ```
 
-Migrations are explicit and are never run by `serve`. Open `http://127.0.0.1:8787/admin`; the startup summary prints the initial setup-token path and `node packages/device-server/dist/cli.js show-setup-token` to reveal it on demand. Create the first System Admin; the token file is removed after setup.
+Migrations are explicit and are never run by `serve`. Source development can use `voicecan-device init --foreground`; managed installations use `onboard`. Open Admin with `voicecan-device setup open` and complete the trusted first-run setup without copying secrets into automation output.
 
 Create a group and an origin-bound provisioning grant in `/admin`. Admin now keeps the provisioning flow in one workspace: when the current secure context exposes Web Bluetooth it embeds the local connector; otherwise it opens the independently deployed public connector configured by `VOICECAN_CONNECT_WEB_URL`. The public page performs BLE on the user's computer while the original Admin page proxies the narrow API operations to the local/NAS Server. Provisioning grants are never placed in a URL, browser storage, log, or support bundle.
 
