@@ -1,8 +1,10 @@
-# VoiceCan Device Platform
+# Voicecan Device Platform
 
-Public source repository for independent device connectivity and immutable recording-file synchronization, with no dependency on VoiceCan accounts, families, memberships, model services, or the existing business API.
+[中文](README.zh-CN.md)
 
-The private wire-protocol source has been split into the sibling `device-core` repository. This repository consumes only a reviewed, checksummed `@voicecan/device-core` release artifact; see [repository boundary](docs/repository-boundary.md).
+Public source repository for independent device connectivity and immutable recording-file synchronization, with no dependency on Voicecan accounts, families, memberships, model services, or the existing business API.
+
+The wire-protocol implementation is supplied only as the reviewed, checksummed `@voicecan/device-core` runtime artifact committed under `vendor/`. A normal `npm install` resolves it locally; no separate source checkout is required. See the [protocol runtime dependency boundary](docs/repository-boundary.md).
 
 ## Implemented preview
 
@@ -20,7 +22,7 @@ The private wire-protocol source has been split into the sibling `device-core` r
 - Webhook DNS/IP pinning, current/next secret rotation, schema-v6 CAS delivery leases, dead-letter inspection/replay, and preview-confirmed historical backfill namespaces.
 - System Admin legal hold plus preview/CAS-confirmed, retryable, exact-version storage-object deletion; metadata/audit tombstones remain and the physical-device source is explicitly untouched.
 - TypeScript and Python clients, event verification, WebBluetooth transport, headless command queue, Lit-based standard provisioner/console Web Components, a React/Vite Admin application, an independently deployable public Device Connect Web with Admin reuse and cross-origin callback verification, fixture consumer, unified durable Connector runtime, three local-output demos, simulator, Docker image, Compose, and integration Skill.
-- A single private Rust Core release supplies Browser and Node WASM artifacts. The public repository pins its package digest, ABI and conformance hash and does not contain its source or fixtures.
+- A pinned compiled protocol runtime supplies the Browser and Node WASM artifacts. This repository verifies its package digest, ABI and conformance hash and does not contain protocol source or fixtures.
 - Bound-device management combines periodic WebSocket status polling with authenticated nearby BLE status/control. OTA uses a local firmware repository: System Admins can stream custom packages or explicitly import and verify a package from the configurable official source (default `https://api.voice-can.com/`), then install the local copy over WebSocket or BLE.
 
 Open Platform documentation:
@@ -62,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/voicecan/device-platform/main/insta
 
 The installer clones `main` into
 `${XDG_DATA_HOME:-$HOME/.local/share}/voicecan-device-platform`, builds a
-commit-tagged image, verifies the public/Core boundary during the image build,
+commit-tagged image, verifies the public/protocol-runtime boundary during the image build,
 runs the migration explicitly, starts the loopback-only Compose profile, and
 waits for readiness. It never overwrites an existing installation. Override
 settings through flags or environment variables; for example:
@@ -88,7 +90,7 @@ curl -fsSL https://raw.githubusercontent.com/voicecan/device-platform/main/insta
 The Node.js installer does not use the user's Node.js, npm, nvm, Homebrew, or
 system PATH. It downloads the exact runtime in `node-runtime.lock`, verifies the
 platform-specific SHA-256, and keeps that private runtime under the installation
-directory. It then performs the same source/Core verification, builds the
+directory. It then performs the same source/runtime-artifact verification, builds the
 release, explicitly migrates SQLite, and attempts to install a user-level
 systemd service on Linux or launchd agent on macOS. It never uses `sudo`. Pass
 `--no-service` when only build and migration are desired.
@@ -118,7 +120,7 @@ The complete local Server distribution and the three application SDKs are
 published to the official npm registry under the `@voicecan` scope:
 
 - `@voicecan/device-platform`: self-contained Server, Admin and device UI,
-  reviewed compiled Core runtime, and the `voicecan-device` CLI;
+  reviewed compiled protocol runtime, and the `voicecan-device` CLI;
 
 - `@voicecan/contracts`: public contracts and constants only;
 - `@voicecan/server-client`: Application REST client, Event cursor, secure Recording Grant download, Webhook verification/parsing, and media assessment;
@@ -131,7 +133,7 @@ npm install @voicecan/contracts @voicecan/server-client @voicecan/connector-runt
 Application code should not depend on `@voicecan/device-platform`; install it
 only when deploying the Server. Run `npm run npm:pack:check` before publishing.
 The release checks verify that the Server tarball contains its Admin/UI and
-reviewed Core JS/WASM assets without publishing private protocol sources.
+reviewed protocol-runtime JS/WASM assets without publishing private protocol sources.
 
 Offline operations must run while the server is stopped:
 
@@ -157,4 +159,4 @@ npm run build
 
 The automated suite covers setup/claim replay rejection, origin binding, persistent rate limiting, lifecycle guards, immutable upload recovery, backup/restore, key rotation, SSRF address classes, group isolation, transfer authorization, Connector fan-out, Skill forward fixtures, WASM conformance, Gateway event parsing, React Admin build/asset delivery, and Lit Custom Element contract preservation. Admin includes dedicated User/Group/Token/Webhook lifecycle forms plus guarded API, delivery, and simulator tools. Physical BLE permission and device results remain a hardware release gate.
 
-See [quickstart](docs/quickstart.md), [local firmware repository and OTA](docs/firmware-repository.md), [Device Connect Web deployment](docs/device-connect-web-deployment.md), [OpenAPI](docs/openapi.yaml), [error codes](docs/error-codes.md), [connectors and demos](docs/connectors-and-demos.md), [operations runbook](docs/operations-runbook.md), [versioning and migrations](docs/versioning-and-migrations.md), [licensing gate](docs/licensing-decision.md), [security model](docs/security.md), [repository boundary](docs/repository-boundary.md), and [implementation status](docs/implementation-status.md).
+See [quickstart](docs/quickstart.md), [local firmware repository and OTA](docs/firmware-repository.md), [Device Connect Web deployment](docs/device-connect-web-deployment.md), [OpenAPI](docs/openapi.yaml), [error codes](docs/error-codes.md), [connectors and demos](docs/connectors-and-demos.md), [operations runbook](docs/operations-runbook.md), [versioning and migrations](docs/versioning-and-migrations.md), [licensing gate](docs/licensing-decision.md), [security model](docs/security.md), [protocol runtime dependency boundary](docs/repository-boundary.md), and [implementation status](docs/implementation-status.md).

@@ -21,6 +21,6 @@ Use only `install.sh`. It builds the release image, runs the explicit Compose mi
 curl -fsSL https://raw.githubusercontent.com/voicecan/device-platform/main/install-node.sh | bash
 ```
 
-Use only `install-node.sh`. It installs the repository-locked private runtime under the installation directory, verifies the archive SHA-256, runs `npm ci --ignore-scripts`, verifies the Core, builds, migrates explicitly, prunes development dependencies, and configures a user-level systemd/launchd service when available. Never use the user's `node`, `npm`, nvm, Homebrew Node, or global packages as a substitute.
+Use only `install-node.sh`. It installs the repository-locked Node runtime under the installation directory, verifies the archive SHA-256, runs `npm ci --ignore-scripts`, verifies the bundled protocol runtime, builds, migrates explicitly, prunes development dependencies, and configures a user-level systemd/launchd service when available. Never use the user's `node`, `npm`, nvm, Homebrew Node, or global packages as a substitute.
 
 Both entry points are initial-install only and refuse to overwrite an existing installation. Follow the versioned backup/migration/rollback guide for upgrades.

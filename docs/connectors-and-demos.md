@@ -1,10 +1,10 @@
 # Connectors and demos
 
-The connector runtime consumes signed `file.synced` Webhooks and fans one event out to one or more targets. It does not depend on VoiceCan business services, ASR, LLMs, or a specific messaging vendor.
+The connector runtime consumes signed `file.synced` Webhooks and fans one event out to one or more targets. It does not depend on Voicecan business services, ASR, LLMs, or a specific messaging vendor.
 
 ## Delivery guarantees
 
-- Verify `VoiceCan-Timestamp`, `VoiceCan-Delivery-Id`, and `VoiceCan-Signature` against the unmodified body before parsing.
+- Verify `Voicecan-Timestamp`, `Voicecan-Delivery-Id`, and `Voicecan-Signature` against the unmodified body before parsing.
 - Reject bodies above 256 KiB and reject unknown API versions.
 - Persist one ledger record per event ID with a canonical event hash and per-target status.
 - Coalesce concurrent duplicates in one process. Repeated events skip successful targets and retry only failed targets.
@@ -15,7 +15,7 @@ The connector runtime consumes signed `file.synced` Webhooks and fans one event 
 
 `reconcileRecordings` performs a complete authorized Recording listing and invokes application callbacks for newly visible and authorization-lost recordings. Cleanup begins only after the listing completes successfully, so a partial Platform response cannot erase application data.
 
-These capabilities are published as `@voicecan/connector-runtime`; applications install the package from the VoiceCan npm registry instead of importing this repository or another Demo's source tree.
+These capabilities are published as `@voicecan/connector-runtime`; applications install the package from the Voicecan npm registry instead of importing this repository or another Demo's source tree.
 
 ## Included demos
 

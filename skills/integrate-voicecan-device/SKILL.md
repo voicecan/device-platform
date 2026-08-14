@@ -1,11 +1,11 @@
 ---
 name: integrate-voicecan-device
-description: Deploy, install, integrate, verify, and diagnose the independent VoiceCan Device Server and fixture consumer. Use when choosing between Docker and private-Node installation, adding VoiceCan device-file events to a Node or Python project, creating an Edge deployment, checking setup/TLS/storage/server health, wiring signed file.synced webhooks, or investigating a device that is provisioned but not syncing recordings.
+description: Deploy, install, integrate, verify, and diagnose the independent Voicecan Device Server and fixture consumer. Use when choosing between Docker and private-Node installation, adding Voicecan device-file events to a Node or Python project, creating an Edge deployment, checking setup/TLS/storage/server health, wiring signed file.synced webhooks, or investigating a device that is provisioned but not syncing recordings.
 ---
 
-# Integrate VoiceCan Device
+# Integrate Voicecan Device
 
-Deploy only the independent `device-platform`; never connect it to VoiceCan `main-service`, its database, or its accounts.
+Deploy only the independent `device-platform`; never connect it to Voicecan `main-service`, its database, or its accounts.
 
 ## Workflow
 
@@ -18,7 +18,7 @@ Deploy only the independent `device-platform`; never connect it to VoiceCan `mai
 7. If `/api/v1/setup/status` is `setup_pending`, direct the user to the trusted local setup flow. Never ask for, generate, read, print, transmit, or store the setup token or administrator password. Continue only after the user says setup is complete.
 8. Create a distinct, least-privilege Group API Token and webhook endpoint for each consumer. Keep real values in an ignored `.env` or the user's secret store; only commit `.env.example`.
 9. Integrate Node with `@voicecan/server-client` or Python with `voicecan-device`. Read [references/events.md](references/events.md) before implementing webhook verification and idempotency; read [references/api.md](references/api.md) for client boundaries.
-10. Run `node scripts/doctor.mjs --url <server-url> --wss-url <device-wss-url> --core-lock <path-to-core-artifacts.lock.json>` and `node scripts/smoke-test.mjs --url <server-url>`. The doctor validates the minimum Node release, HTTPS/WSS policy, the WSS certificate, health endpoints, and the pinned Core digest/ABI. Use fixture events before any real device or external message.
+10. Run `node scripts/doctor.mjs --url <server-url> --wss-url <device-wss-url> --core-lock <path-to-core-artifacts.lock.json>` and `node scripts/smoke-test.mjs --url <server-url>`. The doctor validates the minimum Node release, HTTPS/WSS policy, the WSS certificate, health endpoints, and the pinned protocol-runtime digest/ABI. Use fixture events before any real device or external message.
 11. Report the selected installation method, created files, exact image/runtime version and digest, service URLs, rollback steps, tests run, and manual work. Report physical V1.2 BLE/WSS and storage matrices as unverified until their hardware/infrastructure reports exist.
 
 ## Safety constraints

@@ -1,6 +1,6 @@
-# VoiceCan Device Connect Web
+# Voicecan Device Connect Web
 
-这是可独立部署、也可被管理端复用的 Web Bluetooth 连接包。它只负责在用户当前电脑上完成 BLE 选择、认证和 Wi-Fi 配置，不承载 VoiceCan Device Server API，也不保存配网凭证。
+这是可独立部署、也可被管理端复用的 Web Bluetooth 连接包。它只负责在用户当前电脑上完成 BLE 选择、认证和 Wi-Fi 配置，不承载 Voicecan Device Server API，也不保存配网凭证。
 
 用于配网的客户端系统、浏览器、BLE 硬件、HTTPS 和权限要求见[客户端系统要求](../../docs/device-connect-web.md#客户端系统要求)。
 
@@ -13,7 +13,7 @@ npm ci
 npm run build --workspace @voicecan/device-connect-web
 ```
 
-将 `packages/device-connect-web/dist/` 中的全部文件原样部署到一个公网 HTTPS 站点。产物包含页面、样式、单文件脚本以及经过审查的私有 Core Browser WASM 编译产物，不包含私有协议源码或测试 Fixture。
+将 `packages/device-connect-web/dist/` 中的全部文件原样部署到一个公网 HTTPS 站点。产物包含页面、样式、单文件脚本以及经过审查的协议运行时 Browser WASM 编译产物，不包含协议源码或测试 Fixture。
 
 也可以从仓库根目录构建独立 Docker 镜像：
 
@@ -29,7 +29,7 @@ docker run --rm -p 127.0.0.1:8080:8080 voicecan/device-connect-web:local
 - `Cross-Origin-Opener-Policy` 必须为 `unsafe-none`，否则跨来源管理端与连接页之间的 `opener`/`MessageChannel` 握手会被浏览器隔离。
 - `Permissions-Policy` 必须允许当前来源使用 `bluetooth`；CSP 的 Trusted Types 白名单需要保留 `voicecan lit-html sanitizer`。
 
-连接站点不得加入统计、客服或其他第三方脚本。当前产物使用固定的 `connect.js`、`connect.css` 和 Core 文件名，因此所有响应都使用 `Cache-Control: no-store`，防止前端运行时与 WASM 版本错配。
+连接站点不得加入统计、客服或其他第三方脚本。当前产物使用固定的 `connect.js`、`connect.css` 和协议运行时文件名，因此所有响应都使用 `Cache-Control: no-store`，防止前端运行时与 WASM 版本错配。
 
 ## 在管理端启用
 

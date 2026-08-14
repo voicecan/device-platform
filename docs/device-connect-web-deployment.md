@@ -41,7 +41,7 @@ npm run build --workspace @voicecan/device-connect-web
 
 ## 4. 构建 Docker 镜像
 
-Docker 构建上下文必须是仓库根目录，因为构建需要 workspace lockfile、受审查的 `vendor` Core 制品以及依赖包：
+Docker 构建上下文必须是仓库根目录，因为构建需要 workspace lockfile、受审查的 `vendor` 协议运行时制品以及依赖包：
 
 ```sh
 docker build \
@@ -50,7 +50,7 @@ docker build \
   .
 ```
 
-Dockerfile 使用 Node 24.15 多阶段构建，先校验固定 Core 制品并构建静态文件，再复制到非 root nginx 运行阶段。运行镜像：
+Dockerfile 使用 Node 24.15 多阶段构建，先校验固定协议运行时制品并构建静态文件，再复制到非 root nginx 运行阶段。运行镜像：
 
 ```sh
 docker run --rm \
@@ -84,7 +84,7 @@ docker run --rm \
 - `X-Content-Type-Options: nosniff`；
 - `Cache-Control: no-store`，避免固定文件名的浏览器运行时代码变旧。
 
-Ingress/CDN 可以补充 HSTS，但必须保留上述响应头。特别注意：`COOP: same-origin` 会切断跨来源管理端的握手，导致连接页一直显示“请从 VoiceCan 管理端打开此页面”。
+Ingress/CDN 可以补充 HSTS，但必须保留上述响应头。特别注意：`COOP: same-origin` 会切断跨来源管理端的握手，导致连接页一直显示“请从 Voicecan 管理端打开此页面”。
 
 部署后检查：
 
@@ -113,7 +113,7 @@ VOICECAN_CONNECT_WEB_URL=https://connect.example.com/
 - 也可以通过 `workflow_dispatch` 手动指定集群、命名空间或已有镜像 tag；
 - 复用 `${{ vars.REGISTRY_URL }}/runner-base:v1` 中的 Docker、Buildx、SSH 和 kubectl；
 - 在固定 Node 24.19.0 的 Docker 构建阶段执行一次 `npm ci`，并通过 BuildKit 缓存 npm 下载目录；
-- 镜像推送前在同一构建阶段执行公开边界、Core 制品、类型、构建和连接页相关测试；
+- 镜像推送前在同一构建阶段执行公开边界、协议运行时制品、类型、构建和连接页相关测试；
 - 只构建 `linux/amd64`，直接推送 `${REGISTRY_URL}/voicecan-device-connect-web:<tag>`；
 - 渲染 [`packages/device-connect-web/deploy/deploy.template`](../packages/device-connect-web/deploy/deploy.template)，通过 SSH 应用到 Kubernetes 并等待 Deployment rollout。
 
@@ -139,4 +139,4 @@ DEPLOY_SSH_KEY_TEST / DEPLOY_SSH_KEY_PROD
 - 回调返回管理端后，会再次查询本地配网会话状态；
 - 第一步先完成 GATT 连接、设备身份读取、绑定 Token 领取与 BLE 安全握手，成功前不能进入网络配置；
 - Wi-Fi 页面显示设备必须与 Server 处于同一网络的提示；
-- 使用实体 VoiceCan 设备完成一次 BLE 配网和首次上线确认。
+- 使用实体 Voicecan 设备完成一次 BLE 配网和首次上线确认。

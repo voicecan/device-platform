@@ -79,6 +79,13 @@ export function Field({ label, hint, value, onChange, type = 'text', options, id
     : <input id={id} value={value} type={type} required={required} minLength={minLength} maxLength={maxLength} placeholder={placeholder} autoComplete={type === 'password' ? 'off' : undefined} onChange={(event) => onChange?.(event.target.value)} />)}</label>;
 }
 
+export type DeviceWsCandidate = { url: string; host: string; preferred: boolean };
+
+export function DeviceWsCandidatePicker({ candidates, value, onChange, t }: { candidates: readonly DeviceWsCandidate[]; value: string; onChange: (value: string) => void; t: Translate }) {
+  if (candidates.length === 0) return null;
+  return <div className="server-candidate-list"><span>{t('Detected server addresses')}</span>{candidates.map((candidate) => <button key={candidate.url} type="button" className={value === candidate.url ? 'is-selected' : ''} aria-pressed={value === candidate.url} onClick={() => onChange(candidate.url)}><Icon name="server"/><span><strong>{candidate.host}{candidate.preferred ? <em>{t('Recommended')}</em> : null}</strong><small>{candidate.url}</small></span><Icon name="arrow"/></button>)}</div>;
+}
+
 function collectionOf(data: unknown): readonly Record<string, unknown>[] {
   if (Array.isArray(data)) return data.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object');
   if (!data || typeof data !== 'object') return [];

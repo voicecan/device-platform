@@ -10,6 +10,6 @@ npm run ci
 docker compose -f deploy/docker-compose.yml config --quiet
 ```
 
-Do not submit Rust protocol code, schemas, Golden Fixtures, raw frames, SID/CID constants, fuzz corpora, raw-command APIs, source maps, credentials, or recordings. Protocol changes must be made and reviewed in the separate private Device Core repository, then imported here only as a versioned, reviewed release artifact with an updated `core-artifacts.lock.json` and lockfile.
+Do not submit Rust protocol code, schemas, Golden Fixtures, raw frames, SID/CID constants, fuzz corpora, raw-command APIs, source maps, credentials, or recordings. Protocol runtime updates are maintainer-only and arrive here solely as a versioned, reviewed artifact with an updated `core-artifacts.lock.json` and lockfile.
 
-Keep public APIs semantic and transport-neutral. Preserve group-derived authorization, immutable file semantics, explicit migrations, streaming I/O, and the separation from VoiceCan business services.
+Keep public APIs semantic and transport-neutral. Preserve group-derived authorization, immutable file semantics, explicit migrations, streaming I/O, and the separation from Voicecan business services.

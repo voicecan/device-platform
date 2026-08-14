@@ -1,4 +1,4 @@
-# VoiceCan Device Open Platform
+# Voicecan Device Open Platform
 
 The Open Platform exposes the reviewed device capability surface through REST and MCP while keeping one authorization and audit model.
 

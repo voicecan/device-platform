@@ -5,8 +5,8 @@ import { api, errorMessage } from './api.js';
 import { EmbeddedDeviceProvisioner, RemoteDeviceProvisioner } from './device-integration.js';
 import type { StartRemoteProvisioning } from './device-integration.js';
 import type { Locale } from './i18n.js';
-import { Button, DataTable, Field, FlowHeader, Icon, ResourcePicker, Stepper } from './ui.js';
-import type { Translate } from './ui.js';
+import { Button, DataTable, DeviceWsCandidatePicker, Field, FlowHeader, Icon, ResourcePicker, Stepper } from './ui.js';
+import type { DeviceWsCandidate, Translate } from './ui.js';
 import { OpenPlatformWorkspace } from './open-platform-workspace.js';
 
 export type View = 'overview' | 'devices' | 'files' | 'provision' | 'release' | 'device-settings' | 'groups' | 'users' | 'open-platform' | 'open-platform-overview' | 'permission-catalog' | 'oauth-clients' | 'call-logs' | 'download-grants' | 'security-alerts' | 'events' | 'inspector' | 'storage' | 'audit';
@@ -94,6 +94,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate
   const [groupId, setGroupId] = useState('');
   const [serial, setSerial] = useState('');
   const [deviceWsUrl, setDeviceWsUrl] = useState('');
+  const [deviceWsCandidates, setDeviceWsCandidates] = useState<DeviceWsCandidate[]>([]);
   const [bleNamePrefix, setBleNamePrefix] = useState('CAPSO-');
   const [started, setStarted] = useState(false);
   const [connectorReady, setConnectorReady] = useState(false);
@@ -102,7 +103,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate
   const localBluetooth = supportsLocalWebBluetooth();
   const connectorUrl = deviceConnectUrl();
   const startRemoteConnector = useRef<StartRemoteProvisioning | undefined>(undefined);
-  useEffect(() => { let active = true; void api<{ ble_name_prefix: string; preferred_device_ws_url: string }>('/settings/device-access').then((settings) => { if (active) { setBleNamePrefix(settings.ble_name_prefix); setDeviceWsUrl((currentUrl) => currentUrl || settings.preferred_device_ws_url); } }, () => undefined); return () => { active = false; }; }, []);
+  useEffect(() => { let active = true; void api<{ ble_name_prefix: string; preferred_device_ws_url: string; device_ws_urls: DeviceWsCandidate[] }>('/settings/device-access').then((settings) => { if (active) { setBleNamePrefix(settings.ble_name_prefix); setDeviceWsCandidates(settings.device_ws_urls); setDeviceWsUrl((currentUrl) => currentUrl || settings.preferred_device_ws_url); } }, () => undefined); return () => { active = false; }; }, []);
   const steps = ['Choose ownership', 'Connect nearby device', 'Configure network', 'Binding complete'];
   const current = !groupId ? 0 : !started || deviceStep === 0 ? 1 : deviceStep === 1 || deviceStep === 2 ? 2 : 3;
   const createGrant = async (): Promise<{ expires_at: string; provisioning_token: string }> => { const expectedSn = serial.trim(); return api('/provisioning-sessions', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, ...(!localBluetooth ? { connector_origin: new URL(connectorUrl).origin } : {}), ...(expectedSn ? { expected_sn: expectedSn } : {}) }) }); };
@@ -114,7 +115,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice }: { t: Translate
     const start = startRemoteConnector.current; if (!start) { setStarted(false); return; }
     void run(async () => { await start(createGrant); return true; }).then((opened) => { if (!opened) setStarted(false); });
   };
-  return <div className="flow-layout"><Stepper steps={steps} current={current} t={t}/>{!started ? <div className="flow-stage"><form className="form-grid provision-form" onSubmit={(event) => event.preventDefault()}><ResourcePicker id="provision-group" label={t('Destination group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required selectFirst/><Field id="provision-sn" label={t('Expected serial (optional)')} hint={t('Use the serial printed on the device to reduce nearby-device mistakes.')} value={serial} onChange={setSerial}/><Field id="provision-device-ws-url" label={t('Device WebSocket URL')} hint={t('Use an address reachable from the device network, for example a LAN IP or public domain.')} type="url" value={deviceWsUrl} onChange={setDeviceWsUrl} wide required/><Actions><Button id="create-provision" icon="provision" disabled={!groupId || !deviceWsUrl.trim() || !connectorReady} onClick={beginBinding}>{t('Start binding')}</Button></Actions></form></div> : null}{localBluetooth ? <EmbeddedDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} hidden={!started} registerStart={(start) => { startConnector.current = start; setConnectorReady(Boolean(start)); }} onStepChange={setDeviceStep} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice} onError={reportError}/> : <RemoteDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} connectorUrl={connectorUrl} hidden={!started} registerStart={(start) => { startRemoteConnector.current = start; setConnectorReady(Boolean(start)); }} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice}/>}</div>;
+  return <div className="flow-layout"><Stepper steps={steps} current={current} t={t}/>{!started ? <div className="flow-stage"><form className="form-grid provision-form" onSubmit={(event) => event.preventDefault()}><ResourcePicker id="provision-group" label={t('Destination group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required selectFirst/><Field id="provision-sn" label={t('Expected serial (optional)')} hint={t('Use the serial printed on the device to reduce nearby-device mistakes.')} value={serial} onChange={setSerial}/><DeviceWsCandidatePicker candidates={deviceWsCandidates} value={deviceWsUrl} onChange={setDeviceWsUrl} t={t}/><Field id="provision-device-ws-url" label={t('Device WebSocket URL')} hint={t('Use an address reachable from the device network, for example a LAN IP or public domain.')} type="url" value={deviceWsUrl} onChange={setDeviceWsUrl} wide required/><Actions><Button id="create-provision" icon="provision" disabled={!groupId || !deviceWsUrl.trim() || !connectorReady} onClick={beginBinding}>{t('Start binding')}</Button></Actions></form></div> : null}{localBluetooth ? <EmbeddedDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} hidden={!started} registerStart={(start) => { startConnector.current = start; setConnectorReady(Boolean(start)); }} onStepChange={setDeviceStep} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice} onError={reportError}/> : <RemoteDeviceProvisioner deviceWsUrl={deviceWsUrl.trim()} bleNamePrefix={bleNamePrefix} locale={locale} connectorUrl={connectorUrl} hidden={!started} registerStart={(start) => { startRemoteConnector.current = start; setConnectorReady(Boolean(start)); }} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice}/>}</div>;
 }
 
 function DeviceAccessSettingsWorkspace({ t, run }: { t: Translate; run: Runner }) {

@@ -21,7 +21,7 @@ import { Reconciler } from './reconcile.js';
 import { Metrics } from './metrics.js';
 import { DeviceGateway, parseDeviceControl } from './gateway.js';
 import { PostgresDatabase } from './postgres.js';
-import { deviceHttpBaseUrl, resolveDeviceWsUrl } from './device-url.js';
+import { deviceHttpBaseUrl, publicRequestDeviceWsUrl, resolveDeviceWsUrl } from './device-url.js';
 import { OpenPlatformError, registerOpenPlatformRoutes, resolveOAuthPrincipalPermissions } from './open-platform.js';
 import { registerOAuthMcpRoutes } from './oauth-mcp.js';
 import { BlockList, isIP } from 'node:net';
@@ -756,11 +756,13 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.get('/api/v1/settings/device-access', async (request, reply) => {
     await resolveAccess(request);
     const settings = await db.get<{ ble_name_prefix: string }>('SELECT ble_name_prefix FROM server_settings WHERE singleton=1');
+    const currentPublicUrl = publicRequestDeviceWsUrl({ ...(request.headers.host ? { requestHost: request.headers.host } : {}), secure: request.protocol === 'https' });
     const candidates = [...new Set([
       ...(config.deviceWssUrl ? [config.deviceWssUrl] : []),
+      ...(currentPublicUrl ? [currentPublicUrl] : []),
       ...config.deviceAdvertiseHosts.map((host) => resolveDeviceWsUrl({ advertiseHost: host, port: config.port })),
     ])];
-    const preferred = config.deviceWssUrl ?? candidates[0] ?? resolveDeviceWsUrl({ advertiseHost: config.deviceAdvertiseHost, port: config.port });
+    const preferred = config.deviceWssUrl ?? currentPublicUrl ?? candidates[0] ?? resolveDeviceWsUrl({ advertiseHost: config.deviceAdvertiseHost, port: config.port });
     return success(reply, { ble_name_prefix: settings?.ble_name_prefix ?? 'CAPSO-', preferred_device_ws_url: preferred, device_ws_urls: candidates.map((url) => ({ url, preferred: url === preferred, host: new URL(url).hostname })) });
   });
 

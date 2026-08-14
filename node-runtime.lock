@@ -1,4 +1,4 @@
-# VoiceCan private Node runtime lock. Fields are pipe-delimited.
+# Voicecan private Node runtime lock. Fields are pipe-delimited.
 format=1
 node_version=24.19.0
 base_url=https://nodejs.org/download/release/v24.19.0

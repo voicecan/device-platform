@@ -1,4 +1,14 @@
+import { BlockList, isIP } from 'node:net';
+
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1']);
+const nonPublicAddresses = new BlockList();
+for (const [network, prefix, family] of [
+  ['0.0.0.0', 8, 'ipv4'], ['10.0.0.0', 8, 'ipv4'], ['100.64.0.0', 10, 'ipv4'], ['127.0.0.0', 8, 'ipv4'],
+  ['169.254.0.0', 16, 'ipv4'], ['172.16.0.0', 12, 'ipv4'], ['192.0.0.0', 24, 'ipv4'], ['192.0.2.0', 24, 'ipv4'],
+  ['192.88.99.0', 24, 'ipv4'], ['192.168.0.0', 16, 'ipv4'], ['198.18.0.0', 15, 'ipv4'], ['198.51.100.0', 24, 'ipv4'],
+  ['203.0.113.0', 24, 'ipv4'], ['224.0.0.0', 4, 'ipv4'], ['240.0.0.0', 4, 'ipv4'], ['::', 128, 'ipv6'],
+  ['::1', 128, 'ipv6'], ['2001:db8::', 32, 'ipv6'], ['fc00::', 7, 'ipv6'], ['fe80::', 10, 'ipv6'], ['ff00::', 8, 'ipv6'],
+] as const) nonPublicAddresses.addSubnet(network, prefix, family);
 
 export function validateDeviceWsUrl(value: string): string {
   let parsed: URL;
@@ -18,6 +28,20 @@ function authority(value: string | undefined): URL | undefined {
 
 function hostForUrl(hostname: string): string {
   return hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname;
+}
+
+function bareHostname(hostname: string): string {
+  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+}
+
+/** Returns the current request address only when Host contains a publicly routable IP. */
+export function publicRequestDeviceWsUrl(input: { requestHost?: string; secure: boolean }): string | undefined {
+  const requestAuthority = authority(input.requestHost);
+  if (!requestAuthority) return undefined;
+  const hostname = bareHostname(requestAuthority.hostname);
+  const family = isIP(hostname);
+  if (!family || nonPublicAddresses.check(hostname, family === 4 ? 'ipv4' : 'ipv6')) return undefined;
+  return `${input.secure ? 'wss' : 'ws'}://${requestAuthority.host}/device/v1/ws`;
 }
 
 export function resolveDeviceWsUrl(input: {

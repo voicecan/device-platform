@@ -6,7 +6,7 @@
 
 ## 客户端系统要求
 
-Device Connect Web 使用 Web Bluetooth 与 VoiceCan 设备的 BLE GATT 服务通信。运行连接页的客户端必须具有支持 BLE 4.0 或更高版本的蓝牙适配器，并开启操作系统蓝牙、浏览器蓝牙权限和站点蓝牙权限。Device Server 所在的 NAS 或远程服务器不需要蓝牙。
+Device Connect Web 使用 Web Bluetooth 与 Voicecan 设备的 BLE GATT 服务通信。运行连接页的客户端必须具有支持 BLE 4.0 或更高版本的蓝牙适配器，并开启操作系统蓝牙、浏览器蓝牙权限和站点蓝牙权限。Device Server 所在的 NAS 或远程服务器不需要蓝牙。
 
 | 客户端平台 | Web Bluetooth 上游最低条件 | Device Connect Web 建议环境 |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ Device Connect Web 使用 Web Bluetooth 与 VoiceCan 设备的 BLE GATT 服务�
 - 响应头允许当前来源使用蓝牙，即 `Permissions-Policy: bluetooth=(self)`；
 - 用户必须通过页面按钮主动打开浏览器设备选择器，浏览器不允许页面静默扫描或自动选择设备；
 - 企业浏览器策略、操作系统隐私设置或站点权限不得禁用蓝牙；
-- VoiceCan 设备处于附近并进入可发现/配对状态。
+- Voicecan 设备处于附近并进入可发现/配对状态。
 
 页面可使用 `isSecureContext && 'bluetooth' in navigator` 做入口能力检测，但检测通过不代表蓝牙适配器已开启或权限已授予；最终仍以用户选择设备并成功建立 GATT 连接为准。上游兼容性依据见 [Chrome Web Bluetooth 文档](https://developer.chrome.com/docs/capabilities/bluetooth)、[Web Bluetooth 实现状态](https://github.com/WebBluetoothCG/web-bluetooth/blob/main/implementation-status.md)和 [Microsoft Edge Web Bluetooth 策略文档](https://learn.microsoft.com/deployedge/microsoft-edge-browser-policies/defaultwebbluetoothguardsetting)。
 
@@ -45,7 +45,7 @@ Device Connect Web 使用 Web Bluetooth 与 VoiceCan 设备的 BLE GATT 服务�
 6. 用户选择保留现有网络或填写新的 Wi-Fi 配置；页面持续读取设备状态，只有网络变为可用后才写入服务器地址。
 7. 连接页等待 Server 确认设备上线；完成后返回管理端，管理端校验一次性 `state`，再向 Server 查询绑定会话的权威状态。
 
-> 配网选择的 Wi-Fi 必须让设备与 VoiceCan Platform Server 处于同一个网络，否则设备无法完成首次回连与上线确认。
+> 配网选择的 Wi-Fi 必须让设备与 Voicecan Platform Server 处于同一个网络，否则设备无法完成首次回连与上线确认。
 
 ## 运维配置
 

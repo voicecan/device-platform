@@ -82,6 +82,10 @@ test('independent server setup, immutable upload, group isolation and device tra
   assert.equal(deviceAccess.statusCode, 200, deviceAccess.body);
   assert.ok(String(deviceAccess.json().data.preferred_device_ws_url).endsWith('/device/v1/ws'));
   assert.ok(deviceAccess.json().data.device_ws_urls.some((candidate: { preferred: boolean }) => candidate.preferred));
+  const publicDeviceAccess = await app.inject({ method: 'GET', url: '/api/v1/settings/device-access', headers: { ...adminHeaders, host: '8.8.8.8:9443' } });
+  assert.equal(publicDeviceAccess.statusCode, 200, publicDeviceAccess.body);
+  assert.equal(publicDeviceAccess.json().data.preferred_device_ws_url, 'ws://8.8.8.8:9443/device/v1/ws');
+  assert.deepEqual(publicDeviceAccess.json().data.device_ws_urls[0], { url: 'ws://8.8.8.8:9443/device/v1/ws', host: '8.8.8.8', preferred: true });
 
   const firmwareContent = Buffer.from('custom firmware fixture');
   const firmwareUploadUrl = '/api/v1/admin/firmware-packages/upload?hardware_version=HW-TEST&channel=developer&version=v0.5.4-dev&crc16=4660&max_ble_chunk=180&release_notes=Local%20fixture';

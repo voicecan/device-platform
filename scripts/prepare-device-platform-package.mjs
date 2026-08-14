@@ -36,7 +36,7 @@ if (accessManifest.name !== '@voicecan/access-control') throw new Error('Unexpec
 const installedCore = resolve(root, 'node_modules/@voicecan/device-core');
 const coreManifest = JSON.parse(await readFile(resolve(installedCore, 'package.json'), 'utf8'));
 if (coreManifest.name !== '@voicecan/device-core' || coreManifest.version !== '0.1.0-preview.18') {
-  throw new Error('The installed reviewed Core artifact does not match the pinned release');
+  throw new Error('The installed reviewed protocol-runtime artifact does not match the pinned release');
 }
 await mkdir(resolve(bundledRoot, 'device-core'), { recursive: true });
 await cp(resolve(installedCore, 'package.json'), resolve(bundledRoot, 'device-core/package.json'));

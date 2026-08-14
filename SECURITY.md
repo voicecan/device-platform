@@ -1,6 +1,6 @@
 # Security policy
 
-Do not report device credentials, raw protocol material, exploitable security findings, or private Core details in a public issue.
+Do not report device credentials, raw protocol material, exploitable security findings, or protocol-runtime internals in a public issue.
 
 Use the repository host's private security-advisory channel or the maintainer's established private security contact. Include only the minimum reproduction data and remove Device Tokens, Group API Tokens, webhook secrets, Wi-Fi credentials, recordings, and user data.
 

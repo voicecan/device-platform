@@ -4,7 +4,7 @@ This is the operator and reviewer checklist for GA-05. It defines safe current b
 
 ## Current safe behavior
 
-- The independent deployment keeps device metadata, credentials, recordings, events, audit data, and secrets inside the operator's deployment. There is no VoiceCan Cloud fallback or product telemetry path.
+- The independent deployment keeps device metadata, credentials, recordings, events, audit data, and secrets inside the operator's deployment. There is no Voicecan Cloud fallback or product telemetry path.
 - Releasing a device is non-erasing: it revokes the source credential and tombstones the device but retains historical recordings under the source authorization anchor.
 - A RecordingFile row, its immutable storage object, and the source file still on the physical device are separate resources. The reviewed deletion API deletes only the exact immutable storage object, retains a metadata/audit tombstone, and explicitly reports that the device source was not deleted.
 - The Server does not automatically purge completed recordings. This avoids silent data loss, but it is not a finished privacy-retention policy. A public release must disclose this behavior and provide an approved operator process.
@@ -42,7 +42,7 @@ The integrating product—not the Server alone—must provide an appropriate vis
 
 ## Backup set and recovery objectives
 
-A complete Edge backup contains the SQLite online backup, filesystem objects (or a verified immutable object inventory), configuration without plaintext secrets, the deployment master-key keyring, token pepper, Webhook/device-secret recovery material, and a manifest with release/Core/schema/storage versions and checksums. A database without its keys is not a recoverable backup.
+A complete Edge backup contains the SQLite online backup, filesystem objects (or a verified immutable object inventory), configuration without plaintext secrets, the deployment master-key keyring, token pepper, Webhook/device-secret recovery material, and a manifest with release/protocol-runtime/schema/storage versions and checksums. A database without its keys is not a recoverable backup.
 
 Candidate objectives, subject to owner approval and drills:
 

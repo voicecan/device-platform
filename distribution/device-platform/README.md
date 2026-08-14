@@ -97,5 +97,5 @@ dependencies. They are separate from this server distribution package.
 ## License
 
 Apache License 2.0. The license covers this distribution, including the bundled
-reviewed compiled Device Core runtime. See `LICENSE`, `NOTICE`, and
+reviewed compiled protocol runtime. See `LICENSE`, `NOTICE`, and
 `THIRD_PARTY_NOTICES.md` in the npm package.

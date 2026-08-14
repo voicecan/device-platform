@@ -78,10 +78,10 @@ if (lockValue) {
     const artifactPath = resolve(lockPath, '..', lock.file);
     await access(artifactPath, constants.R_OK);
     const digest = createHash('sha256').update(await readFile(artifactPath)).digest('hex');
-    report(digest === lock.sha256, 'Core artifact digest', `${lock.package}@${lock.version} ${lock.protocol_abi}`);
+    report(digest === lock.sha256, 'Protocol-runtime artifact digest', `${lock.package}@${lock.version} ${lock.protocol_abi}`);
     report(lock.protocol_abi === 'voicecan-v1.2' && lock.supported_range === '1.2.x', 'Core ABI contract', `${lock.protocol_abi} / ${lock.supported_range}`);
   } catch (error) {
-    report(false, 'Core artifact lock', error instanceof Error ? error.message : String(error));
+    report(false, 'Protocol-runtime artifact lock', error instanceof Error ? error.message : String(error));
   }
 }
 

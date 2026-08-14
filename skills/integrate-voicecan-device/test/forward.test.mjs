@@ -77,7 +77,7 @@ test('fault fixture makes smoke fail closed on readiness', async () => {
   );
 });
 
-test('doctor validates the supported runtime contract and pinned Core artifact', async () => {
+test('doctor validates the supported runtime contract and pinned protocol-runtime artifact', async () => {
   const target = await fixture('doctor');
   const preload = resolve(target, 'doctor-fixture.mjs');
   await writeFile(preload, `Object.defineProperty(process.versions,'node',{value:'24.15.0'});globalThis.fetch=async(url)=>Response.json({success:true,data:{status:new URL(url).pathname.includes('setup')?'ready':'ok'}});\n`);
@@ -89,6 +89,6 @@ test('doctor validates the supported runtime contract and pinned Core artifact',
     '--core-lock', resolve(root, 'core-artifacts.lock.json'),
   ]);
   assert.match(result.stdout, /OK Node\.js >=24\.15 <25/);
-  assert.match(result.stdout, /OK Core artifact digest/);
+  assert.match(result.stdout, /OK Protocol-runtime artifact digest/);
   assert.match(result.stdout, /OK Core ABI contract/);
 });

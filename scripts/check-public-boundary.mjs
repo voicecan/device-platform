@@ -45,4 +45,4 @@ try {
 } finally {
   await rm(inspection, { recursive: true, force: true });
 }
-process.stdout.write(`public boundary verified (${entries.length} Core artifact files inspected)\n`);
+process.stdout.write(`public boundary verified (${entries.length} protocol-runtime artifact files inspected)\n`);

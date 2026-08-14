@@ -1,6 +1,6 @@
-# VoiceCan Device MCP Server
+# Voicecan Device MCP Server
 
-VoiceCan supports local stdio MCP and remote stateless Streamable HTTP MCP. Both expose the same bounded service methods as REST and derive available tools from the authenticated scope set.
+Voicecan supports local stdio MCP and remote stateless Streamable HTTP MCP. Both expose the same bounded service methods as REST and derive available tools from the authenticated scope set.
 
 ## stdio
 

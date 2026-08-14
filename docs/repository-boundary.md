@@ -1,21 +1,17 @@
-# Public Platform / Private Core boundary
+# Protocol runtime dependency boundary
 
-The workspace now contains two independent repositories:
+This public repository uses the pinned `@voicecan/device-core` package only as a compiled protocol runtime. The reviewed tarball is committed under `vendor/`, referenced by the root `package.json`, and integrity-pinned by `core-artifacts.lock.json` and `package-lock.json`.
 
-| Repository | Visibility | Owns |
-| --- | --- | --- |
-| `device-core` | Private | Rust protocol implementation, private fixtures, WASM build, conformance tests, release packaging |
-| `device-platform` | Public | Server, public contracts, Web SDK/UI, clients, simulator, deployments, documentation, reviewed Core artifact |
+For a normal source installation, no additional repository or protocol source is needed:
 
-The public repository never builds the wire protocol. It installs the pinned `@voicecan/device-core` tarball from `vendor/`, checks the tarball SHA-256 in `core-artifacts.lock.json`, checks the public ABI/conformance manifest, and performs the Node loader self-check. Docker builds use the same committed artifact and lockfile.
+```bash
+npm install
+npm run verify:core
+npm run build
+```
 
-## Core release import
+`npm install` resolves the committed tarball. `npm run verify:core` checks its SHA-256, public ABI/conformance manifest, Browser/Node WASM digests, package contents, and Node loader. Docker builds use the same committed artifact and lockfiles.
 
-1. In the private repository, run all Rust, WASM, TypeScript, fixture, and loader tests.
-2. Run `npm pack` and inspect the complete tar listing. It may contain only compiled JS/declarations, Browser/Node WASM, loaders, the manifest, package metadata, and public documentation.
-3. Copy the exact tarball into `device-platform/vendor/`.
-4. Update the version, filename, SHA-256, ABI, conformance hash, and WASM digests in `core-artifacts.lock.json`.
-5. Update the root dependency and run `npm install` to regenerate `package-lock.json`.
-6. Run `npm run ci`; do not merge if the public-boundary or Core verification gate fails.
+Protocol source, private fixtures, raw-command tooling, source maps, Cargo files, and fuzz corpora are intentionally absent from this repository and must not be added or reconstructed. Application code should use the public semantic APIs exposed by the packages in this repository rather than importing `@voicecan/device-core` directly.
 
-Artifact signing and provenance attestations remain release-hardening work. The current Preview gate provides deterministic content inspection, npm lock integrity, an explicit SHA-256 lock, and runtime conformance verification; it does not claim a signed release.
+Runtime artifact updates are maintainer-only. A reviewed update must change the vendored tarball, `core-artifacts.lock.json`, the root dependency, and `package-lock.json` together, then pass `npm run ci`. Ordinary contributors and AI coding agents should not replace or regenerate this artifact.

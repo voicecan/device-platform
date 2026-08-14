@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/voicecan/device-platform/main/insta
 ```
 
 This installs the single-instance SQLite Edge profile without root privileges,
-binds HTTP to `127.0.0.1:8787`, verifies the reviewed Core artifact, runs the
+binds HTTP to `127.0.0.1:8787`, verifies the reviewed protocol-runtime artifact, runs the
 explicit migration, and waits for `/health/ready`. Source and `.env` are stored
 under `${XDG_DATA_HOME:-$HOME/.local/share}/voicecan-device-platform`; recording
 data stays in the Compose volume. Use `--install-dir`, `--port`, `--public-url`,
@@ -99,7 +99,7 @@ Migrations are explicit and are never run by `serve`. Open `http://127.0.0.1:878
 
 Create a group and an origin-bound provisioning grant in `/admin`. Admin now keeps the provisioning flow in one workspace: when the current secure context exposes Web Bluetooth it embeds the local connector; otherwise it opens the independently deployed public connector configured by `VOICECAN_CONNECT_WEB_URL`. The public page performs BLE on the user's computer while the original Admin page proxies the narrow API operations to the local/NAS Server. Provisioning grants are never placed in a URL, browser storage, log, or support bundle.
 
-The Wi-Fi selected during provisioning must put the Device on the same network as the VoiceCan Platform Server so the first reverse connection can be confirmed. With `VOICECAN_DEVICE_WSS_URL` unset, the Server advertises `ws://<request-host>/device/v1/ws`; when Admin is opened through loopback it substitutes the detected LAN IPv4. Set `VOICECAN_DEVICE_ADVERTISE_HOST` when automatic interface selection is wrong, or use the optional Device WebSocket URL field in Admin for a one-off override. Production profile startup requires an explicit `wss://` `VOICECAN_DEVICE_WSS_URL`; request-Host derivation is limited to development and Edge deployments. See [independent Device Connect Web](device-connect-web.md).
+The Wi-Fi selected during provisioning must put the Device on the same network as the Voicecan Platform Server so the first reverse connection can be confirmed. The Bind Device form lists the reviewed WebSocket URL candidates and allows one-click selection. An explicit `VOICECAN_DEVICE_WSS_URL` remains authoritative; otherwise, when Admin is opened through a public IP, that current `ws://` or `wss://` address is preferred over detected LAN IPv4 addresses. Loopback, private, shared, link-local, documentation, and other non-public request addresses are not preferred. Set `VOICECAN_DEVICE_ADVERTISE_HOST` when automatic interface selection is wrong, or enter another Device WebSocket URL in Admin for a one-off override. Production profile startup requires an explicit `wss://` `VOICECAN_DEVICE_WSS_URL`; request-Host derivation is limited to development and Edge deployments. See [independent Device Connect Web](device-connect-web.md).
 
 OTA reads only from the local firmware repository. System Admins can upload a custom binary in Device Management or click **Import official** to fetch, verify, and retain a local copy. Configure `VOICECAN_OFFICIAL_FIRMWARE_SOURCE_URL` when using an internal mirror; it defaults to `https://api.voice-can.com/`. See [local firmware repository and OTA](firmware-repository.md).
 

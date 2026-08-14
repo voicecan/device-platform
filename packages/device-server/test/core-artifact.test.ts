@@ -4,7 +4,7 @@ import { CONFORMANCE_HASH, PROTOCOL_ABI } from '@voicecan/contracts';
 import { coreManifest } from '@voicecan/device-core/manifest';
 import { loadNodePrivateCore } from '@voicecan/device-core/node';
 
-test('reviewed Core artifact matches the public ABI contract and loads in Node', async () => {
+test('reviewed protocol-runtime artifact matches the public ABI contract and loads in Node', async () => {
   assert.equal(coreManifest.protocolAbi, PROTOCOL_ABI);
   assert.equal(coreManifest.conformanceHash, CONFORMANCE_HASH);
   const factory = await loadNodePrivateCore();

@@ -37,12 +37,12 @@ Point a disposable Server at the restored directory, run readiness/setup smoke, 
 
 1. Drain or stop the Server; do not run two SQLite Edge instances against one data directory.
 2. Create and verify a backup.
-3. Record image/package checksum, Core ABI, conformance hash, and migration version.
+3. Record image/package checksum, protocol-runtime ABI, conformance hash, and migration version.
 4. Run the explicit migration using the new release.
 5. Start one instance and verify readiness, Admin login, WSS Upgrade, range download, and a fixture event.
 6. Roll back application code only when the old release explicitly supports the resulting schema. Otherwise restore the pre-upgrade backup into a new directory.
 
-Never edit migration history, generated Core artifacts, encrypted credentials, or audit rows by hand.
+Never edit migration history, generated protocol-runtime artifacts, encrypted credentials, or audit rows by hand.
 
 On `SIGTERM`/`SIGINT`, the Server marks readiness as `draining`, waits `VOICECAN_DRAIN_MS` (default 5000 ms) for load balancers to remove it, then closes Fastify and its database worker. Set the orchestrator termination grace period above the drain interval plus the longest accepted in-flight HTTP request. SQLite Edge remains single-instance even with graceful drain.
 
@@ -80,7 +80,7 @@ npm run release:check -- --stage preview --dossier /secure/release-dossier.json 
 
 Use `--stage beta` or `--stage ga` to include all preceding gates. The checker requires the dossier and manifest commit/version to match the current checkout, the exact release Node 24.19.0 baseline, approved LICENSE/NOTICE files, an eligible manifest, checksums, SBOM, evidence references, approvers, and approval timestamps. It does not verify signatures cryptographically; the authorized release system must do that before calling the gate.
 
-- Node 24.19.0 full CI and private Core fuzz CI pass.
+- Node 24.19.0 full CI and protocol fuzz CI pass.
 - OCI amd64/arm64 image is pinned by digest and starts from a clean volume with explicit migration.
 - Real firmware BLE/WSS/inventory and filesystem/S3/relay recovery matrix passes.
 - TLS and optional private-CA/IP matrix passes only for combinations declared supported.

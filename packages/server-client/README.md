@@ -1,6 +1,6 @@
 # @voicecan/server-client
 
-Node.js client for VoiceCan Device Platform Applications. It provides Recording, Device, Command, Event cursor, secure Grant download, Webhook signature verification, event parsing, and reviewed-media helpers.
+Node.js client for Voicecan Device Platform Applications. It provides Recording, Device, Command, Event cursor, secure Grant download, Webhook signature verification, event parsing, and reviewed-media helpers.
 
 ```bash
 npm install @voicecan/server-client

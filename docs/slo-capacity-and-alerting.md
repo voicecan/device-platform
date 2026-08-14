@@ -23,7 +23,7 @@ Histograms use stable Fastify route templates rather than raw URLs, so device ID
 
 Each capacity result must record all of the following; a single requests-per-second number is not sufficient:
 
-- release commit, Core version/ABI/conformance hash, database schema, storage driver, and image digest;
+- release commit, protocol-runtime version/ABI/conformance hash, database schema, storage driver, and image digest;
 - CPU architecture/count, memory, disk type/size, filesystem, network latency/bandwidth, Node version, database and object-store versions;
 - total registered devices, concurrently connected devices, reconnects/second, heartbeats/second, commands/second, and Webhook endpoints per group;
 - file-size distribution (P50/P95/max), new files/minute, filesystem/direct-S3/relay percentage, Range-download concurrency, and slow-consumer percentage;

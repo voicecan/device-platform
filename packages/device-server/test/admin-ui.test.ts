@@ -36,7 +36,11 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(implementation, /supportsLocalWebBluetooth/);
   assert.match(implementation, /provision-device-ws-url/);
   assert.match(workspaces, /preferred_device_ws_url/);
+  assert.match(workspaces, /device_ws_urls/);
+  assert.match(workspaces, /DeviceWsCandidatePicker candidates=\{deviceWsCandidates\}/);
   assert.match(workspaces, /setDeviceWsUrl\(\(currentUrl\) => currentUrl \|\| settings\.preferred_device_ws_url\)/);
+  assert.match(deviceManagement, /DeviceWsCandidatePicker candidates=\{serverCandidates\}/);
+  assert.match(ui, /aria-pressed=\{value === candidate\.url\}/);
   assert.match(workspaces, /Use an address reachable from the device network/);
   assert.doesNotMatch(workspaces, /placeholder="ws:\/\/192\.168\.1\.100/);
   assert.match(implementation, /Device access settings/);
