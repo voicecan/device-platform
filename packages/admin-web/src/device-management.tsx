@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { connectBoundDevice, type BoundDeviceMaintenance, type DeviceControl } from '@voicecan/device-connect-web';
 import { api, apiBinary, apiBinaryUpload, errorMessage } from './api.js';
+import { randomUuidV4 } from './random.js';
 import { Button, DataTable, DeviceWsCandidatePicker, Field, Icon, Select, collectionOf, formatLocalDateTime, type DeviceWsCandidate, type Translate } from './ui.js';
 
 type DeviceRow = Record<string, unknown>;
@@ -184,7 +185,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onRelease, o
       } catch (cause) { clearDisconnectedBleSession(cause); throw cause; }
     }
     if (current?.online !== true) throw new Error(t('Connect the device through WebSocket or BLE before sending controls.'));
-    return api(`/devices/${encodeURIComponent(deviceId)}/control`, { method: 'POST', headers: { 'idempotency-key': crypto.randomUUID() }, body: JSON.stringify({ control, reason: 'Administrator requested reviewed device control' }) });
+    return api(`/devices/${encodeURIComponent(deviceId)}/control`, { method: 'POST', headers: { 'idempotency-key': randomUuidV4() }, body: JSON.stringify({ control, reason: 'Administrator requested reviewed device control' }) });
   }, success);
   const configureWifi = async (): Promise<void> => run('wifi-configure', async () => {
     const session = bleSession.current; if (!session) throw new Error(t('Connect with BLE before using nearby maintenance.'));
@@ -218,7 +219,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onRelease, o
   }, t('Firmware was uploaded to the local repository.'));
   const installFirmware = (): Promise<void> => {
     const session = bleSession.current;
-    if (!session) return run('firmware-install', () => api(`/devices/${encodeURIComponent(deviceId)}/ota`, { method: 'POST', headers: { 'idempotency-key': crypto.randomUUID() }, body: JSON.stringify({ channel: firmwareChannel, force: firmware?.firmware.up_to_date === true, reason: 'Administrator approved official firmware OTA' }) }), t('Firmware update started. Keep the device online and powered.'));
+    if (!session) return run('firmware-install', () => api(`/devices/${encodeURIComponent(deviceId)}/ota`, { method: 'POST', headers: { 'idempotency-key': randomUuidV4() }, body: JSON.stringify({ channel: firmwareChannel, force: firmware?.firmware.up_to_date === true, reason: 'Administrator approved official firmware OTA' }) }), t('Firmware update started. Keep the device online and powered.'));
     return run('firmware-install', async () => {
       setOtaProgress(0);
       try {
@@ -266,7 +267,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onRelease, o
     <section className="connection-strip">
       <div><span className={`connection-beacon ${current?.online ? 'is-online' : ''}`}/><div><strong>{t(current?.online ? 'Online' : 'Offline')}</strong><small>{t('WebSocket connection')}</small></div></div>
       <dl><div><dt>{t('Connection epoch')}</dt><dd>{String(current?.connection_epoch ?? '—')}</dd></div><div><dt>{t('Last seen')}</dt><dd>{formatLocalDateTime(current?.last_seen_at)}</dd></div><div><dt>{t('Firmware')}</dt><dd>{String(current?.firmware_version ?? '—')}</dd></div><div><dt>{t('Hardware')}</dt><dd>{String(current?.hardware_version ?? current?.model ?? '—')}</dd></div></dl>
-      <div className="sync-trigger"><Button disabled={!deviceId || !wsConnected || syncActive || Boolean(busy)} title={!wsConnected ? t('A WebSocket connection is required to scan recordings.') : syncActive ? t('A synchronization request is already active.') : undefined} onClick={() => void run('sync', () => api(`/devices/${encodeURIComponent(deviceId)}/sync`, { method: 'POST', headers: { 'idempotency-key': crypto.randomUUID() }, body: '{}' }), t('Device synchronization requested.'))}>{busy === 'sync' ? t('Requesting…') : syncActive ? t('Synchronization in progress') : t('Sync now')}</Button>{syncActive ? <small>{t('The current request is shown in command details below.')}</small> : null}</div>
+      <div className="sync-trigger"><Button disabled={!deviceId || !wsConnected || syncActive || Boolean(busy)} title={!wsConnected ? t('A WebSocket connection is required to scan recordings.') : syncActive ? t('A synchronization request is already active.') : undefined} onClick={() => void run('sync', () => api(`/devices/${encodeURIComponent(deviceId)}/sync`, { method: 'POST', headers: { 'idempotency-key': randomUuidV4() }, body: '{}' }), t('Device synchronization requested.'))}>{busy === 'sync' ? t('Requesting…') : syncActive ? t('Synchronization in progress') : t('Sync now')}</Button>{syncActive ? <small>{t('The current request is shown in command details below.')}</small> : null}</div>
     </section>
     <section className="firmware-card">
       <div className="firmware-summary"><p className="eyebrow">{t('Firmware repository')}</p><h3>{firmware ? `${firmware.firmware.version} · ${t(firmware.firmware.release_channel === 'developer' ? 'Developer' : 'Production')}` : t('Check for firmware updates')}</h3>{firmwareNotes.length > 0 ? <div className="firmware-release-notes">{firmwareNotes.map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div> : <p>{firmware ? (firmware.firmware.up_to_date ? t('This device is up to date in the selected channel.') : t('A newer firmware version is available in the local repository.')) : t('OTA uses a verified local copy. Upload custom firmware or explicitly import it from the configured official source.')}</p>}{firmware ? <small>{t(firmware.firmware.source === 'official' ? 'Official import' : 'Custom upload')} · {formatBytes(firmware.firmware.package_size)} · SHA-256 {firmware.firmware.checksum.replace(/^sha256:/, '').slice(0, 12)}… · {bleConnected ? t('Install through BLE') : t('Install through server')}</small> : null}{otaProgress !== null ? <div className="ota-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={otaProgress}><span style={{ width: `${otaProgress}%` }}/><small>{t('Transferring firmware… {percent}%', { percent: otaProgress })}</small></div> : null}</div>
