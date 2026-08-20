@@ -2,7 +2,7 @@
 
 The Open Platform exposes the reviewed device capability surface through REST and MCP while keeping one authorization and audit model.
 
-## Foundation resource contracts (2026-08-07)
+## Recording, device, and synchronization capabilities
 
 - Recording responses include immutable `media` (`recording.media.v1`), objective `timing`, discovery firmware, and `resource_version`. Unknown historical facts remain `null`, `application/octet-stream`, or `bin`; the server never guesses from a requested filename.
 - `GET /api/v1/devices/{id}/capabilities` and `voicecan.devices.get_capabilities` expose only reviewed semantic abilities. No opcode, frame, raw payload, ASR, or LLM concept is part of this contract.

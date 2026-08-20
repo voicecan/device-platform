@@ -1,8 +1,8 @@
-# Implementation status
+# Capability reference
 
-Status date: 2026-08-10. This document is the repository-local implementation summary.
+This page summarizes the platform capabilities for maintainers and integrators. For installation and daily use, start with the [quickstart](quickstart.md) and [operations runbook](operations-runbook.md).
 
-## Code-complete in this repository
+## Capability summary
 
 | Area | Evidence |
 | --- | --- |
@@ -29,7 +29,7 @@ Status date: 2026-08-10. This document is the repository-local implementation su
 | Production deployment | Two-instance PostgreSQL/S3 Compose profile plus digest-pinned Helm chart with migration hook, two replicas, drain probes, anti-affinity, Service, PDB, optional TLS Ingress, and external Secret contract |
 | Lifecycle policy | Stable-channel SemVer/API/protocol-runtime compatibility windows, deprecation rules, explicit migration/canary/rollback policy, and an explicit unresolved licensing decision gate |
 
-## Current automated evidence
+## Maintainer verification
 
 - `npm run ci`: public-boundary check, protocol-runtime artifact verification, strict typecheck, local tests, and build.
 - Recording synchronization uses one active transfer lane per Device, a Device-reachable upload origin, semantic time synchronization, observable failure details, individual retry, and non-destructive failed/stale reset. See [recording synchronization operations](recording-sync-operations.md).

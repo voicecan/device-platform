@@ -4,7 +4,7 @@
 
 ## 推荐的 npm 安装
 
-要求 Node.js `>=24.15 <25` 和 npm。
+要求 Node.js `>=24.15.0 <25` 和 npm。
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/

@@ -1,13 +1,10 @@
 # @voicecan/device-platform
 
-The complete self-hosted Voicecan Device Platform: Device Server, Admin UI,
-browser device binding UI, and the reviewed compiled protocol runtime.
+The self-hosted Voicecan Device Platform package includes the Device Server, Admin UI, browser device-connection UI, and the `voicecan-device` CLI.
 
-## One-command local installation
+## Install
 
-Requirements: Node.js `>=24.15.0 <25` (Node.js 24.19.0 is recommended) and npm.
-
-Install the CLI and create a persistent per-user Profile:
+Requirements: Node.js `>=24.15.0 <25` and npm.
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
@@ -15,89 +12,46 @@ npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard
 ```
 
-The first command also replaces an older Gitea npm-scope setting, if present.
-
-`onboard` explicitly migrates the local SQLite database, installs and starts a
-current-user background service, opens `http://127.0.0.1:8787/admin`, and exits.
-On a headless machine, use:
+Onboarding creates a persistent per-user Profile, starts the service, waits for readiness, and opens Admin at `http://127.0.0.1:8787/admin`. On a headless machine, use:
 
 ```bash
 voicecan-device onboard --no-open
 ```
 
-Complete trusted setup in the opened page. Do not copy setup secrets into
-automation output.
+Complete setup in the trusted Admin page. Keep setup secrets out of shell history, logs, automation output, and source control.
 
-## Persistent global installation
-
-```bash
-npm config set @voicecan:registry https://registry.npmjs.org/
-npm install --global @voicecan/device-platform@1.0.1
-voicecan-device onboard
-```
-
-The service persists after the terminal exits. Inspect it with:
+## Operate the service
 
 ```bash
 voicecan-device service status --output json
 voicecan-device service restart --output json
+voicecan-device service logs
 voicecan-device doctor --output json
 ```
 
-Open <http://127.0.0.1:8787/admin> after the server reports ready.
-
-## Exact instructions for an AI coding agent
-
-An agent may install and initialize a local instance by executing:
-
-```bash
-npm config set @voicecan:registry https://registry.npmjs.org/
-npm install --global @voicecan/device-platform@1.0.1
-voicecan-device onboard --no-open --output json
-```
-
-It must use the returned `next_actions` to open Admin for the user. It must not
-delete an existing Profile, print secrets into chat, or run a production
-migration without explicit authorization.
-
-Useful commands:
-
-```bash
-voicecan-device --help
-voicecan-device capabilities --output json
-voicecan-device service status --output json
-voicecan-device admin-mcp stdio
-```
+The default installation uses a local SQLite data store. Profiles keep the service, database, local objects, and configuration together. Use `--profile <name>` when you need isolated installations.
 
 ## Configuration
 
-The zero-config profile is a single-node SQLite Edge installation. Important
-environment variables include:
+| Variable | Purpose |
+| --- | --- |
+| `VOICECAN_DATA_DIR` | Data directory for the database, local objects, and runtime state |
+| `VOICECAN_PORT` | HTTP and device WebSocket port; default `8787` |
+| `VOICECAN_PUBLIC_BASE_URL` | Browser-facing service URL |
+| `VOICECAN_HOST` | Listen address |
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `VOICECAN_DATA_DIR` | Profile `data/` | Database, secrets, logs, and local objects |
-| `VOICECAN_PORT` | `8787` | HTTP and device WebSocket port |
-| `VOICECAN_PUBLIC_BASE_URL` | `http://127.0.0.1:8787` | Browser-facing URL |
-| `VOICECAN_HOST` | `0.0.0.0` | Listen address |
-| `VOICECAN_SIMULATOR` | `false` | Enable development simulator endpoints |
+For Docker, PostgreSQL, object storage, TLS, backup, and multi-instance deployments, see the [deployment documentation](../../deploy/README.md) and [operations runbook](../../docs/operations-runbook.md).
 
-PostgreSQL, S3, TLS/reverse proxy, backup, and production multi-instance
-deployment require the full operations documentation in the source repository.
+## Application SDKs
 
-## Public application SDKs
-
-Applications integrating with a running platform normally install only:
+Applications connecting to a running platform normally install:
 
 ```bash
 npm install @voicecan/connector-runtime
 ```
 
-That package installs `@voicecan/server-client` and `@voicecan/contracts` as
-dependencies. They are separate from this server distribution package.
+This package provides the connector runtime and installs the public contracts and server client it uses. See the [server client](../../packages/server-client/README.md) and [connector runtime](../../packages/connector-runtime/README.md) documentation for integration details.
 
 ## License
 
-Apache License 2.0. The license covers this distribution, including the bundled
-reviewed compiled protocol runtime. See `LICENSE`, `NOTICE`, and
-`THIRD_PARTY_NOTICES.md` in the npm package.
+Apache License 2.0. See `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` in the package.

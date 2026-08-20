@@ -2,168 +2,118 @@
 
 [中文](README.zh-CN.md)
 
-Public source repository for independent device connectivity and immutable recording-file synchronization, with no dependency on Voicecan accounts, families, memberships, model services, or the existing business API.
+Voicecan Device Platform is a self-hosted platform for connecting Voicecan-compatible devices, managing recordings, and giving applications secure access to device data. It can run at the edge, on a private server, or as a containerized service without depending on Voicecan accounts, family services, model services, or the existing business API.
 
-The wire-protocol implementation is supplied only as the reviewed, checksummed `@voicecan/device-core` runtime artifact committed under `vendor/`. A normal `npm install` resolves it locally; no separate source checkout is required. See the [protocol runtime dependency boundary](docs/repository-boundary.md).
+## What you can do
 
-## Implemented preview
+- **Connect devices** — provision, claim, monitor, and control devices through a browser, WebSocket, or nearby Bluetooth connection.
+- **Manage recordings** — discover recordings, synchronize files reliably, resume interrupted transfers, and keep immutable file history.
+- **Control access** — organize users and devices into Groups, issue scoped application credentials, and review an audit trail of administrative activity.
+- **Build applications** — use REST, TypeScript, Python, MCP, Webhooks, or the reusable Device Connect Web to connect your own products.
+- **Run device operations** — manage local firmware packages, perform OTA updates, inspect device status, and operate through Admin or the CLI.
+- **Choose storage** — use local files for an edge installation or connect an object-storage-backed deployment for shared workloads.
+- **Operate with confidence** — use backups, restore tools, quotas, delivery retries, dead-letter inspection, health checks, and metrics as part of daily operations.
 
-- Node.js 24/TypeScript monorepo and explicit SQLite migrations.
-- SQLite access isolated in a worker; the HTTP/WSS event loop does not execute synchronous database calls.
-- One-time owner-only setup token, Argon2id passwords, HttpOnly sessions, CSRF, local users, one active group per user, Group API Tokens, and audit records.
-- Device claims with random 32-byte credentials, HMAC verifiers, AES-256-GCM envelope encryption, credential epochs, and authenticated WSS connection fencing.
-- Group-scoped device, file, event, command, provisioning, and transfer APIs. File and event access always derives from the Device's current group.
-- Application-first Open Platform with one Permission Catalog across REST, stdio MCP, OAuth-protected remote MCP, and Webhooks; complete credential, collaborator, quota, usage, call-log, and security-alert control plane.
-- Recording APIs return metadata or one-use temporary URLs only. S3 delivery redirects to a very short presigned GET; local delivery is isolated behind the dedicated Download Grant gateway and can be disabled with `external_object_only`.
-- Streamed local upload tickets with exact length checks, SHA-256, fsync, temporary files, atomic rename, and immutable final locators.
-- `file.synced` outbox and signed at-least-once webhook delivery with ownership-epoch checks and SSRF protections.
-- Device transfer preview/CAS confirmation; historical recordings move with the Device and pending old-group deliveries are canceled.
-- Persistent login throttling, last-admin protection, group-admin transfer/archive rules, offline password recovery, backup/restore verification, deployment-key rotation, quotas, disk watermarks, reconciliation, graceful readiness drain, metrics, and structured/redacted logs.
-- Webhook DNS/IP pinning, current/next secret rotation, schema-v6 CAS delivery leases, dead-letter inspection/replay, and preview-confirmed historical backfill namespaces.
-- System Admin legal hold plus preview/CAS-confirmed, retryable, exact-version storage-object deletion; metadata/audit tombstones remain and the physical-device source is explicitly untouched.
-- TypeScript and Python clients, event verification, WebBluetooth transport, headless command queue, Lit-based standard provisioner/console Web Components, a React/Vite Admin application, an independently deployable public Device Connect Web with Admin reuse and cross-origin callback verification, fixture consumer, unified durable Connector runtime, three local-output demos, simulator, Docker image, Compose, and integration Skill.
-- A pinned compiled protocol runtime supplies the Browser and Node WASM artifacts. This repository verifies its package digest, ABI and conformance hash and does not contain protocol source or fixtures.
-- Bound-device management combines periodic WebSocket status polling with authenticated nearby BLE status/control. OTA uses a local firmware repository: System Admins can stream custom packages or explicitly import and verify a package from the configurable official source (default `https://api.voice-can.com/`), then install the local copy over WebSocket or BLE.
+## Main surfaces
 
-Open Platform documentation:
+| Surface | Use it for |
+| --- | --- |
+| Admin | Setup, users, Groups, applications, devices, recordings, firmware, Webhooks, and operational tools |
+| Device Connect Web | Public browser-based device provisioning and connection flows |
+| REST API | Integrate devices, recordings, applications, permissions, and Webhooks into your product |
+| TypeScript / Python clients | Build server-side and automation workflows with typed client libraries |
+| MCP | Connect an AI assistant or automation tool to service status, applications, and device workflows |
+| CLI | Install, configure, diagnose, back up, restore, and operate a self-hosted instance |
 
-- [Applications, permissions, credentials, REST, and administration](docs/open-platform.md)
-- [stdio and remote MCP](docs/mcp-server.md)
-- [Recording Download Grants](docs/recording-download-links.md)
+## Installation options
 
-## Local quickstart
+| Option | Best for |
+| --- | --- |
+| npm + `onboard` | A quick local Edge installation with a user-level service |
+| Docker + Compose | A repeatable server or private-network deployment |
+| Native Node runtime | A host installation without Docker |
+| Source checkout | Development and customization |
 
-Requirements: Node.js `>=24.15.0 <25`, npm, and a private local data directory.
+Choose one installation method for each data directory. See [installation and background services](docs/installation/README.md) for the detailed setup guides.
 
-For a local Edge/SQLite installation from the official npm registry, run:
+## Quick start
+
+### Local Edge installation
+
+Requirements: Node.js `>=24.15.0 <25`, npm, and a private persistent data directory.
 
 ```sh
 npm install --global @voicecan/device-platform@1.0.1
 voicecan-device onboard
 ```
 
-`onboard` creates a stable per-user Profile, explicitly migrates SQLite,
-installs a current-user background service (systemd user, launchd, or Windows
-Scheduled Task), waits for readiness, opens Admin, and exits. State no longer
-depends on the current directory. Use `--no-open` on a headless host. The npm
-package has no mutating `postinstall` hook, and ordinary `serve` never runs
-migrations. `init` is a compatible alias; use `init --foreground` only for a
-temporary development process.
+The onboarding flow creates the local Profile, prepares the database, starts the service, waits for readiness, and opens Admin. Use these commands to inspect the service afterwards:
 
 ```sh
 voicecan-device service status --output json
 voicecan-device doctor --output json
 ```
 
-See [installation and background services](docs/installation/README.md) and
-[AI automation](docs/installation/ai-automation.md).
+### Docker installation
 
-Choose exactly one installation method for an installation. The npm, Docker,
-private-Node, and source methods have separate lifecycle boundaries; do not
-overlay them on one data directory without following the migration runbook.
-
-For a one-command Edge/SQLite install from the public `main` release channel,
-install curl, Git, Docker Engine, and Docker Compose v2, then run:
+Install curl, Git, Docker Engine, and Docker Compose v2, then run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/voicecan/device-platform/main/install.sh | bash
 ```
 
-The installer clones `main` into
-`${XDG_DATA_HOME:-$HOME/.local/share}/voicecan-device-platform`, builds a
-commit-tagged image, verifies the public/protocol-runtime boundary during the image build,
-runs the migration explicitly, starts the loopback-only Compose profile, and
-waits for readiness. It never overwrites an existing installation. Override
-settings through flags or environment variables; for example:
+The installer prepares the service and opens the local Admin setup flow. For an existing installation, follow the [version and migration guide](docs/versioning-and-migrations.md).
+
+## One-prompt AI integration
+
+Copy the prompt below into your AI coding or automation assistant to install the platform and connect an application through its public interfaces:
+
+```text
+You are integrating Voicecan Device Platform from https://github.com/voicecan/device-platform into the current environment.
+
+Use the current user request as the integration goal. Before acting, read and follow the repository Skills that match the task:
+
+https://github.com/voicecan/device-platform/blob/main/skills/voicecan-install/SKILL.md
+https://github.com/voicecan/device-platform/blob/main/skills/voicecan-configure/SKILL.md
+https://github.com/voicecan/device-platform/blob/main/skills/voicecan-bind-device/SKILL.md
+https://github.com/voicecan/device-platform/blob/main/skills/voicecan-create-application/SKILL.md
+https://github.com/voicecan/device-platform/blob/main/skills/voicecan-connect-mcp/SKILL.md
+https://github.com/voicecan/device-platform/blob/main/skills/voicecan-operate/SKILL.md
+https://github.com/voicecan/device-platform/blob/main/skills/integrate-voicecan-device/SKILL.md
+
+Inspect the environment and any existing installation first. Use only the public installation flow and public REST, SDK, Webhook, and MCP interfaces. Preserve existing data and configuration. Follow the selected Skills for dry runs, approvals, credentials, device actions, verification, and reporting.
+
+Never expose or read secrets, passwords, setup tokens, Wi-Fi credentials, temporary URLs, production recordings, or private protocol sources. Ask before any destructive operation, credential creation, DNS or TLS change, cloud-storage change, or real device action. At the end, report the service URL, commands, checks, manual steps, and rollback plan without secrets.
+```
+
+## Application packages
+
+Install the packages you need from the `@voicecan` scope:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/voicecan/device-platform/main/install.sh \
-  | bash -s -- --install-dir /srv/voicecan-device-platform --port 8788
-```
-
-The `main` branch is the release channel for this installer. The exact installed
-commit and image tag are printed at completion. Review
-[`docs/versioning-and-migrations.md`](docs/versioning-and-migrations.md) before
-upgrading an existing installation; rerunning the installer intentionally does
-not perform an in-place upgrade.
-
-For a native installation without Docker, install curl, Git, `tar`, and a
-SHA-256 utility (`sha256sum`, `shasum`, or OpenSSL), then run:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/voicecan/device-platform/main/install-node.sh | bash
-```
-
-The Node.js installer does not use the user's Node.js, npm, nvm, Homebrew, or
-system PATH. It downloads the exact runtime in `node-runtime.lock`, verifies the
-platform-specific SHA-256, and keeps that private runtime under the installation
-directory. It then performs the same source/runtime-artifact verification, builds the
-release, explicitly migrates SQLite, and attempts to install a user-level
-systemd service on Linux or launchd agent on macOS. It never uses `sudo`. Pass
-`--no-service` when only build and migration are desired.
-
-```powershell
-Copy-Item .env.example .env
-npm install
-npm run verify:core
-npm run build
-npm run migrate
-npm start
-```
-
-The service never migrates on startup. On first start it writes a high-entropy setup token to `data/setup-token` with owner-only permissions and logs only the path. Reveal it explicitly with `node packages/device-server/dist/cli.js show-setup-token`, then submit it through the trusted local setup client; never copy it into source control or shell history.
-
-To discard an existing local Edge installation and initialize it again, stop the Server, remove the complete `data/` directory (not only the SQLite file), run `npm run migrate`, and start the Server. This also removes stored recording objects and local deployment secrets and cannot be undone. Compose volumes, custom data/database/storage paths, and the PostgreSQL/S3 boundary are covered in [Reset the Edge data and initialize again](docs/quickstart.md#reset-the-edge-data-and-initialize-again).
-
-For fixture development, set `VOICECAN_SIMULATOR=true`. This exposes authenticated simulator endpoints; it must remain false in production.
-
-Open `/admin` for setup, identities, resources, and origin-bound provisioning grants. Device provisioning stays inside Admin when its secure context supports Web Bluetooth; otherwise Admin opens the public connector configured by `VOICECAN_CONNECT_WEB_URL`. The standalone static package and deployment rules are documented in [Device Connect Web](docs/device-connect-web.md). `/device` remains available as the direct same-origin compatibility provisioner and console.
-
-The UI boundary is deliberate: `packages/admin-web` is the authenticated management surface, `packages/device-connect-web` is the reusable and independently deployable browser connector, `packages/device-ui` is a framework-neutral Lit Custom Element library, and `packages/device-web` remains the pure TypeScript headless SDK. `npm run build` emits all three frontend artifacts. For frontend development, run the API with `npm run dev`, Admin with `npm run dev:admin`, and the standalone connector with `npm run dev --workspace @voicecan/device-connect-web` (default `http://127.0.0.1:5175/`).
-
-## Open Platform npm packages
-
-The complete local Server distribution and the three application SDKs are
-published to the official npm registry under the `@voicecan` scope:
-
-- `@voicecan/device-platform`: self-contained Server, Admin and device UI,
-  reviewed compiled protocol runtime, and the `voicecan-device` CLI;
-
-- `@voicecan/contracts`: public contracts and constants only;
-- `@voicecan/server-client`: Application REST client, Event cursor, secure Recording Grant download, Webhook verification/parsing, and media assessment;
-- `@voicecan/connector-runtime`: durable Webhook dispatch, SQLite Inbox/tombstone/outbox/metrics, and authorization-aware Recording reconciliation.
-
-```bash
 npm install @voicecan/contracts @voicecan/server-client @voicecan/connector-runtime
 ```
 
-Application code should not depend on `@voicecan/device-platform`; install it
-only when deploying the Server. Run `npm run npm:pack:check` before publishing.
-The release checks verify that the Server tarball contains its Admin/UI and
-reviewed protocol-runtime JS/WASM assets without publishing private protocol sources.
+- `@voicecan/contracts` — public data types, event names, and constants.
+- `@voicecan/server-client` — REST access, event cursors, secure Recording downloads, Webhook verification, and media helpers.
+- `@voicecan/connector-runtime` — durable Webhook delivery, event handling, and Recording reconciliation.
 
-Offline operations must run while the server is stopped:
+Install `@voicecan/device-platform` when you are deploying the self-hosted Server, Admin, and CLI.
 
-```powershell
-node packages/device-server/dist/cli.js backup create D:\backups\voicecan-2026-08-03
-node packages/device-server/dist/cli.js backup verify D:\backups\voicecan-2026-08-03
-node packages/device-server/dist/cli.js backup restore D:\backups\voicecan-2026-08-03 D:\voicecan-restored
-"new passphrase" | node packages/device-server/dist/cli.js users set-password --username admin --password-stdin
-node packages/device-server/dist/cli.js keys rotate
-```
+## Documentation
 
-## Verification
+- [Open Platform](docs/open-platform.md) — applications, permissions, credentials, REST, and administration.
+- [Quickstart](docs/quickstart.md) — installation, setup, device connection, and recording synchronization.
+- [Device Connect Web](docs/device-connect-web.md) — browser-based provisioning and connection.
+- [Local firmware repository and OTA](docs/firmware-repository.md) — firmware packages and device updates.
+- [Recording Download Grants](docs/recording-download-links.md) — secure application downloads.
+- [MCP server](docs/mcp-server.md) — connect MCP clients and AI tools.
+- [Operations runbook](docs/operations-runbook.md) — deployment, backup, restore, and monitoring.
+- [Security model](docs/security.md) — authentication, authorization, storage, and Webhook security.
 
-Operational release gates are documented in [the operations runbook](docs/operations-runbook.md), [SLO/capacity/alerting](docs/slo-capacity-and-alerting.md), and [privacy/retention/disaster recovery](docs/privacy-retention-and-disaster-recovery.md). `/metrics` exposes stable-route HTTP latency, event-loop health, device connections, storage capacity, and file/Webhook/command queue saturation; keep it on a private monitoring network.
+## Community and project information
 
-```powershell
-npm run typecheck
-npm test
-npm run check:public
-npm run verify:core
-npm run build
-```
-
-The automated suite covers setup/claim replay rejection, origin binding, persistent rate limiting, lifecycle guards, immutable upload recovery, backup/restore, key rotation, SSRF address classes, group isolation, transfer authorization, Connector fan-out, Skill forward fixtures, WASM conformance, Gateway event parsing, React Admin build/asset delivery, and Lit Custom Element contract preservation. Admin includes dedicated User/Group/Token/Webhook lifecycle forms plus guarded API, delivery, and simulator tools.
-
-See [quickstart](docs/quickstart.md), [local firmware repository and OTA](docs/firmware-repository.md), [Device Connect Web deployment](docs/device-connect-web-deployment.md), [OpenAPI](docs/openapi.yaml), [error codes](docs/error-codes.md), [connectors and demos](docs/connectors-and-demos.md), [operations runbook](docs/operations-runbook.md), [versioning and migrations](docs/versioning-and-migrations.md), [licensing gate](docs/licensing-decision.md), [security model](docs/security.md), [protocol runtime dependency boundary](docs/repository-boundary.md), and [implementation status](docs/implementation-status.md).
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [License](LICENSE)
+- [Third-party notices](NOTICE)

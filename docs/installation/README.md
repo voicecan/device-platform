@@ -4,7 +4,7 @@
 
 ## Recommended npm installation
 
-Requirements: Node.js `>=24.15 <25` and npm.
+Requirements: Node.js `>=24.15.0 <25` and npm.
 
 ```bash
 npm config set @voicecan:registry https://registry.npmjs.org/
