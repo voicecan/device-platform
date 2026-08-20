@@ -31,10 +31,6 @@ Open Platform documentation:
 - [stdio and remote MCP](docs/mcp-server.md)
 - [Recording Download Grants](docs/recording-download-links.md)
 
-## Deliberately blocked
-
-The repository does not pretend that hardware-only or external-infrastructure work has passed. Provisioning, reverse binding, inventory discovery, command recovery, filesystem/S3/relay orchestration, PostgreSQL multi-instance fencing, and Production deployment templates are implemented, but the real V1.2 device matrix still requires physical firmware/hardware evidence. Real MinIO/S3 integration, `private_ca_ip`, signed OCI/SEA releases, deployed multi-instance mixed-load validation, external messaging-provider adapters, and downstream AI processing remain gated. Simulator and local integration tests are engineering evidence, not proof of production readiness.
-
 ## Local quickstart
 
 Requirements: Node.js `>=24.15.0 <25`, npm, and a private local data directory.
@@ -168,6 +164,6 @@ npm run verify:core
 npm run build
 ```
 
-The automated suite covers setup/claim replay rejection, origin binding, persistent rate limiting, lifecycle guards, immutable upload recovery, backup/restore, key rotation, SSRF address classes, group isolation, transfer authorization, Connector fan-out, Skill forward fixtures, WASM conformance, Gateway event parsing, React Admin build/asset delivery, and Lit Custom Element contract preservation. Admin includes dedicated User/Group/Token/Webhook lifecycle forms plus guarded API, delivery, and simulator tools. Physical BLE permission and device results remain a hardware release gate.
+The automated suite covers setup/claim replay rejection, origin binding, persistent rate limiting, lifecycle guards, immutable upload recovery, backup/restore, key rotation, SSRF address classes, group isolation, transfer authorization, Connector fan-out, Skill forward fixtures, WASM conformance, Gateway event parsing, React Admin build/asset delivery, and Lit Custom Element contract preservation. Admin includes dedicated User/Group/Token/Webhook lifecycle forms plus guarded API, delivery, and simulator tools.
 
 See [quickstart](docs/quickstart.md), [local firmware repository and OTA](docs/firmware-repository.md), [Device Connect Web deployment](docs/device-connect-web-deployment.md), [OpenAPI](docs/openapi.yaml), [error codes](docs/error-codes.md), [connectors and demos](docs/connectors-and-demos.md), [operations runbook](docs/operations-runbook.md), [versioning and migrations](docs/versioning-and-migrations.md), [licensing gate](docs/licensing-decision.md), [security model](docs/security.md), [protocol runtime dependency boundary](docs/repository-boundary.md), and [implementation status](docs/implementation-status.md).

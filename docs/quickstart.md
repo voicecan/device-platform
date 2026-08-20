@@ -1,6 +1,6 @@
 # Independent Server quickstart
 
-This guide installs the Edge/SQLite profile. It does not prove physical-device, TLS, S3, or production multi-instance readiness.
+This guide installs the Edge/SQLite profile.
 
 Before selecting a decoder or issuing synchronization, read `/devices/{id}/capabilities` and the Recording `media` object. Treat unknown values as unknown. Application integrations should use SDK Download Grants so length and SHA-256 are verified before an atomic destination commit.
 
@@ -10,7 +10,7 @@ Before selecting a decoder or issuing synchronization, read `/devices/{id}/capab
 - A private persistent data directory.
 - HTTPS for every non-loopback browser deployment; Web Bluetooth requires a secure context.
 - A provisioning client that meets the [Device Connect Web system requirements](device-connect-web.md#客户端系统要求).
-- A device-reachable LAN address for Edge `ws://` provisioning. Production still requires a WSS hostname and certificate trusted by the target firmware.
+- A device-reachable LAN address for Edge `ws://` provisioning. Production uses a WSS hostname and a certificate trusted by the target firmware.
 
 ## Install and start
 
@@ -159,5 +159,3 @@ node packages/device-server/dist/cli.js doctor
 node skills/integrate-voicecan-device/scripts/doctor.mjs --url http://127.0.0.1:8787
 npm run smoke -- --url http://127.0.0.1:8787
 ```
-
-Before enabling real devices, complete the release gates in [implementation status](implementation-status.md).

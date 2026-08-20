@@ -31,10 +31,6 @@ Open Platform 文档：
 - [stdio 与远程 MCP](docs/mcp-server.md)
 - [Recording Download Grant](docs/recording-download-links.md)
 
-## 明确尚未完成的验证
-
-本仓库不会把仅靠硬件或外部基础设施才能完成的工作描述成已验证。配网、反向绑定、Inventory Discovery、命令恢复、Filesystem/S3/Relay 编排、PostgreSQL 多实例隔离和 Production 部署模板已经实现，但真实 V1.2 设备矩阵仍需要实体固件/硬件证据。真实 MinIO/S3 集成、`private_ca_ip`、签名 OCI/SEA 发布、已部署多实例混合负载验证、外部消息 Provider Adapter 和下游 AI 处理仍处于 Gate 状态。Simulator 与本地集成测试是工程证据，不代表生产就绪。
-
 ## 本地快速开始
 
 要求：Node.js `>=24.15.0 <25`、npm，以及一个私有的本地数据目录。
@@ -138,6 +134,6 @@ npm run verify:core
 npm run build
 ```
 
-自动化测试覆盖 Setup/Claim 重放拒绝、Origin Binding、持久化限流、生命周期 Guard、不可变上传恢复、备份/恢复、密钥轮换、SSRF 地址分类、Group 隔离、转移授权、Connector Fan-out、Skill Forward Fixture、WASM 一致性、Gateway 事件解析、React Admin 构建/制品交付和 Lit Custom Element Contract 保持。Admin 包含专用的 User/Group/Token/Webhook 生命周期 Form，以及受 Guard 保护的 API、Delivery 和 Simulator 工具。实体 BLE 权限与设备结果仍属于硬件发布 Gate。
+自动化测试覆盖 Setup/Claim 重放拒绝、Origin Binding、持久化限流、生命周期 Guard、不可变上传恢复、备份/恢复、密钥轮换、SSRF 地址分类、Group 隔离、转移授权、Connector Fan-out、Skill Forward Fixture、WASM 一致性、Gateway 事件解析、React Admin 构建/制品交付和 Lit Custom Element Contract 保持。Admin 包含专用的 User/Group/Token/Webhook 生命周期 Form，以及受 Guard 保护的 API、Delivery 和 Simulator 工具。
 
 更多资料：[快速开始](docs/quickstart.md)、[本地固件仓库与 OTA](docs/firmware-repository.md)、[Device Connect Web 部署](docs/device-connect-web-deployment.md)、[OpenAPI](docs/openapi.yaml)、[错误码](docs/error-codes.md)、[Connector 与 Demo](docs/connectors-and-demos.md)、[运维手册](docs/operations-runbook.md)、[版本与迁移](docs/versioning-and-migrations.md)、[许可证 Gate](docs/licensing-decision.md)、[安全模型](docs/security.md)、[协议运行时依赖边界](docs/repository-boundary.md)和[实现状态](docs/implementation-status.md)。

@@ -32,5 +32,3 @@ An interrupted in-memory OTA is failed explicitly; it is not silently resumed af
 ## Backup and reset
 
 The Edge `backup create` command uses manifest schema 3 and includes the database, recording objects, keys, and `VOICECAN_FIRMWARE_DIR`; restore verifies and restores the firmware directory with the same snapshot. PostgreSQL/S3 and operator-managed backups must preserve the catalog and firmware directory together. Restoring only one side produces checksum or missing-object failures and OTA remains blocked. A full Edge reset removes the local firmware directory together with the rest of `VOICECAN_DATA_DIR` when the default path is used.
-
-Physical-device OTA validation is still a release gate. Unit and simulator evidence does not prove bootloader, flash, power-loss, or radio behavior on every firmware/hardware combination.

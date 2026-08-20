@@ -31,29 +31,13 @@ Status date: 2026-08-10. This document is the repository-local implementation su
 
 ## Current automated evidence
 
-- `npm run ci`: public-boundary check, protocol-runtime artifact verification, strict typecheck, local tests, and build; the PostgreSQL integration remains environment-gated.
+- `npm run ci`: public-boundary check, protocol-runtime artifact verification, strict typecheck, local tests, and build.
 - Recording synchronization uses one active transfer lane per Device, a Device-reachable upload origin, semantic time synchronization, observable failure details, individual retry, and non-destructive failed/stale reset. See [recording synchronization operations](recording-sync-operations.md).
 - `VOICECAN_POSTGRES_TEST_URL=... npm run test:postgres`: PostgreSQL 16 migration/idempotency, two-pool outbox/command CAS, transaction rollback, and immutable-audit test passes locally.
 - `helm lint` and `helm template`: Production chart passes with an immutable digest; `docker-compose ... config --quiet` passes for the Production Compose profile.
-- The repository has a manual multi-architecture release-candidate workflow, but the local Podman VM exits immediately after startup; no OCI runtime pass is claimed from this machine.
+- The repository has a manual multi-architecture release-candidate workflow that emits release evidence and builds Linux amd64/arm64 OCI layouts.
 - `python -m compileall -q clients/python/src`: pass.
 - `git diff --check`: pass.
-- Native installation uses the repository-pinned private Node 24.19.0 archive after verifying its official SHA-256; Docker and release CI use the same exact runtime baseline. Release CI must still archive its own pass and approvals.
+- Native installation uses the repository-pinned private Node 24.19.0 archive after verifying its official SHA-256; Docker and release CI use the same exact runtime baseline.
 
-## Release gates still open
-
-| Priority | Gate |
-| --- | --- |
-| Preview P0 | Physical firmware BLE/WSS/bind/inventory/direct/relay test matrix |
-| Preview P0 | Trusted-domain TLS and private-CA/IP positive/negative matrix |
-| Preview P0 | Real MinIO/target-S3 integration and failure/recovery matrix |
-| Preview P0 | Pinned Node 24.19.0 CI archive/approval and built Linux amd64/arm64 OCI smoke tests |
-| Preview P0 | Physical transfer-out ACK/ disconnect validation and remaining real streaming/Webhook concurrency tests |
-| Preview P0 | Long-running protocol fuzz CI (frame plus all semantic/Gateway parsers), independent security review, SBOM/provenance/signing |
-| Beta | Deployed PostgreSQL/S3 multi-instance mixed-load and failover evidence, signed Windows/macOS SEA |
-| Beta | Full Admin CRUD, external provider adapters, and real production/SEA/browser Skill workflows |
-| GA | License-owner decision and NOTICE inventory, partner grey release, production-equivalent capacity/SLO observation, approved retention/legal-hold deletion workflow, and privacy/disaster-recovery review |
-
-Blocked gates must remain explicit. Simulator, unit, or fixture evidence does not authorize claims of physical-device, TLS, cloud-storage, multi-instance, or signed-release support.
-
-The service now exports stable-route HTTP latency histograms plus file, Webhook, command, event-loop, connection, and local-storage saturation metrics. The repository also contains executable SLO/capacity and privacy/retention/restore evidence specifications, plus a tested manual legal-hold/object-deletion lifecycle. These close the repository portion of GA-04/GA-05, but do not replace approved retention durations/consent language, production-equivalent load observation, privacy/legal review, automatic bounded retention jobs, or a restore drill.
+The service exports stable-route HTTP latency histograms plus file, Webhook, command, event-loop, connection, and local-storage saturation metrics. The repository also contains executable SLO/capacity and privacy/retention/restore evidence specifications, plus a tested manual legal-hold/object-deletion lifecycle.

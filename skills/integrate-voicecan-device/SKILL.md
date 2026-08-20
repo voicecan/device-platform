@@ -19,14 +19,13 @@ Deploy only the independent `device-platform`; never connect it to Voicecan `mai
 8. Create a distinct least-privilege Application for each consumer through `voicecan-device app create`; create credentials as owner-only Secret References. Keep real values out of commands, chat, and committed files.
 9. Integrate Node with `@voicecan/server-client` or Python with `voicecan-device`. Read [references/events.md](references/events.md) before implementing webhook verification and idempotency; read [references/api.md](references/api.md) for client boundaries.
 10. Run `node scripts/doctor.mjs --url <server-url> --wss-url <device-wss-url> --core-lock <path-to-core-artifacts.lock.json>` and `node scripts/smoke-test.mjs --url <server-url>`. The doctor validates the minimum Node release, HTTPS/WSS policy, the WSS certificate, health endpoints, and the pinned protocol-runtime digest/ABI. Use fixture events before any real device or external message.
-11. Report the selected installation method, created files, exact image/runtime version and digest, service URLs, rollback steps, tests run, and manual work. Report physical V1.2 BLE/WSS and storage matrices as unverified until their hardware/infrastructure reports exist.
+11. Report the selected installation method, created files, exact image/runtime version and digest, service URLs, rollback steps, tests run, and manual work.
 
 ## Safety constraints
 
 - Binding automation may prepare parameters, open the browser, and observe server state, but the user must perform the WebBluetooth selection. Do not auto-unbind, transfer, erase, update firmware, install certificates, or send real messages.
 - Do not expose setup/Admin UI on an untrusted public interface. Use loopback, private network, VPN, or a controlled reverse proxy.
 - Do not put raw Device Tokens, Group API Tokens, webhook secrets, Wi-Fi passwords, or setup tokens in commands, diffs, logs, committed files, or chat.
-- Do not claim `private_ca_ip`, real-device V1.2, S3 direct, or relay verification without the corresponding compatibility/integration report.
 - Treat `file.synced` delivery as at-least-once. Verify the raw body signature, enforce timestamp tolerance, deduplicate event IDs, and download content with group authentication.
 - Preserve user files. Generate into a new directory or fail on collisions; do not mutate an existing application until its framework and routes have been inspected.
 

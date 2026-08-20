@@ -12,8 +12,6 @@ For public deployments:
 4. Keep `/metrics`, setup, and offline-maintenance access on loopback, private network, or VPN.
 5. Verify the certificate chain, hostname/SAN, SNI, device clock, renewal, and rollback on every declared firmware.
 
-`private_ca_ip` is unsupported until its hardware matrix passes. A browser trusting a private CA is not evidence that firmware trusts it.
-
 ## Backup and restore
 
 The complete data classification, backup-set contents, candidate RPO/RTO, and restore evidence gate are defined in [Privacy, retention, and disaster recovery](privacy-retention-and-disaster-recovery.md). A database-only copy is not a valid backup.

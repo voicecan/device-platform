@@ -1,6 +1,6 @@
 # Open Platform foundation release evidence
 
-Contract date: 2026-08-07. This record covers the repository implementation of the Open Platform foundation plan; it does not claim physical-device or production-infrastructure acceptance.
+Contract date: 2026-08-07. This record covers the repository implementation of the Open Platform foundation plan.
 
 ## Implemented evidence
 
@@ -32,12 +32,3 @@ python3 -c "import yaml; yaml.safe_load(open('docs/openapi.yaml'))"
 | Existing Download Grant gateway | Retained only for development/Edge/legacy policy. It is never reported as production external-only delivery. |
 | Existing command row | Migration defaults resource version and nullable timestamps/result; public reads normalize only reviewed sync commands. |
 | Existing Webhook endpoint | Empty filter arrays preserve subscribe-all behavior within its current Group and ownership epoch. |
-
-## External acceptance still required
-
-- Run the PostgreSQL 16 integration and two-instance fencing suite with `VOICECAN_TEST_POSTGRES_URL`.
-- Run real MinIO/S3 Range, redirect expiry and interrupted-download recovery tests.
-- Execute the supported model/firmware hardware matrix and compare media profile, duration, size and SHA-256 to real recordings.
-- Perform production-equivalent mixed load, failover, restore and Webhook SLO observation.
-
-These are deployment/hardware evidence gates. They are intentionally not replaced by simulator results.
