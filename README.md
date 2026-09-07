@@ -117,3 +117,5 @@ Install `@voicecan/device-platform` when you are deploying the self-hosted Serve
 - [Security policy](SECURITY.md)
 - [License](LICENSE)
 - [Third-party notices](NOTICE)
+
+Device discovery filters by advertised Service UUID, independently of the Bluetooth name. Set `VOICECAN_BLE_SERVICE_UUID` at server startup (default: `00001a10-0000-1000-8000-00805f9b34fb`). It accepts 16/32-bit short UUIDs and full 128-bit UUIDs; restart the server after changes. The GATT connection UUID remains separate. The name-prefix settings page and write API have been removed; explicitly run `npm run migrate` when upgrading an existing database.

@@ -10,7 +10,7 @@ export type DeviceConnectInit = {
   locale: DeviceConnectLocale;
   callbackUrl: string;
   expiresAt: string;
-  bleNamePrefix?: string;
+  bleServiceUuid?: string;
 };
 
 export type DeviceConnectReady = { type: 'voicecan-connect:ready'; version: typeof DEVICE_CONNECT_PROTOCOL };

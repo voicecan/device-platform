@@ -92,7 +92,7 @@ type BluetoothCharacteristic = EventTarget & {
 type BluetoothService = { getCharacteristic(uuid: BluetoothUuid): Promise<BluetoothCharacteristic> };
 type BluetoothGattServer = { connected?: boolean; connect(): Promise<BluetoothGattServer>; disconnect(): void; getPrimaryService(uuid: BluetoothUuid): Promise<BluetoothService> };
 type BluetoothDeviceLike = EventTarget & { gatt?: BluetoothGattServer; id?: string; name?: string };
-type BluetoothApi = { requestDevice(options: { filters: Array<{ namePrefix: string }>; optionalServices: BluetoothUuid[] }): Promise<BluetoothDeviceLike> };
+type BluetoothApi = { requestDevice(options: { filters: Array<{ services: BluetoothUuid[] }>; optionalServices: BluetoothUuid[] }): Promise<BluetoothDeviceLike> };
 type GattInitializationPhase = 'connecting' | 'stabilizing_connection' | 'discovering_service' | 'discovering_characteristics' | 'starting_notifications' | 'ready';
 
 function bluetoothErrorMessage(message: string, cause: unknown): string {
@@ -250,7 +250,7 @@ class WebBluetoothTransport implements ProtocolTransport {
 
 export class WebBluetoothTransportFactory implements DeviceTransportFactory {
   #requestInProgress = false;
-  constructor(private readonly options: { serviceUuid: BluetoothUuid; writeCharacteristicUuid: BluetoothUuid; notifyCharacteristicUuid: BluetoothUuid; namePrefix?: string; timeoutMs?: number; scanToConnectDelayMs?: number; postConnectDelayMs?: number; connectionRetryDelayMs?: number; notificationSetupTimeoutMs?: number }) {}
+  constructor(private readonly options: { serviceUuid: BluetoothUuid; writeCharacteristicUuid: BluetoothUuid; notifyCharacteristicUuid: BluetoothUuid; advertisedServiceUuid?: BluetoothUuid; timeoutMs?: number; scanToConnectDelayMs?: number; postConnectDelayMs?: number; connectionRetryDelayMs?: number; notificationSetupTimeoutMs?: number }) {}
   supported(): boolean { return typeof navigator !== 'undefined' && Boolean((navigator as Navigator & { bluetooth?: BluetoothApi }).bluetooth); }
   async requestDevice(onStateChange?: (state: DeviceSelectionState) => void): Promise<DeviceTransport> {
     if (this.#requestInProgress) throw new DeviceSdkError('BLUETOOTH_CONNECTION_PENDING', 'A Bluetooth device connection is already in progress. Wait for it to finish before trying again.');
@@ -262,11 +262,12 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
     if (!bluetooth) throw new DeviceSdkError('WEB_BLUETOOTH_UNSUPPORTED', 'Web Bluetooth is unavailable');
     let device: BluetoothDeviceLike;
     try {
-      deviceDebug('Opening Bluetooth device chooser', { name_prefix: this.options.namePrefix ?? 'CAPSO-' });
-      device = await bluetooth.requestDevice({ filters: [{ namePrefix: this.options.namePrefix ?? 'CAPSO-' }], optionalServices: [this.options.serviceUuid] });
+      const advertisedServiceUuid = this.options.advertisedServiceUuid ?? this.options.serviceUuid;
+      deviceDebug('Opening Bluetooth device chooser', { advertised_service_uuid: String(advertisedServiceUuid) });
+      device = await bluetooth.requestDevice({ filters: [{ services: [advertisedServiceUuid] }], optionalServices: [this.options.serviceUuid] });
       deviceDebug('Bluetooth device selected', { device_name: device.name ?? 'unknown', device_id: device.id ?? 'unavailable', gatt_available: Boolean(device.gatt), gatt_connected: device.gatt?.connected ?? 'unknown', service_uuid: String(this.options.serviceUuid) });
     } catch (cause) {
-      if (cause instanceof Error && cause.name === 'NotFoundError') throw new DeviceSdkError('DEVICE_SELECTION_CANCELED', bluetoothErrorMessage('No Bluetooth device was selected. Choose a nearby device matching the configured prefix and try again.', cause), { cause });
+      if (cause instanceof Error && cause.name === 'NotFoundError') throw new DeviceSdkError('DEVICE_SELECTION_CANCELED', bluetoothErrorMessage('No Bluetooth device was selected. Choose a nearby device advertising the required Service UUID and try again.', cause), { cause });
       if (cause instanceof Error && cause.name === 'NotAllowedError') throw new DeviceSdkError('BLUETOOTH_PERMISSION_DENIED', bluetoothErrorMessage('Bluetooth permission was denied by the browser or operating system.', cause), { cause });
       if (cause instanceof Error && cause.name === 'SecurityError') throw new DeviceSdkError('BLUETOOTH_SECURITY_BLOCKED', bluetoothErrorMessage('The browser security policy blocked Bluetooth access.', cause), { cause });
       if (cause instanceof Error && cause.name === 'InvalidStateError') throw new DeviceSdkError('BLUETOOTH_USER_GESTURE_REQUIRED', bluetoothErrorMessage('The Bluetooth chooser must be opened directly from a user action.', cause), { cause });

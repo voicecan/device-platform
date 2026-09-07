@@ -19,10 +19,11 @@ export type BoundDeviceMaintenance = {
   close(): Promise<void>;
 };
 
-export async function connectBoundDevice(input: { rawToken: Uint8Array; expectedSerialNumber: string; coreModuleUrl: string; bleNamePrefix?: string; signal?: AbortSignal }): Promise<BoundDeviceMaintenance> {
+export async function connectBoundDevice(input: { rawToken: Uint8Array; expectedSerialNumber: string; coreModuleUrl: string; bleServiceUuid?: string; signal?: AbortSignal }): Promise<BoundDeviceMaintenance> {
   const protocol = await loadBrowserPrivateCore(() => import(/* @vite-ignore */ input.coreModuleUrl));
   const transport = await new WebBluetoothTransportFactory({
-    serviceUuid: '00001a10-0000-1000-8000-00805f9b34fb', writeCharacteristicUuid: '00002dd1-0000-1000-8000-00805f9b34fb', notifyCharacteristicUuid: '00002dd0-0000-1000-8000-00805f9b34fb', namePrefix: input.bleNamePrefix ?? 'CAPSO-',
+    advertisedServiceUuid: input.bleServiceUuid ?? '00001a10-0000-1000-8000-00805f9b34fb',
+    serviceUuid: '00001a10-0000-1000-8000-00805f9b34fb', writeCharacteristicUuid: '00002dd1-0000-1000-8000-00805f9b34fb', notifyCharacteristicUuid: '00002dd0-0000-1000-8000-00805f9b34fb',
   }).requestDevice();
   const serverToken = input.rawToken.slice();
   let session: SemanticProtocolSession | undefined;
@@ -60,19 +61,19 @@ export async function mountDeviceConnector(input: {
   broker: ProvisioningBroker;
   locale: DeviceConnectLocale;
   coreModuleUrl: string;
+  bleServiceUuid?: string;
   provisioningGrant?: string;
   compact?: boolean;
-  bleNamePrefix?: string;
   onProvisioned?: (result: ProvisioningResult) => void;
   onError?: (error: unknown) => void;
 }): Promise<{ element: VoicecanProvisionerElement; destroy(): void }> {
   registerVoicecanElements();
   const protocol = await loadBrowserPrivateCore(() => import(/* @vite-ignore */ input.coreModuleUrl));
   const transport = new WebBluetoothTransportFactory({
+    advertisedServiceUuid: input.bleServiceUuid ?? '00001a10-0000-1000-8000-00805f9b34fb',
     serviceUuid: '00001a10-0000-1000-8000-00805f9b34fb',
     writeCharacteristicUuid: '00002dd1-0000-1000-8000-00805f9b34fb',
     notifyCharacteristicUuid: '00002dd0-0000-1000-8000-00805f9b34fb',
-    namePrefix: input.bleNamePrefix ?? 'CAPSO-',
   });
   const client = new VoicecanDeviceClient({ provisioningToken: input.provisioningGrant ?? 'message-channel-handoff', broker: input.broker, protocol, transport });
   const element = new VoicecanProvisionerElement();

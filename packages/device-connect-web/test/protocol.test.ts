@@ -30,7 +30,7 @@ test('connector passes browser-valid lowercase Bluetooth UUIDs', async () => {
   assert.match(source, /serviceUuid: '00001a10-0000-1000-8000-00805f9b34fb'/);
   assert.match(source, /writeCharacteristicUuid: '00002dd1-0000-1000-8000-00805f9b34fb'/);
   assert.match(source, /notifyCharacteristicUuid: '00002dd0-0000-1000-8000-00805f9b34fb'/);
-  assert.match(source, /namePrefix: input\.bleNamePrefix \?\? 'CAPSO-'/);
+  assert.doesNotMatch(source, /namePrefix|bleNamePrefix/);
   assert.doesNotMatch(source, /0000[12][A-F0-9]+-0000-1000-8000-00805f9b34fb/);
 });
 

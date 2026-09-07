@@ -13,6 +13,7 @@ test('binding intent survives browser refresh and remains server-authoritative w
     VOICECAN_DATA_DIR: dataDir,
     VOICECAN_PUBLIC_BASE_URL: 'http://127.0.0.1:8787',
     VOICECAN_DEVICE_ADVERTISE_HOST: '192.168.50.20',
+    VOICECAN_BLE_SERVICE_UUID: '1a12',
     VOICECAN_LOG_LEVEL: 'silent',
   });
   migrate(config);
@@ -53,6 +54,8 @@ test('binding intent survives browser refresh and remains server-authoritative w
   const refreshedBeforeSelection = await app.inject({ method: 'GET', url: `/api/v1/binding-intents/${intentId}/browser`, headers: { cookie: browserCookie } });
   assert.equal(refreshedBeforeSelection.statusCode, 200, refreshedBeforeSelection.body);
   assert.equal(refreshedBeforeSelection.json().data.display_name, 'AI prepared recorder');
+  assert.equal(refreshedBeforeSelection.json().data.ble_service_uuid, '00001a12-0000-1000-8000-00805f9b34fb');
+  assert.equal('ble_name_prefix' in refreshedBeforeSelection.json().data, false);
   assert.equal(refreshedBeforeSelection.json().data.device_ws_url, 'ws://192.168.50.20:8787/device/v1/ws');
 
   const grant = await app.inject({ method: 'POST', url: `/api/v1/binding-intents/${intentId}/grant`, headers: { cookie: browserCookie }, payload: {} });

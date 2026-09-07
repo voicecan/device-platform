@@ -22,7 +22,7 @@ type DeviceStatusSnapshot = {
   storage_total_kb: number | null; storage_free_kb: number | null; recording_hours: number | null; battery_state: string | null; battery_percent: number | null; battery_temperature_c: number | null; battery_voltage_mv: number | null; work_time_seconds: number | null; accumulated_work_time_seconds: number | null; status_updated_at: string | null; storage_updated_at: string | null; battery_updated_at: string | null; updated_at: string;
 };
 type DeviceStatusWorkspace = { device: DeviceRow; status: DeviceStatusSnapshot | null; refresh_available: boolean; polling_interval_seconds: number };
-type BleSessionGrant = { device_id: string; serial_number: string; device_token: string; ble_name_prefix: string };
+type BleSessionGrant = { device_id: string; serial_number: string; device_token: string; ble_service_uuid: string };
 type FirmwareWorkspace = { device: DeviceRow; firmware: { id: string | number; version: string; hw_version: string; release_channel: 'production' | 'developer'; source: 'uploaded' | 'official'; release_notes: string; package_size: number; checksum: string; crc16: number; max_ble_chunk: number; is_required: boolean; published_at: string | null; up_to_date: boolean } };
 
 function decodeBase64Url(value: string): Uint8Array {
@@ -162,7 +162,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onRelease, o
     const grant = await api<BleSessionGrant>(`/devices/${encodeURIComponent(deviceId)}/ble-maintenance-session`, { method: 'POST', body: '{}' });
     const rawToken = decodeBase64Url(grant.device_token);
     try {
-      const session = await connectBoundDevice({ rawToken, expectedSerialNumber: grant.serial_number, bleNamePrefix: grant.ble_name_prefix, coreModuleUrl: '/sdk/private/semantic_core.js' });
+      const session = await connectBoundDevice({ rawToken, expectedSerialNumber: grant.serial_number, bleServiceUuid: grant.ble_service_uuid, coreModuleUrl: '/sdk/private/semantic_core.js' });
       bleSession.current = session; setBleConnected(true);
       try { await reportBleStatus(session, grant.serial_number, await session.refresh()); }
       catch (cause) { clearDisconnectedBleSession(cause); throw cause; }

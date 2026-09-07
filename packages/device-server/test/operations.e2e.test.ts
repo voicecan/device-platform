@@ -14,6 +14,7 @@ async function configured(dataDir: string): Promise<ServerConfig> {
     VOICECAN_DATA_DIR: dataDir,
     VOICECAN_PUBLIC_BASE_URL: 'http://127.0.0.1:8787',
     VOICECAN_DEVICE_ADVERTISE_HOST: '192.168.50.20',
+    VOICECAN_BLE_SERVICE_UUID: '1A11',
     VOICECAN_SIMULATOR: 'true',
     VOICECAN_ALLOW_PRIVATE_WEBHOOKS: 'true',
     VOICECAN_ALLOW_HTTP_WEBHOOKS: 'true',
@@ -43,10 +44,15 @@ test('P0 lifecycle, rate limit, sync recovery, backup restore and key rotation',
 
     const defaultDeviceAccess = await app.inject({ method: 'GET', url: '/api/v1/settings/device-access', headers });
     assert.equal(defaultDeviceAccess.statusCode, 200, defaultDeviceAccess.body);
-    assert.equal(defaultDeviceAccess.json().data.ble_name_prefix, 'CAPSO-');
+    assert.equal('ble_name_prefix' in defaultDeviceAccess.json().data, false);
+    assert.ok(defaultDeviceAccess.json().data.preferred_device_ws_url);
+    assert.equal(defaultDeviceAccess.json().data.ble_service_uuid, '00001a11-0000-1000-8000-00805f9b34fb');
+    const deviceScript = await app.inject({ method: 'GET', url: '/device/app.js', headers });
+    assert.equal(deviceScript.statusCode, 200);
+    assert.match(deviceScript.body, /advertisedServiceUuid:'00001a11-0000-1000-8000-00805f9b34fb'/);
+    assert.doesNotMatch(deviceScript.body, /__VOICECAN_BLE_SERVICE_UUID__/);
     const updatedDeviceAccess = await app.inject({ method: 'PATCH', url: '/api/v1/settings/device-access', headers, payload: { ble_name_prefix: 'VC-EDGE-' } });
-    assert.equal(updatedDeviceAccess.statusCode, 200, updatedDeviceAccess.body);
-    assert.equal(updatedDeviceAccess.json().data.ble_name_prefix, 'VC-EDGE-');
+    assert.equal(updatedDeviceAccess.statusCode, 404, updatedDeviceAccess.body);
 
     const defaultStorage = await app.inject({ method: 'GET', url: '/api/v1/admin/storage', headers });
     assert.equal(defaultStorage.statusCode, 200, defaultStorage.body);

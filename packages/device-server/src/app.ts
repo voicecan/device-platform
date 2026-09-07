@@ -184,11 +184,6 @@ function validatedProvisioningOrigin(value: string, connectorOrigin: string | nu
     return parsed.origin;
   }
 }
-function validatedBleNamePrefix(value: string): string {
-  const prefix = value.trim();
-  if (!prefix || [...prefix].length > 24 || /[\u0000-\u001f\u007f]/.test(prefix)) throw new HttpError(400, 'INVALID_BLE_NAME_PREFIX', 'BLE name prefix must contain 1 to 24 visible characters');
-  return prefix;
-}
 function constantTimeHexEqual(left: string, right: string): boolean {
   const a = Buffer.from(left, 'hex'); const b = Buffer.from(right, 'hex');
   return a.length === b.length && timingSafeEqual(a, b);
@@ -670,7 +665,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     if (context.actorType !== 'user') throw new HttpError(403, 'HUMAN_SESSION_REQUIRED', 'Human session required');
   };
   app.get('/device', async (request, reply) => { await requireHumanAssetAccess(request); return reply.type('text/html; charset=utf-8').header('Cache-Control', 'no-store').send(deviceHtml); });
-  app.get('/device/app.js', async (request, reply) => { await requireHumanAssetAccess(request); return reply.type('text/javascript; charset=utf-8').header('Cache-Control', 'no-store').send(deviceJs); });
+  app.get('/device/app.js', async (request, reply) => { await requireHumanAssetAccess(request); return reply.type('text/javascript; charset=utf-8').header('Cache-Control', 'no-store').send(deviceJs.replace('__VOICECAN_BLE_SERVICE_UUID__', config.bleServiceUuid)); });
   const sdkAssets = new Map<string, { path: string; type: string }>([
     ['/sdk/device-web.js', { path: '../../device-web/dist/index.js', type: 'text/javascript; charset=utf-8' }],
     ['/sdk/device-ui.js', { path: '../../device-ui/dist/index.js', type: 'text/javascript; charset=utf-8' }],
@@ -768,7 +763,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
 
   app.get('/api/v1/settings/device-access', async (request, reply) => {
     await resolveAccess(request);
-    const settings = await db.get<{ ble_name_prefix: string }>('SELECT ble_name_prefix FROM server_settings WHERE singleton=1');
+
     const currentPublicUrl = publicRequestDeviceWsUrl({ ...(request.headers.host ? { requestHost: request.headers.host } : {}), secure: request.protocol === 'https' });
     const candidates = [...new Set([
       ...(config.deviceWssUrl ? [config.deviceWssUrl] : []),
@@ -776,17 +771,9 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       ...config.deviceAdvertiseHosts.map((host) => resolveDeviceWsUrl({ advertiseHost: host, port: config.port })),
     ])];
     const preferred = config.deviceWssUrl ?? currentPublicUrl ?? candidates[0] ?? resolveDeviceWsUrl({ advertiseHost: config.deviceAdvertiseHost, port: config.port });
-    return success(reply, { ble_name_prefix: settings?.ble_name_prefix ?? 'CAPSO-', preferred_device_ws_url: preferred, device_ws_urls: candidates.map((url) => ({ url, preferred: url === preferred, host: new URL(url).hostname })) });
+    return success(reply, { ble_service_uuid: config.bleServiceUuid, preferred_device_ws_url: preferred, device_ws_urls: candidates.map((url) => ({ url, preferred: url === preferred, host: new URL(url).hostname })) });
   });
 
-  app.patch('/api/v1/settings/device-access', async (request, reply) => {
-    const context = await resolveAccess(request, true); requireSystemAdmin(context);
-    const bleNamePrefix = validatedBleNamePrefix(requiredString(bodyOf(request), 'ble_name_prefix', 96));
-    const changed = await db.run('UPDATE server_settings SET ble_name_prefix=? WHERE singleton=1', [bleNamePrefix]);
-    if (changed.changes !== 1) throw new HttpError(409, 'SETTINGS_UPDATE_FAILED', 'Device access settings could not be updated');
-    await audit(request, context, 'settings.device_access_updated', 'server_settings', '1', undefined, `ble_name_prefix=${bleNamePrefix}`);
-    return success(reply, { ble_name_prefix: bleNamePrefix });
-  });
 
   app.post('/api/v1/auth/logout', async (request, reply) => {
     const context = await resolveAccess(request, true); const raw = request.cookies.vc_session!;
@@ -913,7 +900,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       }
     }
     if (status !== intent.status || deviceId !== intent.device_id || failureCode !== intent.failure_code) await db.run('UPDATE binding_intents SET status=?,device_id=?,failure_code=?,completed_at=CASE WHEN ?=\'completed\' THEN COALESCE(completed_at,?) ELSE completed_at END,updated_at=? WHERE id=?', [status, deviceId, failureCode, status, now(), now(), intent.id]);
-    return { id: intent.id, group_id: intent.group_id, expected_sn: intent.expected_sn, display_name: intent.display_name, ble_name_prefix: intent.ble_name_prefix, device_ws_url: intent.resolved_device_ws_url, network_mode: intent.network_mode, locale: intent.locale, provisioning_session_id: intent.provisioning_session_id, device_id: deviceId, status, failure_code: failureCode, expires_at: intent.expires_at, completed_at: status === 'completed' ? (intent.completed_at ?? now()) : intent.completed_at };
+    return { id: intent.id, group_id: intent.group_id, expected_sn: intent.expected_sn, display_name: intent.display_name, ble_service_uuid: config.bleServiceUuid, device_ws_url: intent.resolved_device_ws_url, network_mode: intent.network_mode, locale: intent.locale, provisioning_session_id: intent.provisioning_session_id, device_id: deviceId, status, failure_code: failureCode, expires_at: intent.expires_at, completed_at: status === 'completed' ? (intent.completed_at ?? now()) : intent.completed_at };
   };
 
   app.post('/api/v1/binding-intents', async (request, reply) => {
@@ -930,9 +917,9 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     let deviceWsUrl: string;
     try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
     catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
-    const settings = await db.get<{ ble_name_prefix: string }>('SELECT ble_name_prefix FROM server_settings WHERE singleton=1');
+
     const intentId = id('bind'); const launchToken = `vcd_bind_${opaqueToken()}`; const timestamp = now(); const expiresAt = plus(deviceProvisioningCredentialTtlMs);
-    await db.run("INSERT INTO binding_intents(id,group_id,created_by,idempotency_key,expected_sn,display_name,ble_name_prefix,resolved_device_ws_url,network_mode,locale,allowed_origin,status,launch_token_hash,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,?)", [intentId, groupId, context.actorId, idempotencyKey, optionalString(body, 'expected_sn', 128), optionalString(body, 'display_name', 80), settings?.ble_name_prefix ?? 'CAPSO-', deviceWsUrl, networkMode, locale, allowedOrigin, tokenHash(launchToken), expiresAt, timestamp, timestamp]);
+    await db.run("INSERT INTO binding_intents(id,group_id,created_by,idempotency_key,expected_sn,display_name,resolved_device_ws_url,network_mode,locale,allowed_origin,status,launch_token_hash,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,?)", [intentId, groupId, context.actorId, idempotencyKey, optionalString(body, 'expected_sn', 128), optionalString(body, 'display_name', 80), deviceWsUrl, networkMode, locale, allowedOrigin, tokenHash(launchToken), expiresAt, timestamp, timestamp]);
     const launchUrl = new URL('/admin', config.publicBaseUrl); launchUrl.searchParams.set('view', 'provision'); launchUrl.searchParams.set('binding_intent', intentId); launchUrl.hash = `launch=${encodeURIComponent(launchToken)}`;
     await audit(request, context, 'binding_intent.created', 'binding_intent', intentId, groupId);
     reply.header('cache-control', 'private, no-store'); return success(reply, { id: intentId, status: 'pending', expires_at: expiresAt, launch_url: launchUrl.href, reused: false }, 201);
@@ -1145,9 +1132,8 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const key = config.masterKeys.get(Number(credential.key_version)); if (!key) throw new HttpError(503, 'DEVICE_CREDENTIAL_KEY_UNAVAILABLE', 'The credential encryption key is not available.');
     const plaintext = decryptSecret(String(credential.token_ciphertext), key, `${deviceId}:${String(credential.id)}`);
     try {
-      const settings = await db.get<{ ble_name_prefix: string }>('SELECT ble_name_prefix FROM server_settings WHERE singleton=1');
       reply.header('cache-control', 'private, no-store'); await audit(request, context, 'device.ble_maintenance_started', 'device', deviceId, String(device.group_id), 'Short-lived browser memory handoff');
-      return success(reply, { device_id: deviceId, serial_number: String(device.sn), device_token: encodeDeviceToken(plaintext), ble_name_prefix: settings?.ble_name_prefix ?? 'CAPSO-' });
+      return success(reply, { device_id: deviceId, serial_number: String(device.sn), device_token: encodeDeviceToken(plaintext), ble_service_uuid: config.bleServiceUuid });
     } finally { plaintext.fill(0); }
   });
   app.post('/api/v1/devices/:id/ble-status', async (request, reply) => {

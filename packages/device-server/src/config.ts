@@ -16,6 +16,7 @@ export type ServerConfig = {
   deviceAdvertiseHost: string;
   deviceAdvertiseHosts: readonly string[];
   deviceConnectUrl: string;
+  bleServiceUuid: string;
   officialFirmwareSourceUrl: string;
   officialFirmwareBaseUrl: string;
   dataDir: string;
@@ -115,6 +116,9 @@ export function detectedAdvertiseHosts(): string[] {
 }
 
 export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): Promise<ServerConfig> {
+  const rawBleUuid = environment.VOICECAN_BLE_SERVICE_UUID?.trim().toLowerCase() || '00001a10-0000-1000-8000-00805f9b34fb';
+  const bleServiceUuid = /^(?:[0-9a-f]{4}|[0-9a-f]{8})$/.test(rawBleUuid) ? `${rawBleUuid.padStart(8, '0')}-0000-1000-8000-00805f9b34fb` : rawBleUuid;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(bleServiceUuid)) throw new Error('VOICECAN_BLE_SERVICE_UUID must be a 16-bit, 32-bit, or 128-bit Bluetooth UUID');
   const dataDir = resolve(environment.VOICECAN_DATA_DIR ?? './data');
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   const storageDir = resolve(environment.VOICECAN_STORAGE_DIR ?? `${dataDir}/objects`);
@@ -222,6 +226,7 @@ export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): 
     deviceAdvertiseHost,
     deviceAdvertiseHosts,
     deviceConnectUrl: parsedConnectUrl.href,
+    bleServiceUuid,
     officialFirmwareSourceUrl: normalizedOfficialSource.href,
     officialFirmwareBaseUrl,
     dataDir,

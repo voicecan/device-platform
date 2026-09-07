@@ -114,9 +114,9 @@ type CreateProvisioningGrant = () => Promise<ProvisioningGrant>;
 type StartEmbeddedProvisioning = (createGrant: CreateProvisioningGrant) => Promise<void>;
 export type StartRemoteProvisioning = (createGrant: CreateProvisioningGrant) => Promise<void>;
 
-export function EmbeddedDeviceProvisioner({ deviceWsUrl, bleNamePrefix, locale, hidden, registerStart, onStepChange, onProvisioned, onAlreadyClaimed, onError }: {
+export function EmbeddedDeviceProvisioner({ deviceWsUrl, bleServiceUuid, locale, hidden, registerStart, onStepChange, onProvisioned, onAlreadyClaimed, onError }: {
   deviceWsUrl: string;
-  bleNamePrefix: string;
+  bleServiceUuid: string;
   locale: Locale;
   hidden: boolean;
   registerStart: (start: StartEmbeddedProvisioning | undefined) => void;
@@ -132,9 +132,9 @@ export function EmbeddedDeviceProvisioner({ deviceWsUrl, bleNamePrefix, locale, 
   useEffect(() => {
     let active = true; let activeGrant = ''; let destroy: (() => void) | undefined; let redirecting = false;
     const mount = mountRef.current;
-    if (!mount) return;
-    provisioningDebug('Mounting embedded device connector', { custom_device_ws_url: Boolean(deviceWsUrl), ble_name_prefix: bleNamePrefix });
-    void mountDeviceConnector({ mount, broker: localBroker(() => activeGrant, () => deviceWsUrlRef.current, (deviceId) => { redirecting = true; onAlreadyClaimed(deviceId); }, () => { activeGrant = ''; }), locale, coreModuleUrl: '/sdk/private/semantic_core.js', compact: true, bleNamePrefix, onProvisioned: () => onProvisioned(), onError: (error) => { if (!redirecting) onError(error); } }).then((connector) => {
+    if (!mount || !bleServiceUuid) return;
+    provisioningDebug('Mounting embedded device connector', { custom_device_ws_url: Boolean(deviceWsUrl) });
+    void mountDeviceConnector({ mount, broker: localBroker(() => activeGrant, () => deviceWsUrlRef.current, (deviceId) => { redirecting = true; onAlreadyClaimed(deviceId); }, () => { activeGrant = ''; }), locale, coreModuleUrl: '/sdk/private/semantic_core.js', compact: true, bleServiceUuid, onProvisioned: () => onProvisioned(), onError: (error) => { if (!redirecting) onError(error); } }).then((connector) => {
       if (!active) { connector.destroy(); return; }
       const stepListener = (event: Event) => onStepChange(Number((event as CustomEvent).detail));
       connector.element.addEventListener('stepchange', stepListener);
@@ -143,13 +143,13 @@ export function EmbeddedDeviceProvisioner({ deviceWsUrl, bleNamePrefix, locale, 
       setLoading(false);
     }).catch(onError);
     return () => { active = false; registerStart(undefined); activeGrant = ''; destroy?.(); };
-  }, [bleNamePrefix, locale]);
+  }, [bleServiceUuid, locale]);
   return <div className="embedded-device-flow" hidden={hidden}><div ref={mountRef}/>{loading ? <div className="loading-panel" role="status"><span className="spinner"/><span>{locale === 'zh-CN' ? '正在加载设备运行时…' : 'Loading device runtime…'}</span></div> : null}</div>;
 }
 
-export function RemoteDeviceProvisioner({ deviceWsUrl, bleNamePrefix, connectorUrl, locale, hidden, registerStart, onProvisioned, onAlreadyClaimed }: {
+export function RemoteDeviceProvisioner({ deviceWsUrl, bleServiceUuid, connectorUrl, locale, hidden, registerStart, onProvisioned, onAlreadyClaimed }: {
   deviceWsUrl: string;
-  bleNamePrefix: string;
+  bleServiceUuid: string;
   connectorUrl: string;
   locale: Locale;
   hidden: boolean;
@@ -232,7 +232,7 @@ export function RemoteDeviceProvisioner({ deviceWsUrl, bleNamePrefix, connectorU
         if (connected || event.source !== popup || event.origin !== publicUrl.origin || event.data?.type !== 'voicecan-connect:ready' || event.data.version !== DEVICE_CONNECT_PROTOCOL) return;
         connected = true;
         provisioningDebug('Remote connector secure channel established', { connector_origin: publicUrl.origin });
-        const init: DeviceConnectInit = { type: 'voicecan-connect:init', version: DEVICE_CONNECT_PROTOCOL, sessionId, state, locale, callbackUrl: globalThis.location.href.split('#')[0]!, expiresAt, bleNamePrefix };
+        const init: DeviceConnectInit = { type: 'voicecan-connect:init', version: DEVICE_CONNECT_PROTOCOL, sessionId, state, locale, callbackUrl: globalThis.location.href.split('#')[0]!, expiresAt, bleServiceUuid };
         popup.postMessage(init, publicUrl.origin, [channel.port2]);
         setStatus(locale === 'zh-CN' ? '安全连接已建立，请在新窗口选择设备' : 'Secure channel established. Select the device in the new window.');
       };
@@ -249,7 +249,7 @@ export function RemoteDeviceProvisioner({ deviceWsUrl, bleNamePrefix, connectorU
     };
     registerStart(startConnector);
     return () => { registerStart(undefined); reopenRef.current = () => undefined; cleanupRef.current(); };
-  }, [bleNamePrefix, connectorUrl, deviceWsUrl, locale]);
+  }, [bleServiceUuid, connectorUrl, deviceWsUrl, locale]);
 
   return <div className="remote-connect-card" hidden={hidden}><div className="device-visual"><span className="device-body"><span className="device-body-logo">V○</span></span><span className="connection-ring"/></div><div><span className="status-pill status-warning">{locale === 'zh-CN' ? '当前环境无法直接使用蓝牙' : 'Bluetooth unavailable in this environment'}</span><h3>{locale === 'zh-CN' ? '已打开安全设备绑定页' : 'Secure device binding page opened'}</h3><p className="remote-connect-reason"><strong>{locale === 'zh-CN' ? '为什么需要打开新页面？' : 'Why is a new page required?'}</strong>{bluetoothUnavailableReason}</p><p>{locale === 'zh-CN' ? 'Platform 将通过一次性内存通道处理授权，设备绑定凭证不会发送到公网服务；网络配置仅是绑定流程中的可选步骤。' : 'Platform uses a one-time in-memory channel for authorization. The device binding grant is never sent to the public service; network setup is only one optional step in the binding flow.'}</p><p className="hint">{status}</p><Button icon="provision" onClick={() => reopenRef.current()}>{locale === 'zh-CN' ? '重新打开配对页' : 'Reopen pairing page'}</Button></div></div>;
 }

@@ -11,7 +11,10 @@ export function migrate(config: ServerConfig): void {
       if (!columns.some((candidate) => candidate.name === column)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     };
     addColumn('server_settings', 'master_key_version', 'INTEGER NOT NULL DEFAULT 1');
-    addColumn('server_settings', 'ble_name_prefix', "TEXT NOT NULL DEFAULT 'CAPSO-'");
+    for (const table of ['server_settings', 'binding_intents']) {
+      const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      if (columns.some((column) => column.name === 'ble_name_prefix')) database.exec(`ALTER TABLE ${table} DROP COLUMN ble_name_prefix`);
+    }
     addColumn('server_settings', 'storage_max_bytes', 'INTEGER');
     addColumn('server_settings', 'storage_warning_ratio', 'REAL');
     addColumn('server_settings', 'storage_stop_ratio', 'REAL');

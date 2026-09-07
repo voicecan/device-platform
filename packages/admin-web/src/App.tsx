@@ -77,7 +77,6 @@ function navIcon(view: View): Parameters<typeof Icon>[0]['name'] {
   if (view === 'storage') return 'storage';
   if (view === 'audit') return 'audit';
   if (view === 'provision') return 'provision';
-  if (view === 'device-settings') return 'provision';
   return 'transfer';
 }
 
@@ -265,7 +264,7 @@ export function App() {
   return <LocaleContext.Provider value={locale}>{mode === 'ready' ? <div className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? 'sidebar-open' : ''}`}>
       <div className="brand"><span className="brand-mark">V<span>○</span></span><div><strong>Voicecan</strong><small>{t('Device platform')}</small></div><button type="button" className="sidebar-close" aria-label={t('Close navigation')} onClick={() => setMobileNavOpen(false)}><Icon name="close"/></button></div>
-      <nav className="side-nav" aria-label={t('Main navigation')}>{navGroups.map((group) => <section key={group.label}><p>{t(group.label)}</p>{group.items.filter((item) => !['device-settings', 'storage'].includes(item) || user?.role === 'system_admin').map((item) => <button type="button" key={item} className={view === item ? 'active' : undefined} aria-current={view === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{view === item ? <i/> : null}</button>)}</section>)}</nav>
+      <nav className="side-nav" aria-label={t('Main navigation')}>{navGroups.map((group) => <section key={group.label}><p>{t(group.label)}</p>{group.items.filter((item) => !['storage'].includes(item) || user?.role === 'system_admin').map((item) => <button type="button" key={item} className={view === item ? 'active' : undefined} aria-current={view === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{view === item ? <i/> : null}</button>)}</section>)}</nav>
       <div className="sidebar-footer"><div className="server-mini"><span className={`health-dot health-${health}`}/><div><strong>{t('Device Server')}</strong><small>{t(health)}</small></div></div><button type="button" onClick={() => void logout()}><Icon name="logout"/><span>{t('Sign out')}</span></button></div>
     </aside>
     {mobileNavOpen ? <button type="button" aria-label={t('Close navigation')} className="nav-scrim" onClick={() => setMobileNavOpen(false)}/> : null}
@@ -285,7 +284,7 @@ export function App() {
 }
 
 function pageEyebrow(view: View): string {
-  if (['devices', 'files', 'provision', 'release', 'device-settings'].includes(view)) return 'Device operations';
+  if (['devices', 'files', 'provision', 'release'].includes(view)) return 'Device operations';
   if (['groups', 'users'].includes(view)) return 'Organization';
   if (['open-platform', 'open-platform-overview', 'permission-catalog', 'oauth-clients', 'call-logs', 'download-grants', 'security-alerts'].includes(view)) return 'Open platform';
   if (['events', 'inspector', 'storage', 'audit'].includes(view)) return 'Operations and diagnostics';
@@ -299,7 +298,6 @@ function pageDescription(view: View): string {
     files: 'Track recording discovery, storage and synchronization without exposing recording content.',
     provision: 'Bind a nearby Voicecan device to this platform through a short-lived, origin-bound flow. Network setup is one step when needed.',
     release: 'Release control safely while preserving recordings and audit history.',
-    'device-settings': 'Manage server-wide discovery rules used when administrators connect nearby devices.',
     groups: 'Use user groups to assign devices and recordings to a shared access boundary, then control which members can manage or view them.',
     users: 'Create local accounts and control administrative access.',
     'open-platform': 'Manage Applications, shared REST/MCP permissions, credentials, OAuth clients, Webhooks, download delivery policies, usage and audit.',

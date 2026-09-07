@@ -135,7 +135,8 @@ export async function migratePostgres(connectionString: string): Promise<void> {
           ADD COLUMN IF NOT EXISTS source_firmware_version TEXT,
           ADD COLUMN IF NOT EXISTS resource_version BIGINT NOT NULL DEFAULT 1,
           ADD COLUMN IF NOT EXISTS force_relay BIGINT NOT NULL DEFAULT 0 CHECK (force_relay IN (0,1))`);
-        await client.query("ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ble_name_prefix TEXT NOT NULL DEFAULT 'CAPSO-'");
+        await client.query('ALTER TABLE server_settings DROP COLUMN IF EXISTS ble_name_prefix');
+        await client.query('ALTER TABLE binding_intents DROP COLUMN IF EXISTS ble_name_prefix');
         await client.query('ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS storage_max_bytes BIGINT, ADD COLUMN IF NOT EXISTS storage_warning_ratio REAL, ADD COLUMN IF NOT EXISTS storage_stop_ratio REAL, ADD COLUMN IF NOT EXISTS storage_updated_at TEXT, ADD COLUMN IF NOT EXISTS storage_updated_by TEXT');
         await client.query('ALTER TABLE devices ADD COLUMN IF NOT EXISTS capability_version TEXT, ADD COLUMN IF NOT EXISTS capability_changed_at TEXT');
         await client.query('ALTER TABLE commands ADD COLUMN IF NOT EXISTS result_code TEXT, ADD COLUMN IF NOT EXISTS dispatched_at TEXT, ADD COLUMN IF NOT EXISTS resource_version BIGINT NOT NULL DEFAULT 1');

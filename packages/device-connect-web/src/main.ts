@@ -113,7 +113,7 @@ async function initialize(init: DeviceConnectInit, port: MessagePort): Promise<v
     locale: init.locale,
     coreModuleUrl: new URL('semantic_core.js', globalThis.location.href).href,
     compact: true,
-    bleNamePrefix: typeof init.bleNamePrefix === 'string' && init.bleNamePrefix ? init.bleNamePrefix : 'CAPSO-',
+    bleServiceUuid: init.bleServiceUuid ?? '00001a10-0000-1000-8000-00805f9b34fb',
     onProvisioned: (result) => {
       deviceId = result.deviceId;
       void remote.request('complete', { sessionId: init.sessionId, state: init.state, result: 'completed', provisioningSessionId, deviceId }, 5_000).then(() => sendFallback('completed'), () => sendFallback('completed'));

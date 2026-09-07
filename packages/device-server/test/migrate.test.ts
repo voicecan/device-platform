@@ -35,7 +35,7 @@ test('migration upgrades the v1 delivery ledger and remains idempotent', async (
     const version = current.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number };
     assert.equal(version.version, SCHEMA_VERSION);
     const settingColumns = current.prepare('PRAGMA table_info(server_settings)').all() as Array<{ name: string }>;
-    assert.ok(settingColumns.some((column) => column.name === 'ble_name_prefix'));
+    assert.ok(!settingColumns.some((column) => column.name === 'ble_name_prefix'));
     for (const name of ['storage_max_bytes', 'storage_warning_ratio', 'storage_stop_ratio', 'storage_updated_at', 'storage_updated_by']) {
       assert.ok(settingColumns.some((column) => column.name === name), `server_settings.${name} must be migrated`);
     }

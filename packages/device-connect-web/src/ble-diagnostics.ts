@@ -1,3 +1,4 @@
+declare const __VOICECAN_BLE_SERVICE_UUID__: string;
 const SERVICE_UUID = '00001a10-0000-1000-8000-00805f9b34fb';
 const WRITE_UUID = '00002dd1-0000-1000-8000-00805f9b34fb';
 const NOTIFY_UUID = '00002dd0-0000-1000-8000-00805f9b34fb';
@@ -24,7 +25,7 @@ type DiagnosticDevice = EventTarget & {
   gatt?: DiagnosticGattServer;
 };
 type BluetoothWithDevices = {
-  requestDevice(options: { filters: Array<{ namePrefix: string }>; optionalServices: string[] }): Promise<DiagnosticDevice>;
+  requestDevice(options: { filters: Array<{ services: string[] }>; optionalServices: string[] }): Promise<DiagnosticDevice>;
 };
 type NavigatorWithBluetooth = Navigator & { bluetooth?: BluetoothWithDevices };
 
@@ -122,7 +123,7 @@ async function run(mode: DiagnosticMode): Promise<void> {
   try {
     if (!bluetooth) throw new Error('WEB_BLUETOOTH_UNAVAILABLE');
     await disconnect();
-    activeDevice = await bluetooth.requestDevice({ filters: [{ namePrefix: 'CAPSO-' }], optionalServices: [SERVICE_UUID] });
+    activeDevice = await bluetooth.requestDevice({ filters: [{ services: [__VOICECAN_BLE_SERVICE_UUID__] }], optionalServices: [SERVICE_UUID] });
     writeLog('device-selected', { runId, mode, name: activeDevice.name ?? 'unknown', id: activeDevice.id, connected: activeDevice.gatt?.connected ?? false });
 
     const scanDelayMs = mode === 'legacy' ? 0 : 800;

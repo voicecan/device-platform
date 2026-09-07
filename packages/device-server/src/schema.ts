@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 export const schemaSql = `
 PRAGMA journal_mode = WAL;
@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS server_settings (
   setup_token_expires_at TEXT,
   setup_completed_at TEXT,
   master_key_version INTEGER NOT NULL DEFAULT 1,
-  ble_name_prefix TEXT NOT NULL DEFAULT 'CAPSO-',
   storage_max_bytes INTEGER,
   storage_warning_ratio REAL,
   storage_stop_ratio REAL,
@@ -286,7 +285,6 @@ CREATE TABLE IF NOT EXISTS binding_intents (
   idempotency_key TEXT,
   expected_sn TEXT,
   display_name TEXT,
-  ble_name_prefix TEXT NOT NULL,
   resolved_device_ws_url TEXT NOT NULL,
   network_mode TEXT NOT NULL CHECK (network_mode IN ('existing','ask')),
   locale TEXT NOT NULL CHECK (locale IN ('en','zh-CN')),

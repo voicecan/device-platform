@@ -117,3 +117,5 @@ npm install @voicecan/contracts @voicecan/server-client @voicecan/connector-runt
 - [安全策略](SECURITY.md)
 - [许可证](LICENSE)
 - [第三方声明](NOTICE)
+
+设备发现按广播 Service UUID 过滤，不依赖蓝牙名称。启动服务时可设置 `VOICECAN_BLE_SERVICE_UUID`，默认值为 `00001a10-0000-1000-8000-00805f9b34fb`；支持 16/32 位短 UUID 和完整 128 位 UUID，修改后重启服务生效。广播 UUID 与 GATT 连接 UUID 分开处理。名称前缀配置页面及写入接口已移除，升级现有数据库前请显式运行 `npm run migrate`。

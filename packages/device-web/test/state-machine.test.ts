@@ -2,6 +2,26 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DeviceSdkError, VoicecanDeviceClient, WebBluetoothTransportFactory } from '../src/index.js';
 
+test('discovery uses the advertised UUID independently of device names and the GATT service', async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  let options: unknown;
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { bluetooth: {
+    requestDevice: async (value: unknown) => { options = value; return Object.assign(new EventTarget(), { id: 'unnamed-device' }); },
+  } } });
+  try {
+    for (const advertisedServiceUuid of [undefined, '12345678-1234-1234-1234-123456789abc']) {
+      const serviceUuid = '00001a10-0000-1000-8000-00805f9b34fb';
+      const factory = new WebBluetoothTransportFactory({ scanToConnectDelayMs: 0, serviceUuid, ...(advertisedServiceUuid ? { advertisedServiceUuid } : {}), writeCharacteristicUuid: 0x2dd1, notifyCharacteristicUuid: 0x2dd0 });
+      // An unnamed matching device reaches GATT validation instead of name filtering.
+      await assert.rejects(factory.requestDevice(), { code: 'GATT_UNAVAILABLE' });
+      assert.deepEqual(options, { filters: [{ services: [advertisedServiceUuid ?? serviceUuid] }], optionalServices: [serviceUuid] });
+    }
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+});
+
 test('unsupported transport fails before selection', async () => {
   const client = new VoicecanDeviceClient({
     provisioningToken: 'public',

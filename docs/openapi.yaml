@@ -197,9 +197,19 @@ components:
     DeviceAccessSettings:
       type: object
       additionalProperties: false
-      required: [ble_name_prefix]
+      required: [ble_service_uuid, preferred_device_ws_url, device_ws_urls]
       properties:
-        ble_name_prefix: { type: string, minLength: 1, maxLength: 24 }
+        ble_service_uuid: { type: string, format: uuid, description: Advertised BLE Service UUID configured at server startup. }
+        preferred_device_ws_url: { type: string, format: uri }
+        device_ws_urls:
+          type: array
+          items:
+            type: object
+            required: [url, preferred, host]
+            properties:
+              url: { type: string, format: uri }
+              preferred: { type: boolean }
+              host: { type: string }
     TransferOutGrant:
       type: object
       additionalProperties: false
@@ -504,19 +514,12 @@ paths:
       responses: { '200': { description: Refreshed CSRF token and same-origin cookie }, '401': { description: Session expired } }
   /settings/device-access:
     get:
-      summary: Read the server-wide nearby-device discovery settings
+      summary: Read the startup BLE Service UUID and available device WebSocket addresses
       security: [{ sessionCookie: [] }]
       responses:
         '200':
           description: Device access settings
           content: { application/json: { schema: { $ref: '#/components/schemas/DeviceAccessSettings' } } }
-    patch:
-      summary: Update nearby-device discovery settings as System Admin
-      security: [{ sessionCookie: [] }]
-      requestBody:
-        required: true
-        content: { application/json: { schema: { $ref: '#/components/schemas/DeviceAccessSettings' } } }
-      responses: { '200': { description: Updated }, '400': { description: Invalid BLE name prefix }, '403': { description: System Admin required } }
   /auth/change-password:
     post: { summary: Change current password and revoke sessions, security: [{ sessionCookie: [] }], responses: { '200': { description: Changed } } }
   /users:

@@ -43,9 +43,9 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(ui, /aria-pressed=\{value === candidate\.url\}/);
   assert.match(workspaces, /Use an address reachable from the device network/);
   assert.doesNotMatch(workspaces, /placeholder="ws:\/\/192\.168\.1\.100/);
-  assert.match(implementation, /Device access settings/);
-  assert.match(implementation, /ble-name-prefix/);
-  assert.match(implementation, /save-device-access-settings/);
+  assert.doesNotMatch(implementation, /Device access settings/);
+  assert.doesNotMatch(implementation, /ble-name-prefix/);
+  assert.doesNotMatch(implementation, /save-device-access-settings/);
   assert.match(implementation, /settings\/device-access/);
   assert.match(implementation, /Runtime capacity policy/);
   assert.match(implementation, /save-storage-settings/);
@@ -65,7 +65,7 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(deviceManagement, /current && !items\.some/);
   assert.match(deviceIntegration, /Voicecan Provisioning/);
   assert.match(deviceIntegration, /compact: true/);
-  assert.match(deviceIntegration, /bleNamePrefix/);
+  assert.doesNotMatch(deviceIntegration, /bleNamePrefix/);
   assert.doesNotMatch(workspaces, /FlowHeader eyebrow=\{t\('Device onboarding'\)\}/);
   assert.match(deviceIntegration, /new MessageChannel\(\)/);
   assert.match(deviceIntegration, /globalThis\.open\('about:blank'[^]*await createGrant\(\)/);
