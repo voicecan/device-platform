@@ -3,6 +3,23 @@ export type Locale = 'zh-CN' | 'en';
 const localeKey = 'voicecan.locale';
 
 const zhCN: Readonly<Record<string, string>> = {
+  "Continue in native app": "使用原生 App 继续",
+  "Preview integration: requires an app configured to trust this platform. The current discovery app cannot execute this task yet.": "接续接口预览：需要已配置并信任本平台的 App。当前设备发现版 App 尚不能执行此任务。",
+  "Open the link on your phone, then compare its verification code here before approving. The link expires in five minutes.": "在手机打开链接，核对手机与此处显示的校验码后再授权。链接五分钟内有效。",
+  "Create app link": "创建 App 链接",
+  "Open app link": "打开 App 链接",
+  "Copy app link": "复制 App 链接",
+  "App link expired. Create a new link.": "App 链接已过期，请重新创建。",
+  "This task is assigned to the native app. Completion is confirmed by the device server.": "本任务已交由原生 App 执行，完成状态由设备服务器确认。",
+  "Verification code": "校验码",
+  "Active executor": "当前执行端",
+  "Reauthorize this app": "重新授权此 App",
+  "Approve this app": "授权此 App",
+  "Prepare native app task": "准备原生 App 任务",
+  "exchanged": "待网页授权",
+  "approved": "已授权",
+  "cancelled": "已取消",
+
   'Overview': '概览',
   'Bind device': '绑定设备',
   'Transfer device': '设备迁移',

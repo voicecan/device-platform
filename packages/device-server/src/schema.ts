@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 export const schemaSql = `
 PRAGMA journal_mode = WAL;
@@ -304,6 +304,46 @@ CREATE TABLE IF NOT EXISTS binding_intents (
 );
 CREATE INDEX IF NOT EXISTS binding_intents_status_idx ON binding_intents(status,expires_at);
 CREATE INDEX IF NOT EXISTS binding_intents_provisioning_idx ON binding_intents(provisioning_session_id);
+
+-- Native execution is a separate authorization boundary, never a browser Cookie substitute.
+CREATE TABLE IF NOT EXISTS binding_executors (
+  binding_intent_id TEXT PRIMARY KEY REFERENCES binding_intents(id),
+  handoff_id TEXT,
+  execution_epoch INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS native_handoffs (
+  id TEXT PRIMARY KEY,
+  binding_intent_id TEXT NOT NULL REFERENCES binding_intents(id),
+  ticket_hash TEXT NOT NULL UNIQUE,
+  ticket_expires_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  client_public_key TEXT,
+  exchange_request_id TEXT,
+  exchange_hash TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending','exchanged','approved','cancelled')),
+  execution_epoch INTEGER,
+  lease_expires_at TEXT,
+  provisioning_session_id TEXT REFERENCES provisioning_sessions(id),
+  approved_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS native_handoffs_intent_idx ON native_handoffs(binding_intent_id,created_at);
+CREATE TABLE IF NOT EXISTS native_request_nonces (
+  handoff_id TEXT NOT NULL REFERENCES native_handoffs(id),
+  nonce TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY(handoff_id,nonce)
+);
+CREATE TABLE IF NOT EXISTS native_request_keys (
+  handoff_id TEXT NOT NULL REFERENCES native_handoffs(id),
+  request_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(handoff_id,request_id)
+);
 
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,

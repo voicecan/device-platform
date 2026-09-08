@@ -27,6 +27,7 @@ import { registerOAuthMcpRoutes } from './oauth-mcp.js';
 import { BlockList, isIP } from 'node:net';
 import { mapPublicCommand, mapPublicRecording, recordingEventFacts, reviewedRecordingMedia } from './public-contract.js';
 import { createServerLogger } from './logging.js';
+import { NativeHandoffError, registerNativeHandoffRoutes } from './native-handoff.js';
 
 type Row = Record<string, unknown>;
 type StoragePolicyRow = {
@@ -345,9 +346,10 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
   app.addHook('onClose', async () => { dispatcher.stop(); reconciler?.stop(); metrics.close(); await db.close(); });
   app.setErrorHandler(async (error, request, reply) => {
+    const stateConflict = error instanceof Error && error.message.startsWith('DATABASE_CAS_FAILED') ? new HttpError(409, 'PROVISIONING_STATE_CONFLICT', 'Provisioning state changed; observe before retrying') : null;
     const passwordPolicy = error instanceof Error && error.message === 'PASSWORD_POLICY_FAILED' ? new HttpError(400, 'PASSWORD_POLICY_FAILED', 'Password must contain between 12 and 256 characters') : null;
     const migrationRequired = error instanceof Error && /no such column|has no column named|column .* does not exist/i.test(error.message) ? new HttpError(503, 'SCHEMA_MIGRATION_REQUIRED', 'The database schema is out of date. Stop the server, run npm run migrate, then start it again.') : null;
-    const known = error instanceof HttpError || error instanceof OpenPlatformError ? error : error instanceof AccessDeniedError ? new HttpError(404, 'NOT_FOUND', 'Resource not found') : passwordPolicy ?? migrationRequired;
+    const known = error instanceof HttpError || error instanceof OpenPlatformError || error instanceof NativeHandoffError ? error : error instanceof AccessDeniedError ? new HttpError(404, 'NOT_FOUND', 'Resource not found') : passwordPolicy ?? migrationRequired ?? stateConflict;
     const status = known?.statusCode ?? (typeof (error as { statusCode?: unknown }).statusCode === 'number' ? (error as { statusCode: number }).statusCode : 500);
     const code = known?.code ?? (status < 500 ? 'INVALID_REQUEST' : 'INTERNAL_ERROR');
     const safeMessage = status >= 500 && !config.simulatorEnabled ? 'Internal server error' : (known?.message ?? (error instanceof Error ? error.message : 'Invalid request'));
@@ -884,22 +886,34 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const result = await db.run('UPDATE group_api_tokens SET revoked_at=? WHERE id=? AND group_id=? AND revoked_at IS NULL', [now(), String(params.tokenId), groupId]); if (!result.changes) throw new AccessDeniedError(); await audit(request, context, 'group_token.revoked', 'group_api_token', String(params.tokenId), groupId); return success(reply, {});
   });
 
+  const webProvisioningFence = (sessionId: string): SqlStatement => ({
+    sql: `UPDATE provisioning_sessions SET updated_at=updated_at WHERE id=? AND NOT EXISTS(
+      SELECT 1 FROM binding_intents b JOIN binding_executors e ON e.binding_intent_id=b.id
+      WHERE b.provisioning_session_id=provisioning_sessions.id AND e.handoff_id IS NOT NULL)`,
+    params: [sessionId], expectChanges: 1,
+  });
+  const assertWebExecutor = async (intentId: string) => {
+    const executor = await db.get<Row>('SELECT handoff_id FROM binding_executors WHERE binding_intent_id=?', [intentId]);
+    if (executor?.handoff_id) throw new HttpError(409, 'NATIVE_EXECUTOR_ACTIVE', 'This binding is assigned to a native executor');
+  };
+
   const bindingIntentState = async (intent: Row): Promise<Row> => {
     let status = String(intent.status); let deviceId = intent.device_id === null || intent.device_id === undefined ? null : String(intent.device_id); let failureCode = intent.failure_code === null || intent.failure_code === undefined ? null : String(intent.failure_code);
     if (String(intent.expires_at) <= now() && !['completed', 'canceled'].includes(status)) status = 'expired';
+    let observedSessionStatus: string | null = null;
     if (intent.provisioning_session_id) {
       const session = await db.get<Row>('SELECT status,device_id,failure_code,completed_at FROM provisioning_sessions WHERE id=?', [intent.provisioning_session_id]);
       if (session) {
         deviceId = session.device_id === null || session.device_id === undefined ? deviceId : String(session.device_id);
         failureCode = session.failure_code === null || session.failure_code === undefined ? failureCode : String(session.failure_code);
-        const provisioningStatus = String(session.status);
+        const provisioningStatus = String(session.status); observedSessionStatus = provisioningStatus;
         if (provisioningStatus === 'completed') status = 'completed';
         else if (provisioningStatus === 'configured' || provisioningStatus === 'online') status = 'configured';
         else if (['reserved', 'ble_authenticated'].includes(provisioningStatus)) status = 'claimed';
         else if (provisioningStatus === 'failed') status = 'failed';
       }
     }
-    if (status !== intent.status || deviceId !== intent.device_id || failureCode !== intent.failure_code) await db.run('UPDATE binding_intents SET status=?,device_id=?,failure_code=?,completed_at=CASE WHEN ?=\'completed\' THEN COALESCE(completed_at,?) ELSE completed_at END,updated_at=? WHERE id=?', [status, deviceId, failureCode, status, now(), now(), intent.id]);
+    if (status !== intent.status || deviceId !== intent.device_id || failureCode !== intent.failure_code) await db.run('UPDATE binding_intents SET status=?,device_id=?,failure_code=?,completed_at=CASE WHEN ?=\'completed\' THEN COALESCE(completed_at,?) ELSE completed_at END,updated_at=? WHERE id=? AND provisioning_session_id IS NOT DISTINCT FROM ? AND (status NOT IN (\'completed\',\'canceled\') OR ?=\'completed\') AND (CAST(? AS TEXT) IS NULL OR EXISTS(SELECT 1 FROM provisioning_sessions p WHERE p.id=binding_intents.provisioning_session_id AND p.status=?))', [status, deviceId, failureCode, status, now(), now(), intent.id, intent.provisioning_session_id, status, observedSessionStatus, observedSessionStatus]);
     return { id: intent.id, group_id: intent.group_id, expected_sn: intent.expected_sn, display_name: intent.display_name, ble_service_uuid: config.bleServiceUuid, device_ws_url: intent.resolved_device_ws_url, network_mode: intent.network_mode, locale: intent.locale, provisioning_session_id: intent.provisioning_session_id, device_id: deviceId, status, failure_code: failureCode, expires_at: intent.expires_at, completed_at: status === 'completed' ? (intent.completed_at ?? now()) : intent.completed_at };
   };
 
@@ -949,8 +963,9 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.post('/api/v1/binding-intents/:id/grant', async (request, reply) => {
     const intentId = String((request.params as Row).id); const intent = await requireBrowserIntent(request, intentId); const state = await bindingIntentState(intent);
     if (!['user_action', 'failed', 'ble_selected', 'claimed'].includes(String(state.status)) || String(intent.expires_at) <= now()) throw new HttpError(409, 'BINDING_NOT_CLAIMABLE', 'Binding intent is not ready to claim');
+    await assertWebExecutor(intentId);
     const sessionId = id('provision'); const raw = `vcd_prov_${opaqueToken()}`; const timestamp = now();
-    const statements: SqlStatement[] = [];
+    const statements: SqlStatement[] = [{ sql: 'UPDATE binding_intents SET updated_at=updated_at WHERE id=? AND NOT EXISTS(SELECT 1 FROM binding_executors e WHERE e.binding_intent_id=binding_intents.id AND e.handoff_id IS NOT NULL)', params: [intentId], expectChanges: 1 }];
     if (intent.provisioning_session_id) statements.push({ sql: "UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code='SUPERSEDED_BY_BINDING_RESUME',updated_at=? WHERE id=? AND status IN ('pending','reserved','ble_authenticated','failed')", params: [timestamp, timestamp, intent.provisioning_session_id] });
     statements.push(
       { sql: "INSERT INTO provisioning_sessions(id,public_token_hash,allowed_origin,expected_sn,group_id,created_by,expires_at,status,updated_at,created_at) VALUES(?,?,?,?,?,?,?,'pending',?,?)", params: [sessionId, tokenHash(raw), intent.allowed_origin, intent.expected_sn, intent.group_id, intent.created_by, intent.expires_at, timestamp, timestamp], expectChanges: 1 },
@@ -975,12 +990,8 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.get('/api/v1/provisioning-sessions/:id', async (request, reply) => {
     const context = await resolveAccess(request); const sessionId = String((request.params as Row).id); const groupId = context.isSystemAdmin ? null : requireGroup(context); const row = await db.get<Row>(`SELECT id,status,device_id,expires_at,consumed_at FROM provisioning_sessions WHERE id=? ${groupId ? 'AND group_id=?' : ''}`, groupId ? [sessionId, groupId] : [sessionId]); if (!row) throw new AccessDeniedError(); return success(reply, row);
   });
-  app.post('/api/v1/provisioning-sessions/claim', async (request, reply) => {
-    const body = bodyOf(request); const rawGrant = requiredString(body, 'provisioning_token'); const manufacturer = requiredString(body, 'manufacturer', 64); const sn = requiredString(body, 'serial_number', 128); const scannedBluetoothName = optionalString(body, 'bluetooth_name', 248);
-    let deviceWsUrl: string;
-    try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
-    catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
-    const session = await db.get<{ id: string; expected_sn: string | null; group_id: string; allowed_origin: string; expires_at: string; status: string; consumed_at: string | null }>("SELECT id,expected_sn,group_id,allowed_origin,expires_at,status,consumed_at FROM provisioning_sessions WHERE public_token_hash=? AND status IN ('pending','failed') AND expires_at>?", [tokenHash(rawGrant), now()]); if (!session || request.headers.origin !== session.allowed_origin || (session.expected_sn && session.expected_sn !== sn)) throw new HttpError(403, 'PROVISIONING_TOKEN_INVALID', 'Provisioning session is invalid');
+  const claimProvisioning = async (session: Row, body: Row, deviceWsUrl: string, fence: SqlStatement[] = []): Promise<Row> => {
+    const manufacturer = requiredString(body, 'manufacturer', 64); const sn = requiredString(body, 'serial_number', 128); const scannedBluetoothName = optionalString(body, 'bluetooth_name', 248);
     const bindingIntent = await db.get<{ display_name: string | null }>('SELECT display_name FROM binding_intents WHERE provisioning_session_id=?', [session.id]);
     const defaultDisplayName = bindingIntent?.display_name ?? (scannedBluetoothName ? scannedBluetoothName.slice(0, 80) : null);
     const existing = await db.get<{ id: string; display_name: string | null; group_id: string; claim_status: string; credential_id: string | null; token_ciphertext: string | null; key_version: number | null }>(`SELECT d.id,d.display_name,d.group_id,d.claim_status,c.id AS credential_id,c.token_ciphertext,c.key_version
@@ -988,37 +999,69 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       WHERE d.manufacturer=? AND d.sn=? AND d.deleted_at IS NULL ORDER BY c.credential_epoch DESC LIMIT 1`, [manufacturer, sn]);
     if (existing) {
       if (existing.group_id !== session.group_id) throw new HttpError(409, 'DEVICE_ALREADY_CLAIMED', 'Device is already claimed');
-      if (!existing.display_name && defaultDisplayName) {
-        await db.run('UPDATE devices SET display_name=?,updated_at=? WHERE id=? AND display_name IS NULL', [defaultDisplayName, now(), existing.id]);
-        existing.display_name = defaultDisplayName;
+      if (existing.claim_status !== 'reserved') {
+        if (!existing.display_name && defaultDisplayName) await db.batch([...fence, { sql: 'UPDATE devices SET display_name=?,updated_at=? WHERE id=? AND display_name IS NULL', params: [defaultDisplayName, now(), existing.id] }]);
+        throw new HttpError(409, 'DEVICE_ALREADY_CLAIMED', 'Device is already claimed', { device_id: existing.id });
       }
-      if (existing.claim_status !== 'reserved') throw new HttpError(409, 'DEVICE_ALREADY_CLAIMED', 'Device is already claimed', { device_id: existing.id });
       if (!existing.credential_id || !existing.token_ciphertext || existing.key_version === null) throw new HttpError(409, 'DEVICE_RECOVERY_UNAVAILABLE', 'The reserved device has no recoverable credential and must be reset before provisioning');
       const continuationToken = `vcd_continue_${opaqueToken()}`; const timestamp = now();
       const rawDeviceToken = decryptSecret(existing.token_ciphertext, config.masterKeys.get(existing.key_version) ?? config.masterKey, `${existing.id}:${existing.credential_id}`);
       try {
-        const recovered = await db.batch([
+        await db.batch([
+          ...fence,
+          { sql: `UPDATE devices SET updated_at=updated_at WHERE id=? AND claim_status='reserved' AND NOT EXISTS(
+            SELECT 1 FROM provisioning_sessions p JOIN native_handoffs h ON h.provisioning_session_id=p.id
+            JOIN binding_executors e ON e.handoff_id=h.id AND e.execution_epoch=h.execution_epoch
+            WHERE p.device_id=devices.id AND p.id<>? AND h.status='approved' AND h.expires_at>?)`, params: [existing.id, session.id, timestamp], expectChanges: 1 },
           { sql: "UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code='SUPERSEDED_BY_RECOVERY',updated_at=? WHERE device_id=? AND id<>? AND status IN ('reserved','ble_authenticated','configured','online')", params: [timestamp, timestamp, existing.id, session.id] },
-          { sql: "UPDATE provisioning_sessions SET status='reserved',consumed_at=COALESCE(consumed_at,?),device_id=?,continuation_token_hash=?,failed_at=NULL,failure_code=NULL,completed_at=NULL,updated_at=? WHERE id=? AND status IN ('pending','failed') AND expires_at>?", params: [timestamp, existing.id, tokenHash(continuationToken), timestamp, session.id, timestamp] },
-          { sql: "UPDATE device_credentials SET expires_at=? WHERE id=? AND device_id=? AND status='temporary' AND revoked_at IS NULL", params: [session.expires_at, existing.credential_id, existing.id] },
+          { sql: "UPDATE provisioning_sessions SET status='reserved',consumed_at=COALESCE(consumed_at,?),device_id=?,continuation_token_hash=?,failed_at=NULL,failure_code=NULL,completed_at=NULL,updated_at=? WHERE id=? AND status IN ('pending','failed') AND expires_at>?", params: [timestamp, existing.id, tokenHash(continuationToken), timestamp, session.id, timestamp], expectChanges: 1 },
+          { sql: "UPDATE device_credentials SET expires_at=? WHERE id=? AND device_id=? AND status='temporary' AND revoked_at IS NULL", params: [session.expires_at, existing.credential_id, existing.id], expectChanges: 1 },
+          { sql: 'UPDATE devices SET display_name=COALESCE(display_name,?),updated_at=? WHERE id=?', params: [defaultDisplayName, timestamp, existing.id], expectChanges: 1 },
         ]);
-        if (recovered[1]?.changes !== 1 || recovered[2]?.changes !== 1) throw new HttpError(409, 'PROVISIONING_RECOVERY_CONFLICT', 'Device recovery was claimed concurrently');
-        request.log.info({ provisioning_session_id: session.id, device_id: existing.id, device_ws_url: deviceWsUrl }, 'temporary device credential recovered for provisioning retry');
-        reply.header('Cache-Control', 'no-store');
-        return success(reply, { provisioning_session_id: session.id, continuation_token: continuationToken, device_id: existing.id, display_name: existing.display_name ?? defaultDisplayName, device_token: encodeDeviceToken(rawDeviceToken), wss_url: deviceWsUrl, recovered: true }, 201);
+        return { provisioning_session_id: session.id, continuation_token: continuationToken, device_id: existing.id, display_name: existing.display_name ?? defaultDisplayName, device_token: encodeDeviceToken(rawDeviceToken), wss_url: deviceWsUrl, recovered: true };
       } finally { rawDeviceToken.fill(0); }
     }
     const deviceId = id('dev'); const credentialId = id('credential'); const rawDeviceToken = randomBytes(32); const continuationToken = `vcd_continue_${opaqueToken()}`; const timestamp = now();
-    const claimed = await db.batch([
-      { sql: "UPDATE provisioning_sessions SET status='reserved',consumed_at=?,device_id=?,continuation_token_hash=?,updated_at=? WHERE id=? AND status='pending' AND consumed_at IS NULL", params: [timestamp, deviceId, tokenHash(continuationToken), timestamp, session.id] },
-      { sql: "INSERT INTO devices(id,display_name,manufacturer,sn,model,firmware_version,group_id,claim_status,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'reserved',?,? WHERE EXISTS(SELECT 1 FROM provisioning_sessions WHERE id=? AND device_id=? AND consumed_at=?)", params: [deviceId, defaultDisplayName, manufacturer, sn, optionalString(body, 'model', 64), optionalString(body, 'firmware_version', 64), session.group_id, timestamp, timestamp, session.id, deviceId, timestamp] },
-      { sql: "INSERT INTO device_credentials(id,device_id,credential_epoch,token_verifier,token_ciphertext,key_version,status,expires_at,created_at) SELECT ?,?,?,?,?,?,'temporary',?,? WHERE EXISTS(SELECT 1 FROM devices WHERE id=? AND claim_status='reserved')", params: [credentialId, deviceId, 1, deviceTokenVerifier(rawDeviceToken, config.groupTokenPepper), encryptSecret(rawDeviceToken, config.masterKey, `${deviceId}:${credentialId}`), config.masterKeyVersion, session.expires_at, timestamp, deviceId] },
+    try {
+    await db.batch([
+      ...fence,
+      { sql: "UPDATE provisioning_sessions SET status='reserved',consumed_at=?,device_id=?,continuation_token_hash=?,updated_at=? WHERE id=? AND status='pending' AND consumed_at IS NULL", params: [timestamp, deviceId, tokenHash(continuationToken), timestamp, session.id], expectChanges: 1 },
+      { sql: "INSERT INTO devices(id,display_name,manufacturer,sn,model,firmware_version,group_id,claim_status,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'reserved',?,? WHERE EXISTS(SELECT 1 FROM provisioning_sessions WHERE id=? AND device_id=? AND consumed_at=?)", params: [deviceId, defaultDisplayName, manufacturer, sn, optionalString(body, 'model', 64), optionalString(body, 'firmware_version', 64), session.group_id, timestamp, timestamp, session.id, deviceId, timestamp], expectChanges: 1 },
+      { sql: "INSERT INTO device_credentials(id,device_id,credential_epoch,token_verifier,token_ciphertext,key_version,status,expires_at,created_at) SELECT ?,?,?,?,?,?,'temporary',?,? WHERE EXISTS(SELECT 1 FROM devices WHERE id=? AND claim_status='reserved')", params: [credentialId, deviceId, 1, deviceTokenVerifier(rawDeviceToken, config.groupTokenPepper), encryptSecret(rawDeviceToken, config.masterKey, `${deviceId}:${credentialId}`), config.masterKeyVersion, session.expires_at, timestamp, deviceId], expectChanges: 1 },
     ]);
-    if (claimed[0]?.changes !== 1 || claimed[1]?.changes !== 1 || claimed[2]?.changes !== 1) throw new HttpError(409, 'PROVISIONING_ALREADY_CLAIMED', 'Provisioning session was claimed concurrently');
-    request.log.info({ provisioning_session_id: session.id, device_id: deviceId, device_ws_url: deviceWsUrl }, 'device provisioning claim issued');
-    reply.header('Cache-Control', 'no-store');
-    const encodedDeviceToken = encodeDeviceToken(rawDeviceToken); rawDeviceToken.fill(0);
-    return success(reply, { provisioning_session_id: session.id, continuation_token: continuationToken, device_id: deviceId, display_name: defaultDisplayName, device_token: encodedDeviceToken, wss_url: deviceWsUrl, recovered: false }, 201);
+    const encodedDeviceToken = encodeDeviceToken(rawDeviceToken);
+    return { provisioning_session_id: session.id, continuation_token: continuationToken, device_id: deviceId, display_name: defaultDisplayName, device_token: encodedDeviceToken, wss_url: deviceWsUrl, recovered: false };
+    } finally { rawDeviceToken.fill(0); }
+  };
+
+  registerNativeHandoffRoutes(app, {
+    db, config, claim: claimProvisioning, intentState: bindingIntentState,
+    authorizeWeb: async (request, intentId) => {
+      if (request.cookies.vc_binding && !request.cookies.vc_session && !request.headers.authorization) {
+        const intent = await requireBrowserIntent(request, intentId);
+        if (request.method !== 'GET' && request.headers.origin !== intent.allowed_origin) throw new HttpError(403, 'NATIVE_WEB_ORIGIN_REQUIRED', 'Original Web Origin required');
+        const owner = await db.get<Row>(`SELECT u.id FROM users u JOIN user_groups g ON g.id=? WHERE u.id=? AND u.disabled_at IS NULL AND g.status='active'
+          AND (u.role='system_admin' OR EXISTS(SELECT 1 FROM group_memberships m WHERE m.user_id=u.id AND m.group_id=g.id AND m.active=1 AND m.role='group_admin'))`, [intent.group_id, intent.created_by]);
+        if (!owner) throw new AccessDeniedError();
+        return { intent, actorId: String(intent.created_by) };
+      }
+      const context = await resolveAccess(request, request.method !== 'GET');
+      if (context.actorType !== 'user') throw new AccessDeniedError();
+      const intent = await db.get<Row>('SELECT * FROM binding_intents WHERE id=?', [intentId]);
+      if (!intent) throw new AccessDeniedError();
+      requireGroupAdmin(context, String(intent.group_id));
+      return { intent, actorId: context.actorId };
+    },
+  });
+
+  app.post('/api/v1/provisioning-sessions/claim', async (request, reply) => {
+    const body = bodyOf(request); const rawGrant = requiredString(body, 'provisioning_token'); const sn = requiredString(body, 'serial_number', 128);
+    let deviceWsUrl: string;
+    try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
+    catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
+    const session = await db.get<{ id: string; expected_sn: string | null; group_id: string; allowed_origin: string; expires_at: string; status: string; consumed_at: string | null }>("SELECT id,expected_sn,group_id,allowed_origin,expires_at,status,consumed_at FROM provisioning_sessions WHERE public_token_hash=? AND status IN ('pending','failed') AND expires_at>?", [tokenHash(rawGrant), now()]); if (!session || request.headers.origin !== session.allowed_origin || (session.expected_sn && session.expected_sn !== sn)) throw new HttpError(403, 'PROVISIONING_TOKEN_INVALID', 'Provisioning session is invalid');
+    const result = await claimProvisioning(session, body, deviceWsUrl, [webProvisioningFence(session.id)]);
+    reply.header('Cache-Control', 'no-store'); return success(reply, result, 201);
   });
 
   app.post('/api/v1/provisioning-sessions/:id/observe', async (request, reply) => {
@@ -1032,6 +1075,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const sessionId = String((request.params as Row).id); const body = bodyOf(request); const continuationToken = requiredString(body, 'continuation_token'); const stage = requiredString(body, 'stage', 64);
     const session = await db.get<Row>('SELECT * FROM provisioning_sessions WHERE id=? AND continuation_token_hash=?', [sessionId, tokenHash(continuationToken)]);
     if (!session || request.headers.origin !== session.allowed_origin) throw new HttpError(404, 'PROVISIONING_SESSION_NOT_FOUND', 'Provisioning session not found');
+    await db.batch([webProvisioningFence(sessionId)]);
     if (stage === 'failed') {
       const failureCode = optionalString(body, 'failure_code', 128) ?? 'PROVISIONING_CLIENT_FAILED'; const timestamp = now();
       const changed = await db.run("UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code=?,updated_at=? WHERE id=? AND status IN ('reserved','ble_authenticated','configured')", [timestamp, failureCode, timestamp, sessionId]);

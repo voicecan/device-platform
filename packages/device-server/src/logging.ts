@@ -6,6 +6,8 @@ import type { ServerConfig } from './config.js';
 
 export const LOG_REDACT_PATHS = [
   'req.headers.authorization', 'req.headers.cookie',
+  'body.ticket', 'body.launch_token', 'body.launch_url', 'body.client_public_key',
+  'req.headers.x-vc-signature', 'req.headers.x-vc-nonce',
   'body.password', 'body.current_password', 'body.new_password', 'body.setup_token',
   'body.provisioning_token', 'body.transfer_token', 'body.continuation_token',
   'body.device_token', 'body.secret', 'body.token', 'body.client_secret',

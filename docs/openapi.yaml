@@ -10,7 +10,43 @@ components:
     bindingBrowser: { type: apiKey, in: cookie, name: vc_binding }
     groupToken: { type: http, scheme: bearer }
     applicationToken: { type: http, scheme: bearer, bearerFormat: vcd_app_opaque }
+    nativeProof: { type: apiKey, in: header, name: X-VC-Signature, description: 'P-256 SHA-256 DER proof; X-VC-Timestamp and X-VC-Nonce are also required. See native-handoff.md.' }
   schemas:
+    NativeExchangeRequest:
+      type: object
+      additionalProperties: false
+      required: [handoff_id, ticket, client_public_key, request_id]
+      properties:
+        handoff_id: { type: string, maxLength: 200 }
+        ticket: { type: string, maxLength: 512 }
+        client_public_key: { type: string, description: Canonical unpadded base64url P-256 SPKI DER }
+        request_id: { type: string, maxLength: 200 }
+    NativeActionRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, execution_epoch]
+      properties:
+        request_id: { type: string, maxLength: 200 }
+        execution_epoch: { type: integer, minimum: 0 }
+    NativeClaimRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, execution_epoch, manufacturer, serial_number]
+      properties:
+        request_id: { type: string, maxLength: 200 }
+        execution_epoch: { type: integer, minimum: 0 }
+        manufacturer: { type: string, maxLength: 64 }
+        serial_number: { type: string, maxLength: 16 }
+        model: { type: string, maxLength: 64 }
+        firmware_version: { type: string, maxLength: 64 }
+    NativeProgressRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, execution_epoch, stage]
+      properties:
+        request_id: { type: string, maxLength: 200 }
+        execution_epoch: { type: integer, minimum: 0 }
+        stage: { type: string, enum: [ble_authenticated, configured] }
     Envelope:
       type: object
       required: [success, code, message, data, request_id]
@@ -1054,3 +1090,140 @@ paths:
     get: { summary: List open-platform security alerts, security: [{ sessionCookie: [] }], responses: { '200': { description: Alerts } } }
   /open-platform/security-alerts/{id}/resolve:
     post: { summary: Resolve a reviewed security alert with a reason, security: [{ sessionCookie: [] }], responses: { '200': { description: Resolved } } }
+
+  /binding-intents/{id}/native-handoffs:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: List app requests and verification codes without tickets
+      security: [{ sessionCookie: [] }, { bindingBrowser: [] }]
+      responses: { '200': { description: Executor epoch and handoffs }, '404': { description: Not found or outside group } }
+    post:
+      summary: Create five-minute app link requiring separate Web approval
+      description: Session requires CSRF; binding browser requires original Origin.
+      security: [{ sessionCookie: [] }, { bindingBrowser: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false } } } }
+      responses: { '201': { description: One-time ticket in launch_url fragment; no-store }, '403': { description: Web authorization failed }, '409': { description: Binding terminal } }
+  /native-handoffs/{id}/approve:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Approve the verified app with an execution epoch compare-and-swap
+      description: Session requires CSRF; binding browser requires original Origin. Cannot transfer an executor after credential issuance.
+      security: [{ sessionCookie: [] }, { bindingBrowser: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_execution_epoch]
+              properties:
+                expected_execution_epoch: { type: integer, minimum: 0 }
+      responses: { '200': { description: Approved context and two-minute lease; no device token }, '404': { description: Not found or outside group }, '409': { description: Stale epoch or executor already started } }
+  /native-handoffs/exchange:
+    post:
+      summary: Exchange fragment ticket bound to a temporary app public key
+      security: [{ nativeProof: [] }]
+      parameters:
+        - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
+        - { name: X-VC-Nonce, in: header, required: true, schema: { type: string, minLength: 22, maxLength: 80 } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NativeExchangeRequest' } } } }
+      responses:
+        '200': { description: Authoritative task context; no-store }
+        '201': { description: New claim with device_token and context; no browser continuation grant }
+        '400': { description: Invalid or extra request fields }
+        '401': { description: Missing or invalid proof }
+        '403': { description: Invalid ticket, Origin or target identity }
+        '409': { description: Replay, stale epoch, stage or idempotency conflict }
+        '410': { description: Expired ticket or task }
+        '429': { description: Task request limit }
+  /native-handoffs/{id}/claim:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Claim or recover the same temporary device credential
+      security: [{ nativeProof: [] }]
+      parameters:
+        - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
+        - { name: X-VC-Nonce, in: header, required: true, schema: { type: string, minLength: 22, maxLength: 80 } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NativeClaimRequest' } } } }
+      responses:
+        '200': { description: Authoritative task context; no-store }
+        '201': { description: New claim with device_token and context; no browser continuation grant }
+        '400': { description: Invalid or extra request fields }
+        '401': { description: Missing or invalid proof }
+        '403': { description: Invalid ticket, Origin or target identity }
+        '409': { description: Replay, stale epoch, stage or idempotency conflict }
+        '410': { description: Expired ticket or task }
+        '429': { description: Task request limit }
+  /native-handoffs/{id}/observe:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Read authoritative state, including a newly approved epoch; does not renew the lease
+      security: [{ nativeProof: [] }]
+      parameters:
+        - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
+        - { name: X-VC-Nonce, in: header, required: true, schema: { type: string, minLength: 22, maxLength: 80 } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NativeActionRequest' } } } }
+      responses:
+        '200': { description: Authoritative task context; no-store }
+        '201': { description: New claim with device_token and context; no browser continuation grant }
+        '400': { description: Invalid or extra request fields }
+        '401': { description: Missing or invalid proof }
+        '403': { description: Invalid ticket, Origin or target identity }
+        '409': { description: Replay, stale epoch, stage or idempotency conflict }
+        '410': { description: Expired ticket or task }
+        '429': { description: Task request limit }
+  /native-handoffs/{id}/resume:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Renew a still-valid execution lease; expired lease requires Web reapproval
+      security: [{ nativeProof: [] }]
+      parameters:
+        - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
+        - { name: X-VC-Nonce, in: header, required: true, schema: { type: string, minLength: 22, maxLength: 80 } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NativeActionRequest' } } } }
+      responses:
+        '200': { description: Authoritative task context; no-store }
+        '201': { description: New claim with device_token and context; no browser continuation grant }
+        '400': { description: Invalid or extra request fields }
+        '401': { description: Missing or invalid proof }
+        '403': { description: Invalid ticket, Origin or target identity }
+        '409': { description: Replay, stale epoch, stage or idempotency conflict }
+        '410': { description: Expired ticket or task }
+        '429': { description: Task request limit }
+  /native-handoffs/{id}/progress:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Report BLE authentication or configuration; never report completion
+      security: [{ nativeProof: [] }]
+      parameters:
+        - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
+        - { name: X-VC-Nonce, in: header, required: true, schema: { type: string, minLength: 22, maxLength: 80 } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NativeProgressRequest' } } } }
+      responses:
+        '200': { description: Authoritative task context; no-store }
+        '201': { description: New claim with device_token and context; no browser continuation grant }
+        '400': { description: Invalid or extra request fields }
+        '401': { description: Missing or invalid proof }
+        '403': { description: Invalid ticket, Origin or target identity }
+        '409': { description: Replay, stale epoch, stage or idempotency conflict }
+        '410': { description: Expired ticket or task }
+        '429': { description: Task request limit }
+  /native-handoffs/{id}/cancel:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Stop native execution while preserving device credential and Gateway completion
+      security: [{ nativeProof: [] }]
+      parameters:
+        - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
+        - { name: X-VC-Nonce, in: header, required: true, schema: { type: string, minLength: 22, maxLength: 80 } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NativeActionRequest' } } } }
+      responses:
+        '200': { description: Authoritative task context; no-store }
+        '201': { description: New claim with device_token and context; no browser continuation grant }
+        '400': { description: Invalid or extra request fields }
+        '401': { description: Missing or invalid proof }
+        '403': { description: Invalid ticket, Origin or target identity }
+        '409': { description: Replay, stale epoch, stage or idempotency conflict }
+        '410': { description: Expired ticket or task }
+        '429': { description: Task request limit }
