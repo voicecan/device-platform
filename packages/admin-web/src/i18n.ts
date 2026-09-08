@@ -3,6 +3,11 @@ export type Locale = 'zh-CN' | 'en';
 const localeKey = 'voicecan.locale';
 
 const zhCN: Readonly<Record<string, string>> = {
+  'Register this platform separately in the app, then scan or paste the link. The app can verify and track this task; Bluetooth binding execution is still in development.': '先在 App 中独立登记本平台，再扫码或粘贴链接。App 可验证并跟踪任务，蓝牙绑定执行仍在开发中。',
+  'Scan this task QR in the native app': '在原生 App 中扫描任务二维码',
+  'Share to app': '分享到 App',
+  'Could not generate QR code. Use the copy link button.': '无法生成二维码，请使用复制链接按钮。',
+
   "Continue in native app": "使用原生 App 继续",
   "Preview integration: requires an app configured to trust this platform. The current discovery app cannot execute this task yet.": "接续接口预览：需要已配置并信任本平台的 App。当前设备发现版 App 尚不能执行此任务。",
   "Open the link on your phone, then compare its verification code here before approving. The link expires in five minutes.": "在手机打开链接，核对手机与此处显示的校验码后再授权。链接五分钟内有效。",

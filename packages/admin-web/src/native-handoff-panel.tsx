@@ -1,3 +1,4 @@
+import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from './api.js';
 import { Button } from './ui.js';
@@ -10,6 +11,7 @@ type Launch = { launch_url: string; ticket_expires_at: string };
 export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId: string; t: Translate; onExecutorChange: (active: boolean) => void }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [launch, setLaunch] = useState<Launch>();
+  const [qr, setQr] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [clock, setClock] = useState(Date.now());
@@ -27,6 +29,11 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
     void load();
     return () => { active = false; clearTimeout(timer); };
   }, [path, onExecutorChange]);
+  useEffect(() => {
+    let active = true; setQr('');
+    if (launch) void QRCode.toDataURL(launch.launch_url, { errorCorrectionLevel: 'M', margin: 4, width: 320 }).then(value => { if (active) setQr(value); }, () => { if (active) setError(t('Could not generate QR code. Use the copy link button.')); });
+    return () => { active = false; };
+  }, [launch, t]);
   const mutate = async (operation: () => Promise<void>) => {
     setBusy(true); setError('');
     try {
@@ -38,10 +45,10 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
   const liveLaunch = launch && Date.parse(launch.ticket_expires_at) > clock;
   return <section className="operation-card" aria-label={t('Continue in native app')}>
     <h2>{t('Continue in native app')}</h2>
-    <p>{t('Preview integration: requires an app configured to trust this platform. The current discovery app cannot execute this task yet.')}</p>
+    <p>{t('Register this platform separately in the app, then scan or paste the link. The app can verify and track this task; Bluetooth binding execution is still in development.')}</p>
     <p>{t('Open the link on your phone, then compare its verification code here before approving. The link expires in five minutes.')}</p>
     <Button id="native-create-handoff" disabled={busy} onClick={() => void mutate(async () => { setLaunch(await api<Launch>(path, { method: 'POST', body: '{}' })); })}>{t('Create app link')}</Button>
-    {liveLaunch ? <div className="form-actions"><a href={launch.launch_url} referrerPolicy="no-referrer">{t('Open app link')}</a><Button id="native-copy-link" kind="ghost" disabled={busy} onClick={() => void mutate(() => navigator.clipboard.writeText(launch.launch_url))}>{t('Copy app link')}</Button></div> : launch ? <p role="status">{t('App link expired. Create a new link.')}</p> : null}
+    {liveLaunch ? <div>{qr ? <img src={qr} width={320} height={320} style={{ maxWidth: '100%', height: 'auto' }} alt={t('Scan this task QR in the native app')}/> : null}<div className="form-actions"><a href={launch.launch_url} referrerPolicy="no-referrer">{t('Open app link')}</a><Button id="native-copy-link" kind="ghost" disabled={busy} onClick={() => void mutate(() => navigator.clipboard.writeText(launch.launch_url))}>{t('Copy app link')}</Button>{typeof navigator.share === 'function' ? <Button id="native-share-link" kind="ghost" disabled={busy} onClick={() => void mutate(async () => { try { await navigator.share({ url: launch.launch_url }); } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'AbortError')) throw cause; } })}>{t('Share to app')}</Button> : null}</div></div> : launch ? <p role="status">{t('App link expired. Create a new link.')}</p> : null}
     {error ? <p role="alert" className="inline-alert inline-alert-error">{error}</p> : null}
     {snapshot?.active_handoff_id ? <p role="status">{t('This task is assigned to the native app. Completion is confirmed by the device server.')}</p> : null}
     {snapshot?.handoffs.filter(item => item.client_fingerprint && Date.parse(item.expires_at) > clock).map(item => {
