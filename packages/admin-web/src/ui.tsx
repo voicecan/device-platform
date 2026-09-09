@@ -81,8 +81,42 @@ export function Field({ label, hint, value, onChange, type = 'text', options, id
 
 export type DeviceWsCandidate = { url: string; host: string; preferred: boolean };
 
-export function DeviceWsCandidatePicker({ candidates, value, onChange, t }: { candidates: readonly DeviceWsCandidate[]; value: string; onChange: (value: string) => void; t: Translate }) {
-  return <><section className="credential-backup-warning field-wide" role="alert" aria-label={t('Back up credentials before binding')}><span className="credential-backup-mark" aria-hidden="true">!</span><div><strong>{t('Back up credentials before binding')}</strong><p>{t('Keep an offline copy of the administrator username and the device binding Token, or a verified complete server backup that contains the Token and its encryption keys.')}</p><small>{t('If this server is reset or the binding Token is lost, data on the device cannot be read. Only a factory reset can unlock the device, and the existing data cannot be recovered.')}</small></div></section>{candidates.length > 0 ? <div className="server-candidate-list"><span>{t('Detected server addresses')}</span>{candidates.map((candidate) => <button key={candidate.url} type="button" className={value === candidate.url ? 'is-selected' : ''} aria-pressed={value === candidate.url} onClick={() => onChange(candidate.url)}><Icon name="server"/><span><strong>{candidate.host}{candidate.preferred ? <em>{t('Recommended')}</em> : null}</strong><small>{candidate.url}</small></span><Icon name="arrow"/></button>)}</div> : null}</>;
+export function CredentialBackupWarning({ t, canExport }: { t: Translate; canExport: boolean }) {
+  const [guideVisible, setGuideVisible] = useState(false);
+  const [downloadStarted, setDownloadStarted] = useState(false);
+  const exportBackup = (): void => {
+    const anchor = document.createElement('a');
+    anchor.href = '/api/v1/admin/backups/export'; anchor.download = ''; anchor.hidden = true;
+    document.body.append(anchor); anchor.click(); anchor.remove();
+    setDownloadStarted(true);
+  };
+  return <section className="credential-backup-warning field-wide" role="alert" aria-label={t('Back up credentials before binding')}>
+    <span className="credential-backup-mark" aria-hidden="true">!</span>
+    <div>
+      <strong>{t('Back up credentials before binding')}</strong>
+      <p>{t('Keep an offline copy of the administrator username and the device binding Token, or a verified complete server backup that contains the Token and its encryption keys.')}</p>
+      <small>{t('If this server is reset or the binding Token is lost, data on the device cannot be read. Only a factory reset can unlock the device, and the existing data cannot be recovered.')}</small>
+      <div className="form-actions">
+        <Button type="button" kind="secondary" onClick={() => setGuideVisible((visible) => !visible)}>{t(guideVisible ? 'Hide backup guide' : 'View backup guide')}</Button>
+        {canExport ? <Button type="button" icon="storage" onClick={exportBackup}>{t('Export complete recovery backup')}</Button> : null}
+      </div>
+      {guideVisible ? <div className="inline-alert inline-alert-error">
+        <strong>{t('What the recovery backup contains')}</strong>
+        <ol>
+          <li>{t('The active administrator username is listed in RECOVERY.txt. Passwords are not exported in plaintext.')}</li>
+          <li>{t('Device binding Tokens remain encrypted in the database; the package includes the keyring and Token pepper required after restore.')}</li>
+          <li>{t('Keep the whole archive offline and encrypted. Export a new copy after binding a device or rotating a Token or key.')}</li>
+          <li>{t('On the server host, extract the archive, run backup verify on the directory containing manifest.json, then restore only while the Server is stopped.')}</li>
+        </ol>
+      </div> : null}
+      {!canExport ? <div className="inline-alert inline-alert-error">{t('Only a System Admin can export the complete recovery backup. Ask the server administrator to export and store it securely.')}</div> : null}
+      {downloadStarted ? <div className="inline-alert inline-alert-success" role="status">{t('Recovery backup export started. Store the downloaded archive offline and encrypted, then verify it from the server host.')}</div> : null}
+    </div>
+  </section>;
+}
+
+export function DeviceWsCandidatePicker({ candidates, value, onChange, t, canExportBackup }: { candidates: readonly DeviceWsCandidate[]; value: string; onChange: (value: string) => void; t: Translate; canExportBackup: boolean }) {
+  return <><CredentialBackupWarning t={t} canExport={canExportBackup}/>{candidates.length > 0 ? <div className="server-candidate-list"><span>{t('Detected server addresses')}</span>{candidates.map((candidate) => <button key={candidate.url} type="button" className={value === candidate.url ? 'is-selected' : ''} aria-pressed={value === candidate.url} onClick={() => onChange(candidate.url)}><Icon name="server"/><span><strong>{candidate.host}{candidate.preferred ? <em>{t('Recommended')}</em> : null}</strong><small>{candidate.url}</small></span><Icon name="arrow"/></button>)}</div> : null}</>;
 }
 
 function collectionOf(data: unknown): readonly Record<string, unknown>[] {

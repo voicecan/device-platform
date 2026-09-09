@@ -45,9 +45,15 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
   const liveLaunch = launch && Date.parse(launch.ticket_expires_at) > clock;
   return <section className="operation-card" aria-label={t('Bind in native app')}>
     <h2>{t('Bind in native app')}</h2>
-    <p>{t('Scan or open the task link in Voicecan Connect. The app registers this self-hosted platform automatically and opens the binding task; private-network HTTP deployments are supported.')}</p>
+    <p>{t('Use Voicecan Connect on your phone to complete this binding:')}</p>
+    <ol>
+      <li>{t('Open Voicecan Connect and tap “Scan binding QR”.')}</li>
+      <li>{t('Create the binding QR code on this page, then scan it with the app within five minutes.')}</li>
+      <li>{t('Compare the verification code shown in the app with this page, then approve the app here.')}</li>
+      <li>{t('Follow the app to select the nearby device and complete binding. Keep this page open for the confirmed result.')}</li>
+    </ol>
+    <p>{t('The app registers this self-hosted platform automatically when it opens the binding task; private-network HTTP deployments are supported.')}</p>
     <p>{t("The task QR uses the server address derived from this binding's Device WebSocket address.")}</p>
-    <p>{t('Open the link on your phone, then compare its verification code here before approving. The link expires in five minutes.')}</p>
     <div className="app-download-options" aria-label={t('Get Voicecan Connect')}>
       <div className="app-download-card"><span className="app-download-placeholder" aria-hidden="true">QR</span><div><strong>{t('Apple App Store')}</strong><small>{t('Store QR code reserved')}</small></div><span className="app-download-status">{t('Coming soon')}</span></div>
       <div className="app-download-card"><span className="app-download-placeholder" aria-hidden="true">QR</span><div><strong>{t('Google Play')}</strong><small>{t('Store QR code reserved')}</small></div><span className="app-download-status">{t('Coming soon')}</span></div>

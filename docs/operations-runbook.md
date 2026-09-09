@@ -18,6 +18,8 @@ The complete data classification, backup-set contents, candidate RPO/RTO, and re
 
 Before binding a device, keep the administrator username offline and create a verified complete backup containing the device binding Token and its encryption keys. If the Server is reset or that Token is lost, the device's stored data cannot be read. Only a factory reset can unlock the device, and the existing data cannot be recovered.
 
+For a SQLite Edge deployment, a System Admin can use **Bind device → View backup guide → Export complete recovery backup** in the Admin Console. The downloaded `.tar.gz` is created and integrity-checked by the Server before download. It contains `RECOVERY.txt` with the active administrator username and restore steps, plus the database, local objects, firmware, keyring, and Token pepper. Keep the whole archive offline and encrypted, and export a new copy after every device binding or Token/key rotation. PostgreSQL/S3 deployments intentionally do not offer a browser archive; use the operator-managed database and immutable object-storage backup procedure instead.
+
 Create and verify a backup regularly:
 
 ```sh

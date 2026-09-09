@@ -28,6 +28,7 @@ import { BlockList, isIP } from 'node:net';
 import { mapPublicCommand, mapPublicRecording, recordingEventFacts, reviewedRecordingMedia } from './public-contract.js';
 import { createServerLogger } from './logging.js';
 import { NativeHandoffError, registerNativeHandoffRoutes } from './native-handoff.js';
+import { createDownloadableBackup } from './backup-download.js';
 
 type Row = Record<string, unknown>;
 type StoragePolicyRow = {
@@ -1459,6 +1460,16 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
   app.get('/api/v1/admin/storage', async (request, reply) => {
     const context = await resolveAccess(request); requireSystemAdmin(context); return success(reply, await readStorageState());
+  });
+  app.get('/api/v1/admin/backups/export', async (request, reply) => {
+    const context = await resolveAccess(request); requireSystemAdmin(context);
+    if (config.databaseDriver !== 'sqlite') throw new HttpError(409, 'BACKUP_EXTERNAL_REQUIRED', 'This deployment requires an operator-managed PostgreSQL and object-storage backup. Follow the backup guide on the server host.');
+    const downloadable = await createDownloadableBackup(config);
+    await audit(request, context, 'backup.exported', 'server');
+    reply.header('content-type', 'application/gzip');
+    reply.header('content-disposition', `attachment; filename="${downloadable.filename}"`);
+    reply.header('cache-control', 'private, no-store');
+    return reply.send(downloadable.stream);
   });
   app.patch('/api/v1/admin/storage', async (request, reply) => {
     const context = await resolveAccess(request, true); requireSystemAdmin(context); const body = bodyOf(request);

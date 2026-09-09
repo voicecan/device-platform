@@ -980,6 +980,16 @@ paths:
       responses:
         '200': { description: Updated storage state }
         '400': { description: Invalid capacity or watermark ordering }
+  /admin/backups/export:
+    get:
+      summary: Export a verified complete SQLite recovery backup as a gzip-compressed tar archive; System Admin only
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Recovery archive containing the database, local objects, firmware, keyring, token pepper, manifest, and human-readable recovery guide
+          content:
+            application/gzip: { schema: { type: string, format: binary } }
+        '409': { description: Deployment uses externally managed PostgreSQL or object storage backup procedures }
   /admin/reconcile:
     post: { summary: Expire attempts and recover immutable objects after a crash, security: [{ sessionCookie: [] }], responses: { '200': { description: Reconciliation counters } } }
   /capabilities:

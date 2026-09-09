@@ -44,6 +44,8 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(ui, /aria-pressed=\{value === candidate\.url\}/);
   assert.match(ui, /credential-backup-warning/);
   assert.match(ui, /Back up credentials before binding/);
+  assert.match(ui, /Export complete recovery backup/);
+  assert.match(ui, /View backup guide/);
   assert.match(ui, /Only a factory reset can unlock the device/);
   assert.match(workspaces, /Use an address reachable from the device network/);
   assert.doesNotMatch(workspaces, /placeholder="ws:\/\/192\.168\.1\.100/);
@@ -95,6 +97,7 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(nativeHandoff, /Apple App Store/);
   assert.match(nativeHandoff, /Google Play/);
   assert.match(nativeHandoff, /Android APK/);
+  assert.match(nativeHandoff, /Scan binding QR/);
   assert.match(nativeHandoff, /Create binding task QR code/);
   assert.doesNotMatch(workspaces, /Create 10-minute binding grant/);
   assert.doesNotMatch(ui, /View raw response|raw-result/);

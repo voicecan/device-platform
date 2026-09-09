@@ -3,10 +3,29 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import test from 'node:test';
 import { buildServer } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { migrate } from '../src/migrate.js';
+
+function tarFileContents(archive: Buffer): Map<string, Buffer> {
+  const files = new Map<string, Buffer>();
+  let offset = 0;
+  while (offset + 512 <= archive.byteLength) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const text = (start: number, end: number): string => header.subarray(start, end).toString('utf8').replace(/\0.*$/s, '');
+    const name = text(0, 100); const prefix = text(345, 500);
+    const path = prefix ? `${prefix}/${name}` : name;
+    const size = Number.parseInt(text(124, 136).trim() || '0', 8);
+    const type = String.fromCharCode(header[156] ?? 0);
+    offset += 512;
+    if (type !== '5') files.set(path, archive.subarray(offset, offset + size));
+    offset += Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
 
 test('independent server setup, immutable upload, group isolation and device transfer', async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-device-'));
@@ -141,6 +160,20 @@ test('independent server setup, immutable upload, group isolation and device tra
   const simulated = await app.inject({ method: 'POST', url: '/api/v1/simulator/devices', headers: adminHeaders, payload: { manufacturer: 'Voicecan', sn: 'PREVIEW-0001', group_id: setupData.group_id } });
   assert.equal(simulated.statusCode, 201, simulated.body);
   const deviceId = simulated.json().data.device.id as string;
+  const backupExport = await app.inject({ method: 'GET', url: '/api/v1/admin/backups/export', headers: adminHeaders });
+  assert.equal(backupExport.statusCode, 200, backupExport.body);
+  assert.equal(backupExport.headers['content-type'], 'application/gzip');
+  assert.match(String(backupExport.headers['content-disposition']), /^attachment; filename="voicecan-device-backup-\d{8}T\d{6}Z\.tar\.gz"$/);
+  assert.equal(backupExport.headers['cache-control'], 'private, no-store');
+  const backupFiles = tarFileContents(gunzipSync(backupExport.rawPayload));
+  const backupNames = [...backupFiles.keys()];
+  for (const required of ['manifest.json', 'device-platform.sqlite', 'master-keyring.json', 'token-pepper.key', 'RECOVERY.txt']) {
+    assert.ok(backupNames.some((name) => name.endsWith(`/${required}`)), `${required} must be present in the recovery archive`);
+  }
+  const recoveryText = [...backupFiles].find(([name]) => name.endsWith('/RECOVERY.txt'))?.[1].toString('utf8') ?? '';
+  assert.match(recoveryText, /- admin/);
+  assert.match(recoveryText, /binding Tokens remain encrypted/);
+  assert.doesNotMatch(recoveryText, /correct horse battery staple/);
   const bleStatus = await app.inject({ method: 'POST', url: `/api/v1/devices/${deviceId}/ble-status`, headers: adminHeaders, payload: {
     serial_number: 'PREVIEW-0001',
     info: { manufacturer: 'Voicecan', serialNumber: 'PREVIEW-0001', model: 'CAPSO', hardwareVersion: 'HW-TEST', firmwareVersion: 'v0.5.2' },
@@ -276,6 +309,8 @@ test('independent server setup, immutable upload, group isolation and device tra
   const groupBLogin = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'group-b-admin', password: 'another correct horse password' } });
   assert.equal(groupBLogin.statusCode, 200, groupBLogin.body);
   const groupBCookie = String(groupBLogin.headers['set-cookie']).split(';')[0]!;
+  const groupBBackup = await app.inject({ method: 'GET', url: '/api/v1/admin/backups/export', headers: { cookie: groupBCookie } });
+  assert.equal(groupBBackup.statusCode, 404, groupBBackup.body);
   const groupBFiles = await app.inject({ method: 'GET', url: '/api/v1/files', headers: { cookie: groupBCookie } });
   assert.equal(groupBFiles.statusCode, 200, groupBFiles.body);
   const disabled = await app.inject({ method: 'PATCH', url: `/api/v1/users/${user.json().data.id}`, headers: adminHeaders, payload: { disabled: true, reason: 'E2E immediate revocation' } });

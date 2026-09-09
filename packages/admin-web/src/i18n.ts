@@ -3,6 +3,12 @@ export type Locale = 'zh-CN' | 'en';
 const localeKey = 'voicecan.locale';
 
 const zhCN: Readonly<Record<string, string>> = {
+  'Use Voicecan Connect on your phone to complete this binding:': '请使用手机上的 Voicecan Connect 完成本次绑定：',
+  'Open Voicecan Connect and tap “Scan binding QR”.': '打开 Voicecan Connect，点击“扫描绑定二维码”。',
+  'Create the binding QR code on this page, then scan it with the app within five minutes.': '在此页面生成绑定二维码，并在五分钟内使用 App 扫描。',
+  'Compare the verification code shown in the app with this page, then approve the app here.': '核对 App 与此页面显示的校验码，然后在此处授权 App。',
+  'Follow the app to select the nearby device and complete binding. Keep this page open for the confirmed result.': '按照 App 指引选择附近设备并完成绑定，同时保持此页面打开以等待确认结果。',
+  'The app registers this self-hosted platform automatically when it opens the binding task; private-network HTTP deployments are supported.': 'App 打开绑定任务时会自动登记此自部署平台，支持局域网 HTTP 部署。',
   'Scan or open the task link in Voicecan Connect. The app registers this self-hosted platform automatically and opens the binding task; private-network HTTP deployments are supported.': '使用 Voicecan Connect 扫码或打开任务链接。App 会自动登记此自部署平台并打开绑定任务，支持局域网 HTTP 部署。',
   "The task QR uses the server address derived from this binding's Device WebSocket address.": '任务二维码使用从本次绑定所选设备 WebSocket 地址推导出的服务端地址。',
   'Scan this task QR in the native app': '在原生 App 中扫描任务二维码',
@@ -19,6 +25,16 @@ const zhCN: Readonly<Record<string, string>> = {
   'Back up credentials before binding': '绑定前必须备份凭据',
   'Keep an offline copy of the administrator username and the device binding Token, or a verified complete server backup that contains the Token and its encryption keys.': '请离线备份管理员用户名和设备绑定 Token，或保存一份经过验证、包含该 Token 及其加密密钥的完整服务器备份。',
   'If this server is reset or the binding Token is lost, data on the device cannot be read. Only a factory reset can unlock the device, and the existing data cannot be recovered.': '一旦服务器重置或绑定 Token 丢失，设备内的数据将无法读取。只有返厂重置才能解除设备锁定，原有数据无法恢复。',
+  'View backup guide': '查看备份指引',
+  'Hide backup guide': '收起备份指引',
+  'Export complete recovery backup': '一键导出完整恢复包',
+  'Recovery backup export started. Store the downloaded archive offline and encrypted, then verify it from the server host.': '恢复包已开始导出。请将下载的压缩包离线加密保存，并在服务器主机上执行校验。',
+  'Only a System Admin can export the complete recovery backup. Ask the server administrator to export and store it securely.': '只有系统管理员可以导出完整恢复包。请联系服务器管理员导出并安全保存。',
+  'What the recovery backup contains': '恢复包包含什么',
+  'The active administrator username is listed in RECOVERY.txt. Passwords are not exported in plaintext.': 'RECOVERY.txt 会列出当前管理员用户名；密码不会以明文导出。',
+  'Device binding Tokens remain encrypted in the database; the package includes the keyring and Token pepper required after restore.': '设备绑定 Token 以密文保存在数据库中；恢复包同时包含恢复后解密所需的密钥环和 Token pepper。',
+  'Keep the whole archive offline and encrypted. Export a new copy after binding a device or rotating a Token or key.': '请将整个压缩包离线加密保存；每次绑定新设备或轮换 Token、密钥后重新导出。',
+  'On the server host, extract the archive, run backup verify on the directory containing manifest.json, then restore only while the Server is stopped.': '在服务器主机上解压后，对包含 manifest.json 的目录执行 backup verify；仅在服务停止时执行恢复。',
 
   "Continue in native app": "使用原生 App 继续",
   "Preview integration: requires an app configured to trust this platform. The current discovery app cannot execute this task yet.": "接续接口预览：需要已配置并信任本平台的 App。当前设备发现版 App 尚不能执行此任务。",

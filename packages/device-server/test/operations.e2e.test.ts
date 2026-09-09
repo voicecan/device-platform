@@ -220,6 +220,10 @@ test('P0 lifecycle, rate limit, sync recovery, backup restore and key rotation',
     await writeFile(join(config.firmwareDir, 'backup-fixture.bin'), 'firmware backup fixture');
     await createBackup(config, backupDir);
     await verifyBackup(backupDir);
+    const recoveryGuide = await readFile(join(backupDir, 'RECOVERY.txt'), 'utf8');
+    assert.match(recoveryGuide, /- admin/);
+    assert.match(recoveryGuide, /binding Tokens remain encrypted/);
+    assert.match(recoveryGuide, /backup verify/);
     await restoreBackup(backupDir, restoredDir);
     const restoredConfig = await configured(restoredDir);
     assert.equal(restoredConfig.masterKeyVersion, 2);

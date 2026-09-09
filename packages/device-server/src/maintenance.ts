@@ -40,13 +40,34 @@ export async function createBackup(config: ServerConfig, outputDirectory: string
   try { await stat(target); throw new Error('BACKUP_TARGET_EXISTS'); } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
   await mkdir(target, { recursive: false, mode: 0o700 });
   const database = new DatabaseSync(config.databaseFile, { readOnly: true });
-  try { await backup(database, resolve(target, 'device-platform.sqlite')); } finally { database.close(); }
+  let administratorUsernames: string[];
+  try {
+    administratorUsernames = (database.prepare("SELECT username FROM users WHERE role='system_admin' AND disabled_at IS NULL ORDER BY username").all() as Array<{ username: string }>).map((row) => row.username);
+    await backup(database, resolve(target, 'device-platform.sqlite'));
+  } finally { database.close(); }
   await cp(config.storageDir, resolve(target, 'objects'), { recursive: true, errorOnExist: true, force: false });
   await cp(config.firmwareDir, resolve(target, 'firmware'), { recursive: true, errorOnExist: true, force: false });
   for (const name of ['master-keyring.json', 'master.key', 'token-pepper.key']) {
     const source = resolve(config.dataDir, name);
     try { await cp(source, resolve(target, name), { errorOnExist: true, force: false }); } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
   }
+  await writeFile(resolve(target, 'RECOVERY.txt'), [
+    'Voicecan Device Platform recovery backup',
+    '',
+    'Active system administrator usernames:',
+    ...administratorUsernames.map((username) => `- ${username}`),
+    '',
+    'The device binding Tokens remain encrypted inside device-platform.sqlite.',
+    'master-keyring.json and token-pepper.key are required to use those credentials after restore.',
+    'Keep this entire backup offline and encrypted; anyone with it may be able to control bound devices.',
+    'Create a new backup after binding a device or rotating a device Token or deployment key.',
+    '',
+    'Verify and restore from the server host:',
+    '1. Extract this archive and locate the directory containing manifest.json.',
+    '2. Run: node packages/device-server/dist/cli.js backup verify <backup-directory>',
+    '3. Stop the server, then restore into a new empty data directory using the operations runbook.',
+    '',
+  ].join('\n'), { mode: 0o600, flag: 'wx' });
   await writeFile(resolve(target, 'manifest.json'), `${JSON.stringify({ schema: 3, created_at: new Date().toISOString(), node: process.version, storage_driver: config.storageDriver, database: 'device-platform.sqlite', objects: 'objects', firmware: 'firmware', keyring: 'master-keyring.json', pepper: 'token-pepper.key' }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
 }
 
