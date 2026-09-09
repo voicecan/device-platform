@@ -47,6 +47,9 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(ui, /Export complete recovery backup/);
   assert.match(ui, /View backup guide/);
   assert.match(ui, /Only a factory reset can unlock the device/);
+  assert.match(nativeHandoff, /className="button native-open-app-link"/);
+  assert.match(nativeHandoff, /native-handoff-actions/);
+  assert.match(style, /\.native-open-app-link \{ text-decoration: none; \}/);
   assert.match(workspaces, /Use an address reachable from the device network/);
   assert.doesNotMatch(workspaces, /placeholder="ws:\/\/192\.168\.1\.100/);
   assert.doesNotMatch(implementation, /Device access settings/);

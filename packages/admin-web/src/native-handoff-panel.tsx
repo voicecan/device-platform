@@ -1,7 +1,7 @@
 import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from './api.js';
-import { Button } from './ui.js';
+import { Button, Icon } from './ui.js';
 import type { Translate } from './ui.js';
 
 type Handoff = { id: string; status: string; client_fingerprint: string | null; lease_expires_at: string | null; expires_at: string };
@@ -60,7 +60,7 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
       <div className="app-download-card"><span className="app-download-placeholder app-download-placeholder-file" aria-hidden="true">APK</span><div><strong>{t('Android APK')}</strong><small>{t('APK download link reserved')}</small></div><span className="app-download-status">{t('Coming soon')}</span></div>
     </div>
     <Button id="native-create-handoff" disabled={busy} onClick={() => void mutate(async () => { setLaunch(await api<Launch>(path, { method: 'POST', body: '{}' })); })}>{t('Create binding task QR code')}</Button>
-    {liveLaunch ? <div>{qr ? <img src={qr} width={320} height={320} style={{ maxWidth: '100%', height: 'auto' }} alt={t('Scan this task QR in the native app')}/> : null}<div className="form-actions"><a href={launch.launch_url} referrerPolicy="no-referrer">{t('Open app link')}</a><Button id="native-copy-link" kind="ghost" disabled={busy} onClick={() => void mutate(() => navigator.clipboard.writeText(launch.launch_url))}>{t('Copy app link')}</Button>{typeof navigator.share === 'function' ? <Button id="native-share-link" kind="ghost" disabled={busy} onClick={() => void mutate(async () => { try { await navigator.share({ url: launch.launch_url }); } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'AbortError')) throw cause; } })}>{t('Share to app')}</Button> : null}</div></div> : launch ? <p role="status">{t('App link expired. Create a new link.')}</p> : null}
+    {liveLaunch ? <div>{qr ? <img src={qr} width={320} height={320} style={{ maxWidth: '100%', height: 'auto' }} alt={t('Scan this task QR in the native app')}/> : null}<div className="form-actions native-handoff-actions"><a className="button native-open-app-link" href={launch.launch_url} referrerPolicy="no-referrer"><span>{t('Open app link')}</span><Icon name="arrow" size={16}/></a><Button id="native-copy-link" kind="secondary" disabled={busy} onClick={() => void mutate(() => navigator.clipboard.writeText(launch.launch_url))}>{t('Copy app link')}</Button>{typeof navigator.share === 'function' ? <Button id="native-share-link" kind="ghost" disabled={busy} onClick={() => void mutate(async () => { try { await navigator.share({ url: launch.launch_url }); } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'AbortError')) throw cause; } })}>{t('Share to app')}</Button> : null}</div></div> : launch ? <p role="status">{t('App link expired. Create a new link.')}</p> : null}
     {error ? <p role="alert" className="inline-alert inline-alert-error">{error}</p> : null}
     {snapshot?.active_handoff_id ? <p role="status">{t('This task is assigned to the native app. Completion is confirmed by the device server.')}</p> : null}
     {snapshot?.handoffs.filter(item => item.client_fingerprint && Date.parse(item.expires_at) > clock).map(item => {

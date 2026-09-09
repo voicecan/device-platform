@@ -89,7 +89,7 @@ export type DownloadableBackup = {
 };
 
 export async function createDownloadableBackup(config: ServerConfig): Promise<DownloadableBackup> {
-  if (config.databaseDriver !== 'sqlite') throw new Error('BACKUP_EXTERNAL_REQUIRED');
+  if (config.databaseDriver !== 'sqlite' || config.storageDriver === 's3_direct') throw new Error('BACKUP_EXTERNAL_REQUIRED');
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'voicecan-backup-export-'));
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const archiveRoot = `voicecan-device-backup-${timestamp}`;

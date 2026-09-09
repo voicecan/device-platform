@@ -1463,7 +1463,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
   app.get('/api/v1/admin/backups/export', async (request, reply) => {
     const context = await resolveAccess(request); requireSystemAdmin(context);
-    if (config.databaseDriver !== 'sqlite') throw new HttpError(409, 'BACKUP_EXTERNAL_REQUIRED', 'This deployment requires an operator-managed PostgreSQL and object-storage backup. Follow the backup guide on the server host.');
+    if (config.databaseDriver !== 'sqlite' || config.storageDriver === 's3_direct') throw new HttpError(409, 'BACKUP_EXTERNAL_REQUIRED', 'This deployment requires an operator-managed PostgreSQL or object-storage backup. Follow the backup guide on the server host.');
     const downloadable = await createDownloadableBackup(config);
     await audit(request, context, 'backup.exported', 'server');
     reply.header('content-type', 'application/gzip');
