@@ -43,11 +43,17 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
     finally { setBusy(false); }
   };
   const liveLaunch = launch && Date.parse(launch.ticket_expires_at) > clock;
-  return <section className="operation-card" aria-label={t('Continue in native app')}>
-    <h2>{t('Continue in native app')}</h2>
-    <p>{t('Register this platform separately in the app, then scan or paste the link. The app can verify and track this task; Bluetooth binding execution is still in development.')}</p>
+  return <section className="operation-card" aria-label={t('Bind in native app')}>
+    <h2>{t('Bind in native app')}</h2>
+    <p>{t('Scan or open the task link in Voicecan Connect. The app registers this self-hosted platform automatically and opens the binding task; private-network HTTP deployments are supported.')}</p>
+    <p>{t("The task QR uses the server address derived from this binding's Device WebSocket address.")}</p>
     <p>{t('Open the link on your phone, then compare its verification code here before approving. The link expires in five minutes.')}</p>
-    <Button id="native-create-handoff" disabled={busy} onClick={() => void mutate(async () => { setLaunch(await api<Launch>(path, { method: 'POST', body: '{}' })); })}>{t('Create app link')}</Button>
+    <div className="app-download-options" aria-label={t('Get Voicecan Connect')}>
+      <div className="app-download-card"><span className="app-download-placeholder" aria-hidden="true">QR</span><div><strong>{t('Apple App Store')}</strong><small>{t('Store QR code reserved')}</small></div><span className="app-download-status">{t('Coming soon')}</span></div>
+      <div className="app-download-card"><span className="app-download-placeholder" aria-hidden="true">QR</span><div><strong>{t('Google Play')}</strong><small>{t('Store QR code reserved')}</small></div><span className="app-download-status">{t('Coming soon')}</span></div>
+      <div className="app-download-card"><span className="app-download-placeholder app-download-placeholder-file" aria-hidden="true">APK</span><div><strong>{t('Android APK')}</strong><small>{t('APK download link reserved')}</small></div><span className="app-download-status">{t('Coming soon')}</span></div>
+    </div>
+    <Button id="native-create-handoff" disabled={busy} onClick={() => void mutate(async () => { setLaunch(await api<Launch>(path, { method: 'POST', body: '{}' })); })}>{t('Create binding task QR code')}</Button>
     {liveLaunch ? <div>{qr ? <img src={qr} width={320} height={320} style={{ maxWidth: '100%', height: 'auto' }} alt={t('Scan this task QR in the native app')}/> : null}<div className="form-actions"><a href={launch.launch_url} referrerPolicy="no-referrer">{t('Open app link')}</a><Button id="native-copy-link" kind="ghost" disabled={busy} onClick={() => void mutate(() => navigator.clipboard.writeText(launch.launch_url))}>{t('Copy app link')}</Button>{typeof navigator.share === 'function' ? <Button id="native-share-link" kind="ghost" disabled={busy} onClick={() => void mutate(async () => { try { await navigator.share({ url: launch.launch_url }); } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'AbortError')) throw cause; } })}>{t('Share to app')}</Button> : null}</div></div> : launch ? <p role="status">{t('App link expired. Create a new link.')}</p> : null}
     {error ? <p role="alert" className="inline-alert inline-alert-error">{error}</p> : null}
     {snapshot?.active_handoff_id ? <p role="status">{t('This task is assigned to the native app. Completion is confirmed by the device server.')}</p> : null}

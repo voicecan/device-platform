@@ -16,6 +16,8 @@ For public deployments:
 
 The complete data classification, backup-set contents, candidate RPO/RTO, and restore evidence gate are defined in [Privacy, retention, and disaster recovery](privacy-retention-and-disaster-recovery.md). A database-only copy is not a valid backup.
 
+Before binding a device, keep the administrator username offline and create a verified complete backup containing the device binding Token and its encryption keys. If the Server is reset or that Token is lost, the device's stored data cannot be read. Only a factory reset can unlock the device, and the existing data cannot be recovered.
+
 Create and verify a backup regularly:
 
 ```sh

@@ -227,6 +227,12 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .status-failed, .status-dead, .status-disabled, .status-false { background: var(--vc-danger-soft); color: #9c3c3a; }
 
 .operation-layout, .flow-layout { display: grid; gap: 18px; }
+.credential-backup-warning { display: flex; align-items: flex-start; gap: 14px; border: 2px solid color-mix(in srgb, var(--vc-danger) 62%, var(--vc-border)); border-radius: 16px; padding: 17px 19px; background: linear-gradient(135deg, #fff5f3, var(--vc-danger-soft)); color: #7f302e; box-shadow: 0 10px 30px rgb(185 75 72 / 10%); }
+.credential-backup-mark { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--vc-danger); color: #fff; font-size: 18px; font-weight: 800; }
+.credential-backup-warning strong, .credential-backup-warning p, .credential-backup-warning small { display: block; }
+.credential-backup-warning strong { margin-top: 1px; color: #752b29; font-size: 15px; }
+.credential-backup-warning p { margin: 5px 0 3px; font-size: 12px; font-weight: 620; }
+.credential-backup-warning small { color: #8c403c; font-size: 11px; }
 .operation-tabs { display: flex; width: fit-content; max-width: 100%; gap: 4px; overflow-x: auto; border: 1px solid var(--vc-border); border-radius: 13px; padding: 4px; background: #eeece7; }
 .operation-tabs button { flex: 0 0 auto; border: 0; border-radius: 9px; padding: 8px 13px; background: transparent; color: var(--vc-muted); font-size: 12px; font-weight: 600; }
 .operation-tabs button.active { background: #fff; color: var(--vc-text); box-shadow: 0 2px 8px rgb(50 46 40 / 8%); }
@@ -270,6 +276,14 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .select-compact .select-popover { right: 0; left: auto; min-width: 150px; }
 .select-compact .select-meta, .select-compact .select-value small { display: none; }
 .form-actions { display: flex; flex-wrap: wrap; gap: 9px; padding-top: 5px; }
+.app-download-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
+.app-download-card { position: relative; display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 86px; padding: 14px; border: 1px dashed var(--vc-border-strong); border-radius: 16px; background: var(--vc-surface-subtle); }
+.app-download-card > div { display: grid; gap: 3px; }
+.app-download-card strong { font-size: .92rem; }
+.app-download-card small { color: var(--vc-muted); font-size: .74rem; }
+.app-download-placeholder { display: grid; place-items: center; width: 56px; height: 56px; border: 1px solid var(--vc-border); border-radius: 10px; color: var(--vc-muted); background: var(--vc-surface); font: 700 .78rem/1 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .08em; }
+.app-download-placeholder-file { border-radius: 14px; }
+.app-download-status { position: absolute; top: 8px; right: 8px; padding: 3px 7px; border-radius: 999px; color: var(--vc-muted); background: var(--vc-surface); font-size: .66rem; font-weight: 700; }
 .impact-note { border: 1px solid #ead7bd; border-radius: 13px; padding: 13px 15px; background: #fbf4e9; color: #795327; }
 .impact-note strong { font-size: 12px; }
 .impact-note p { margin: 3px 0 0; font-size: 11px; }
@@ -622,4 +636,5 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .firmware-repository-card{padding:16px 20px;border:1px solid var(--vc-border);border-radius:18px;background:var(--vc-surface)}.firmware-repository-card>summary{cursor:pointer;font-weight:700}.firmware-upload-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px}.file-input-field{grid-column:1/-1}.file-input-field label,.file-input-field small{display:block}.file-input-field input{width:100%;margin-top:7px;padding:10px;border:1px dashed var(--vc-border-strong);border-radius:12px;background:var(--vc-surface-subtle)}.file-input-field small,.firmware-upload-action small{margin-top:6px;color:var(--vc-muted)}.firmware-upload-action{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;grid-column:1/-1}.firmware-upload-action small{max-width:60%}
 @media(max-width:980px){.device-status-grid,.device-network-grid{grid-template-columns:1fr}.device-status-card>header,.device-network-card>header{align-items:flex-start;flex-direction:column}}
 @media(max-width:760px){.firmware-card{align-items:stretch;flex-direction:column}.firmware-actions{min-width:0}.firmware-actions>*{flex:1 1 100%}.firmware-upload-grid{grid-template-columns:1fr}.firmware-upload-action{align-items:stretch;flex-direction:column}.firmware-upload-action small{max-width:none}.network-live-state{align-items:flex-start;flex-wrap:wrap}.network-live-state>span:last-child:not(.network-state-icon){width:100%;margin-left:52px}}
+@media(max-width:760px){.app-download-options{grid-template-columns:1fr}}
 @media(max-width:560px){.device-vitals,.device-protocol-status{grid-template-columns:1fr}.device-protocol-status>div,.device-protocol-status>div:nth-child(odd),.device-protocol-status>div:nth-last-child(-n+2){border-right:0;border-bottom:1px solid var(--vc-border)}.device-protocol-status>div:last-child{border-bottom:0}.device-vital footer{flex-direction:column}.device-control-actions>*{flex:1 1 100%}.network-live-state>span:last-child:not(.network-state-icon){margin-left:0}.server-candidate-list small{white-space:normal}}

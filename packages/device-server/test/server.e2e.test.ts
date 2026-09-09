@@ -71,6 +71,7 @@ test('independent server setup, immutable upload, group isolation and device tra
   const devicePage = await app.inject({ method: 'GET', url: '/device', headers: adminHeaders });
   assert.doesNotMatch(devicePage.body, /<script type="importmap">/);
   assert.match(devicePage.body, /id="device-language"/);
+  assert.match(String(devicePage.headers['content-security-policy']), /img-src 'self' data:/);
   assert.match(String(devicePage.headers['content-security-policy']), /trusted-types voicecan lit-html sanitizer/);
   assert.match(devicePage.body, /class="device-intro"/);
   assert.match(devicePage.body, /id="device-mode-release"/);

@@ -364,7 +364,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
     reply.header('Permissions-Policy', 'bluetooth=(self)');
-    reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types voicecan lit-html sanitizer");
+    reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types voicecan lit-html sanitizer");
     const context = requestAccess.get(request);
     if (context?.applicationId) {
       const channel = context.channel ?? 'rest'; const bucketStart = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();

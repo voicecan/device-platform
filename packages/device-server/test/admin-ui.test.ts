@@ -8,6 +8,7 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   const openPlatform = await readFile(new URL('../../admin-web/src/open-platform-workspace.tsx', import.meta.url), 'utf8');
   const deviceIntegration = await readFile(new URL('../../admin-web/src/device-integration.tsx', import.meta.url), 'utf8');
   const deviceManagement = await readFile(new URL('../../admin-web/src/device-management.tsx', import.meta.url), 'utf8');
+  const nativeHandoff = await readFile(new URL('../../admin-web/src/native-handoff-panel.tsx', import.meta.url), 'utf8');
   const connectProtocol = await readFile(new URL('../../device-connect-web/src/protocol.ts', import.meta.url), 'utf8');
   const connectPage = await readFile(new URL('../../device-connect-web/src/main.ts', import.meta.url), 'utf8');
   const ui = await readFile(new URL('../../admin-web/src/ui.tsx', import.meta.url), 'utf8');
@@ -41,6 +42,9 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(workspaces, /setDeviceWsUrl\(\(currentUrl\) => currentUrl \|\| settings\.preferred_device_ws_url\)/);
   assert.match(deviceManagement, /DeviceWsCandidatePicker candidates=\{serverCandidates\}/);
   assert.match(ui, /aria-pressed=\{value === candidate\.url\}/);
+  assert.match(ui, /credential-backup-warning/);
+  assert.match(ui, /Back up credentials before binding/);
+  assert.match(ui, /Only a factory reset can unlock the device/);
   assert.match(workspaces, /Use an address reachable from the device network/);
   assert.doesNotMatch(workspaces, /placeholder="ws:\/\/192\.168\.1\.100/);
   assert.doesNotMatch(implementation, /Device access settings/);
@@ -86,7 +90,12 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.doesNotMatch(connectPage, /provisioning_token|localStorage/);
   assert.match(implementation, /startProvisioning/);
   assert.match(workspaces, /selectFirst/);
-  assert.match(workspaces, /Start binding/);
+  assert.match(workspaces, /Bind in browser/);
+  assert.match(workspaces, /Bind in native app/);
+  assert.match(nativeHandoff, /Apple App Store/);
+  assert.match(nativeHandoff, /Google Play/);
+  assert.match(nativeHandoff, /Android APK/);
+  assert.match(nativeHandoff, /Create binding task QR code/);
   assert.doesNotMatch(workspaces, /Create 10-minute binding grant/);
   assert.doesNotMatch(ui, /View raw response|raw-result/);
   assert.match(ui, /table-pagination/);

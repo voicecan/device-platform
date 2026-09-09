@@ -40,7 +40,7 @@ Device Connect Web 使用 Web Bluetooth 与 Voicecan 设备的 BLE GATT 服务�
 1. 管理员在 `/admin?view=provision` 选择目标用户组，创建 30 分钟设备绑定凭证。
 2. 管理端检查 `isSecureContext` 和 `navigator.bluetooth`。
 3. 若当前管理端可直接使用 Web Bluetooth，则在管理页面内完成设备绑定。
-4. 若不可用，则用户点击“开始绑定”时直接打开配置的公网 HTTPS 连接页。
+4. 若不可用，则用户点击“在网页端绑定”时直接打开配置的公网 HTTPS 连接页。
 5. 安全会话连接后，用户在连接页点击“选择设备并开始绑定”，由这个用户手势打开浏览器蓝牙设备选择器。连接页只操作当前电脑的 BLE，并严格按 App 顺序执行：连接 GATT、读取设备身份、向 Server 领取绑定 Token、完成 BLE Token 安全握手；只有这四步成功后才读取、展示设备当前网络状态。所有 NAS/本地 Server 请求仍由原管理页面发起。
 6. 用户选择保留现有网络或填写新的 Wi-Fi 配置；页面持续读取设备状态，只有网络变为可用后才写入服务器地址。
 7. 连接页等待 Server 确认设备上线；完成后返回管理端，管理端校验一次性 `state`，再向 Server 查询绑定会话的权威状态。

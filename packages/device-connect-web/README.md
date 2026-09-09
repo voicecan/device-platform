@@ -44,7 +44,7 @@ VOICECAN_CONNECT_WEB_URL=https://connect.example.com/
 管理端的自动选择规则为：
 
 1. 当前页面是浏览器安全上下文，并且存在 `navigator.bluetooth`：直接挂载本包导出的 `mountDeviceConnector()`，流程不离开管理端。
-2. 其他情况：用户在管理端点击“开始绑定”后，直接打开 `VOICECAN_CONNECT_WEB_URL`。
+2. 其他情况：用户在管理端点击“在网页端绑定”后，直接打开 `VOICECAN_CONNECT_WEB_URL`。
 
 这里使用“安全上下文”而不是只检查 URL 是否以 HTTPS 开头，因为浏览器也把 loopback HTTP 视为安全上下文。
 

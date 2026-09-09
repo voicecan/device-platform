@@ -1,11 +1,11 @@
 # Native binding handoff v1 (development preview)
 
-Implemented 2026-09-08. This is the server/Web part of the native app plan (T07 and part of T08). Android/iOS now implement administrator-verified self-hosted HTTPS origin registration, signed exchange/observe/cancel, separate secure task recovery and QR/paste task screens. Android also accepts explicit system text sharing. Web generates QR codes locally. Verified App/Universal Links and BLE task execution remain pending; no native claim is enabled. No production deployment or device acceptance is implied.
+Implemented from 2026-09-08 and extended on 2026-09-09. Android/iOS now auto-register the origin carried by a structurally valid task link, then perform signed exchange/observe/cancel/claim with separate secure task recovery. HTTPS keeps the operating system's certificate validation; restricted private-network HTTP is accepted for local self-hosted deployments. Android also accepts explicit system text sharing. Web generates task QR codes locally and reserves App Store, Google Play, and APK download positions while release URLs are unavailable. Verified App/Universal Links and production device acceptance remain pending; no production deployment is implied.
 
 ## Authorization flow
 
-1. An authorized Web user creates a `binding_intent`, then posts `{}` to `/api/v1/binding-intents/:id/native-handoffs`. The response contains an HTTPS deployment link of the form `/native/connect?v=1&handoff=<id>#ticket=<opaque>`. The ticket expires in five minutes or at the binding root expiry, whichever is earlier. The development test origin uses HTTP loopback only.
-2. The app must already trust the exact platform origin. Users register it separately after verifying the HTTPS address with their deployment administrator through an independent trusted channel; the deployment host is not hard-coded. A scanned link must never establish trust or supply a new API/callback origin. Persist a temporary P-256 private key, handoff ID and exchange request ID in task-only secure storage before exchange; do not put them in the local device credential store. Do not send user cookies or an Origin header.
+1. An authorized Web user creates a `binding_intent`, then posts `{}` to `/api/v1/binding-intents/:id/native-handoffs`. The server derives the native API origin from that intent's selected `resolved_device_ws_url` (`ws` → `http`, `wss` → `https`, retaining host and port) instead of the global browser-facing public URL. The response contains a deployment link of the form `/native/connect?v=1&handoff=<id>#ticket=<opaque>`. HTTPS is preferred; restricted private-network HTTP is supported for self-hosted intranet deployments. The ticket expires in five minutes or at the binding root expiry, whichever is earlier.
+2. Scanning, pasting, or sharing a structurally valid task link registers its platform origin in the app and immediately starts exchange; no separate manual registration is required. Mobile clients accept public origins only over HTTPS and limit cleartext HTTP to loopback, private/link-local IPv4, IPv6 ULA/link-local, single-label LAN hosts, and `.local`. Persist a temporary P-256 private key, handoff ID and exchange request ID in task-only secure storage before exchange; do not put them in the local device credential store. Do not send user cookies or an Origin header, follow redirects, or accept response audience/callback substitution.
 3. The app signs `POST /api/v1/native-handoffs/exchange` with `{handoff_id,ticket,client_public_key,request_id}`. The public key is canonical unpadded base64url SPKI DER, curve prime256v1. The server stores the ticket hash and public key, never the raw ticket or private key. This only establishes a pending execution request; it does not release a device Token.
 4. Both screens display `client_fingerprint`: first 24 lowercase hex characters of SHA-256 of the public-key DER. The user compares it before pressing Web **Approve this app**. Web approval posts `{expected_execution_epoch}` to `/api/v1/native-handoffs/:id/approve`. The original binding browser needs its cookie plus exact allowed Origin; a signed-in user needs its session, CSRF and current group administrator authority. Approval does not accept native proof in place of Web authority.
 5. The app calls signed `observe` to discover the approved epoch, including when its last known epoch was zero. `observe` is read-only and does not renew the lease. `resume` renews a still-valid two-minute lease using the current epoch. An expired lease requires explicit Web reapproval, advancing the epoch; the same handoff can recover its original Token. Clients should renew while executing, before lease expiry.
@@ -18,7 +18,7 @@ All app routes use POST without query parameters. Bodies are closed objects cont
 
 ```text
 voicecan.native-proof.v1
-<exact configured API origin>
+<exact API origin derived from the task's resolved Device WebSocket URL>
 POST
 <exact /api/v1/native-handoffs/... path>
 <Unix milliseconds, 13 decimal digits>
@@ -32,7 +32,7 @@ After exchange each body includes `request_id` and nonnegative integer `executio
 
 For a lost response, resend the same operation/body/request ID with a **fresh nonce, timestamp and signature**. Reusing an ID for a different body/operation returns `NATIVE_IDEMPOTENCY_CONFLICT`. Exchange retry also requires the same key and ticket; another key cannot take over the ticket. Claim retries recover the same encrypted temporary credential, never mint a replacement. The device Token uses the platform's existing padded standard Base64 encoding, not base64url. Native responses never expose browser continuation grants.
 
-Each handoff is limited to 2,048 request IDs and 512 recent nonces, with at most 20 handoffs per intent. The binding root's existing 30-minute lifetime remains the outer deadline. A replay cannot extend it. `instance_id` is `instance_` followed by the first 32 hex characters of SHA-256 of the configured API origin; it is an identifier, not a trust certificate.
+Each handoff is limited to 2,048 request IDs and 512 recent nonces, with at most 20 handoffs per intent. The binding root's existing 30-minute lifetime remains the outer deadline. A replay cannot extend it. `instance_id` is `instance_` followed by the first 32 hex characters of SHA-256 of the task API origin derived from `resolved_device_ws_url`; it is an identifier, not a trust certificate.
 
 ## Execution and recovery limits
 

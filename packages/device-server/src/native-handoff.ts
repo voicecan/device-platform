@@ -2,6 +2,7 @@ import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerConfig } from './config.js';
 import type { Database, SqlStatement } from './database.js';
+import { deviceHttpBaseUrl } from './device-url.js';
 import { decryptSecret, encodeDeviceToken, opaqueToken, tokenHash } from './security.js';
 
 type Row = Record<string, unknown>;
@@ -57,8 +58,8 @@ type Dependencies = {
 };
 export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependencies): void {
   const { db, config } = deps;
-  const audience = new URL(config.publicBaseUrl).origin;
-  const instanceId = `instance_${createHash('sha256').update(audience).digest('hex').slice(0, 32)}`;
+  const audienceFor = (intent: Row) => new URL(deviceHttpBaseUrl(String(intent.resolved_device_ws_url))).origin;
+  const instanceIdFor = (audience: string) => `instance_${createHash('sha256').update(audience).digest('hex').slice(0, 32)}`;
   const fingerprint = (encodedKey: unknown) => encodedKey ? createHash('sha256').update(Buffer.from(String(encodedKey), 'base64url')).digest('hex').slice(0, 24) : null;
   const read = async (id: string, code = 'NATIVE_HANDOFF_NOT_FOUND'): Promise<Row> => {
     const row = await db.get<Row>('SELECT * FROM native_handoffs WHERE id=?', [id]);
@@ -105,6 +106,7 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
     if (!Number.isSafeInteger(body.execution_epoch) || Number(body.execution_epoch) < 0) return fail(400, 'INVALID_NATIVE_REQUEST');
     const handoff = await read(String((request.params as Row).id)); assertAlive(handoff);
     if (!handoff.client_public_key) return fail(401, 'NATIVE_EXCHANGE_REQUIRED');
+    const audience = audienceFor(await intentFor(handoff));
     const proof = verifyProof(request, audience, String(handoff.client_public_key), body);
     await consumeNonce(handoff, proof);
     await rememberRequest(handoff, operation, body);
@@ -112,6 +114,7 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
   };
   const summary = async (handoff: Row): Promise<Row> => {
     const intent = await intentFor(handoff); const state = await deps.intentState(intent);
+    const audience = audienceFor(intent); const instanceId = instanceIdFor(audience);
     const executor = await db.get<Row>('SELECT handoff_id,execution_epoch FROM binding_executors WHERE binding_intent_id=?', [intent.id]);
     const owns = handoff.status === 'approved' && String(handoff.lease_expires_at) > now() && executor?.handoff_id === handoff.id && Number(executor?.execution_epoch) === Number(handoff.execution_epoch);
     return {
@@ -139,7 +142,7 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
       { sql: 'INSERT INTO binding_executors(binding_intent_id,execution_epoch,updated_at) VALUES(?,0,?) ON CONFLICT(binding_intent_id) DO NOTHING', params: [intent.id, timestamp] },
       { sql: "INSERT INTO native_handoffs(id,binding_intent_id,ticket_hash,ticket_expires_at,expires_at,status,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?)", params: [id, intent.id, tokenHash(ticket), ticketExpires, intent.expires_at, timestamp, timestamp], expectChanges: 1 },
     ]);
-    const link = new URL('/native/connect', audience); link.searchParams.set('v', '1'); link.searchParams.set('handoff', id); link.hash = `ticket=${encodeURIComponent(ticket)}`;
+    const link = new URL('/native/connect', audienceFor(intent)); link.searchParams.set('v', '1'); link.searchParams.set('handoff', id); link.hash = `ticket=${encodeURIComponent(ticket)}`;
     return ok(reply, { handoff_id: id, ticket_expires_at: ticketExpires, launch_url: link.href, requires_web_approval: true }, 201);
   });
 
@@ -147,6 +150,7 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
     const body = bodyOf(request, ['handoff_id', 'ticket', 'client_public_key', 'request_id']);
     const handoff = await read(text(body, 'handoff_id'));
     const encodedKey = text(body, 'client_public_key', 200); const requestId = text(body, 'request_id');
+    const audience = audienceFor(await intentFor(handoff));
     const proof = verifyProof(request, audience, encodedKey, body); assertAlive(handoff);
     if (tokenHash(text(body, 'ticket', 512)) !== handoff.ticket_hash) return fail(403, 'NATIVE_TICKET_INVALID');
     const exchangeHash = tokenHash(nativeCanonicalBody(body));

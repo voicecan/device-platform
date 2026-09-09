@@ -14,6 +14,13 @@ test('Open Platform and device binding copy is localized', () => {
   assert.equal(translate('zh-CN', 'Application control plane'), '应用控制面');
   assert.equal(translate('zh-CN', 'Permissions are loaded from the server catalog and shared by REST and MCP.'), '权限从服务器目录加载，并由 REST 与 MCP 共享。');
   assert.equal(translate('zh-CN', 'Bind device'), '绑定设备');
+  assert.equal(translate('zh-CN', 'Bind in browser'), '在网页端绑定');
+  assert.equal(translate('zh-CN', 'Bind in native app'), '在 App 端绑定');
+  assert.equal(translate('zh-CN', 'Create binding task QR code'), '生成绑定任务二维码');
+  assert.equal(translate('zh-CN', "The task QR uses the server address derived from this binding's Device WebSocket address."), '任务二维码使用从本次绑定所选设备 WebSocket 地址推导出的服务端地址。');
+  assert.equal(translate('zh-CN', 'APK download link reserved'), 'APK 下载链接预留位');
+  assert.equal(translate('zh-CN', 'Back up credentials before binding'), '绑定前必须备份凭据');
+  assert.match(translate('zh-CN', 'If this server is reset or the binding Token is lost, data on the device cannot be read. Only a factory reset can unlock the device, and the existing data cannot be recovered.'), /只有返厂重置才能解除设备锁定/);
   assert.equal(translate('zh-CN', 'Configure network and confirm binding'), '配置网络并确认绑定');
   assert.equal(translate('zh-CN', 'Event types'), '事件类型');
   assert.equal(translate('zh-CN', 'Attribute {value}', { value: 2 }), '属性 2');

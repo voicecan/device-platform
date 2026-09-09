@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import { migrate } from '../src/migrate.js';
 import { nativeProofMessage } from '../src/native-handoff.js';
 
 const audience = 'http://127.0.0.1:8787';
+const taskAudience = 'http://192.168.50.20:8787';
 test('native handoff: proof, Web approval, fencing, same-token recovery and authoritative completion', async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-native-'));
   const config = await loadConfig({ VOICECAN_DATA_DIR: dataDir, VOICECAN_PUBLIC_BASE_URL: audience, VOICECAN_DEVICE_ADVERTISE_HOST: '192.168.50.20', VOICECAN_BLE_SERVICE_UUID: '1a12', VOICECAN_LOG_LEVEL: 'silent' });
@@ -22,7 +23,7 @@ test('native handoff: proof, Web approval, fencing, same-token recovery and auth
   assert.equal(setup.statusCode, 201, setup.body);
   const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'admin', password: 'correct horse battery staple' } });
   const headers = { cookie: String(login.headers['set-cookie']).split(';')[0]!, 'x-csrf-token': login.json().data.csrf_token as string };
-  const created = await app.inject({ method: 'POST', url: '/api/v1/binding-intents', headers, payload: { group_id: setup.json().data.group_id, allowed_origin: audience, expected_sn: 'NATIVE-0001' } });
+  const created = await app.inject({ method: 'POST', url: '/api/v1/binding-intents', headers, payload: { group_id: setup.json().data.group_id, allowed_origin: audience, device_ws_url: `${taskAudience.replace('http:', 'ws:')}/device/v1/ws`, expected_sn: 'NATIVE-0001' } });
   assert.equal(created.statusCode, 201, created.body);
   const intentId = created.json().data.id as string;
   const browserExchange = await app.inject({ method: 'POST', url: '/api/v1/binding-intents/exchange', headers: { origin: audience }, payload: { launch_token: new URLSearchParams(new URL(created.json().data.launch_url).hash.slice(1)).get('launch') } });
@@ -35,6 +36,7 @@ test('native handoff: proof, Web approval, fencing, same-token recovery and auth
     assert.equal(response.statusCode, 201, response.body);
     const data = response.json().data;
     const url = new URL(data.launch_url);
+    assert.equal(url.origin, taskAudience, 'native task uses the HTTP origin derived from the selected device WebSocket URL');
     assert.equal(url.searchParams.has('ticket'), false);
     assert.ok(Date.parse(data.ticket_expires_at) - Date.now() <= 300_000);
     return { id: data.handoff_id as string, ticket: new URLSearchParams(url.hash.slice(1)).get('ticket')! };
@@ -43,7 +45,7 @@ test('native handoff: proof, Web approval, fencing, same-token recovery and auth
   const encodedKey = key.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
   const proof = (url: string, payload: Record<string, unknown>, signingKey = key.privateKey) => {
     const timestamp = String(Date.now()), nonce = randomBytes(24).toString('base64url');
-    return { 'x-vc-timestamp': timestamp, 'x-vc-nonce': nonce, 'x-vc-signature': sign('sha256', Buffer.from(nativeProofMessage(audience, url, timestamp, nonce, payload)), signingKey).toString('base64url') };
+    return { 'x-vc-timestamp': timestamp, 'x-vc-nonce': nonce, 'x-vc-signature': sign('sha256', Buffer.from(nativeProofMessage(taskAudience, url, timestamp, nonce, payload)), signingKey).toString('base64url') };
   };
   const post = (url: string, payload: Record<string, unknown>) => app.inject({ method: 'POST', url, payload, headers: proof(url, payload) });
   const handoff = await makeHandoff();
@@ -53,6 +55,9 @@ test('native handoff: proof, Web approval, fencing, same-token recovery and auth
   const exchanged = await app.inject({ method: 'POST', url: exchangePath, headers: exchangeHeaders, payload: exchangeBody });
   assert.equal(exchanged.statusCode, 200, exchanged.body);
   assert.equal(exchanged.json().data.status, 'exchanged');
+  assert.equal(exchanged.json().data.audience, taskAudience);
+  assert.equal(exchanged.json().data.instance_id, `instance_${createHash('sha256').update(taskAudience).digest('hex').slice(0, 32)}`);
+  assert.equal(exchanged.json().data.callback_registration.url, `${taskAudience}/admin?view=provision&binding_intent=${intentId}`);
   assert.equal('device_token' in exchanged.json().data, false);
   assert.equal((await app.inject({ method: 'POST', url: exchangePath, headers: exchangeHeaders, payload: exchangeBody })).json().code, 'NATIVE_PROOF_REPLAY');
   assert.equal((await post(exchangePath, exchangeBody)).statusCode, 200, 'lost exchange response is recoverable');
