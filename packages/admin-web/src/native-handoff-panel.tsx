@@ -1,11 +1,11 @@
 import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from './api.js';
+import { hasActiveNativeExecutor, visibleNativeHandoffs } from './native-handoff-state.js';
 import { Button, Icon } from './ui.js';
 import type { Translate } from './ui.js';
 
-type Handoff = { id: string; status: string; client_fingerprint: string | null; lease_expires_at: string | null; expires_at: string };
-type Snapshot = { execution_epoch: number; active_handoff_id: string | null; handoffs: Handoff[] };
+import type { Snapshot } from './native-handoff-state.js';
 type Launch = { launch_url: string; ticket_expires_at: string };
 
 export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId: string; t: Translate; onExecutorChange: (active: boolean) => void }) {
@@ -22,7 +22,7 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
     const load = async () => {
       try {
         const next = await api<Snapshot>(path);
-        if (active) { setSnapshot(next); onExecutorChange(Boolean(next.active_handoff_id)); setError(''); }
+        if (active) { setSnapshot(next); onExecutorChange(hasActiveNativeExecutor(next)); setError(''); }
       } catch (cause) { if (active) setError(errorMessage(cause)); }
       finally { if (active) { setClock(Date.now()); timer = setTimeout(() => void load(), 5_000); } }
     };
@@ -38,7 +38,7 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
     setBusy(true); setError('');
     try {
       await operation();
-      const next = await api<Snapshot>(path); setSnapshot(next); onExecutorChange(Boolean(next.active_handoff_id));
+      const next = await api<Snapshot>(path); setSnapshot(next); onExecutorChange(hasActiveNativeExecutor(next));
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   };
@@ -62,12 +62,15 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange }: { intentId
     <Button id="native-create-handoff" disabled={busy} onClick={() => void mutate(async () => { setLaunch(await api<Launch>(path, { method: 'POST', body: '{}' })); })}>{t('Create binding task QR code')}</Button>
     {liveLaunch ? <div>{qr ? <img src={qr} width={320} height={320} style={{ maxWidth: '100%', height: 'auto' }} alt={t('Scan this task QR in the native app')}/> : null}<div className="form-actions native-handoff-actions"><a className="button native-open-app-link" href={launch.launch_url} referrerPolicy="no-referrer"><span>{t('Open app link')}</span><Icon name="arrow" size={16}/></a><Button id="native-copy-link" kind="secondary" disabled={busy} onClick={() => void mutate(() => navigator.clipboard.writeText(launch.launch_url))}>{t('Copy app link')}</Button>{typeof navigator.share === 'function' ? <Button id="native-share-link" kind="ghost" disabled={busy} onClick={() => void mutate(async () => { try { await navigator.share({ url: launch.launch_url }); } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'AbortError')) throw cause; } })}>{t('Share to app')}</Button> : null}</div></div> : launch ? <p role="status">{t('App link expired. Create a new link.')}</p> : null}
     {error ? <p role="alert" className="inline-alert inline-alert-error">{error}</p> : null}
-    {snapshot?.active_handoff_id ? <p role="status">{t('This task is assigned to the native app. Completion is confirmed by the device server.')}</p> : null}
-    {snapshot?.handoffs.filter(item => item.client_fingerprint && Date.parse(item.expires_at) > clock).map(item => {
+    {snapshot && hasActiveNativeExecutor(snapshot, clock) ? <p role="status">{t('This task is assigned to the native app. Completion is confirmed by the device server.')}</p> : null}
+    {snapshot && visibleNativeHandoffs(snapshot, clock).map(item => {
       const renewable = item.status === 'approved' && Date.parse(item.lease_expires_at ?? '') <= clock;
-      return <div className="impact-note" key={item.id}>
-        <p>{t('Verification code')}: <code>{item.client_fingerprint}</code></p>
-        <p>{t(item.status)}{item.id === snapshot.active_handoff_id ? ` · ${t('Active executor')}` : ''}</p>
+      const activeExecutor = item.id === snapshot.active_handoff_id && hasActiveNativeExecutor(snapshot, clock);
+      return <div className="impact-note native-handoff-request" key={item.id}>
+        <div className="native-handoff-request-copy">
+          <p>{t('Verification code')}: <code>{item.client_fingerprint}</code></p>
+          <p>{t(item.status)}{activeExecutor ? ` · ${t('Active executor')}` : ''}</p>
+        </div>
         {item.status === 'exchanged' || renewable ? <Button id={`approve-${item.id}`} disabled={busy} onClick={() => void mutate(async () => { await api(`/native-handoffs/${encodeURIComponent(item.id)}/approve`, { method: 'POST', body: JSON.stringify({ expected_execution_epoch: snapshot.execution_epoch }) }); setLaunch(undefined); })}>{t(renewable ? 'Reauthorize this app' : 'Approve this app')}</Button> : null}
       </div>;
     })}

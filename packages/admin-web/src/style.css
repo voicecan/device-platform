@@ -289,6 +289,11 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .impact-note { border: 1px solid #ead7bd; border-radius: 13px; padding: 13px 15px; background: #fbf4e9; color: #795327; }
 .impact-note strong { font-size: 12px; }
 .impact-note p { margin: 3px 0 0; font-size: 11px; }
+.native-handoff-request { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 15px 16px; }
+.native-handoff-request-copy { display: grid; min-width: 0; gap: 4px; }
+.native-handoff-request-copy p { margin: 0; }
+.native-handoff-request-copy code { overflow-wrap: anywhere; }
+.native-handoff-request > .button { justify-self: end; }
 .scope-picker { border: 1px solid var(--vc-border); border-radius: 14px; padding: 16px; }
 .scope-picker legend { padding: 0 5px; font-size: 12px; font-weight: 650; }
 .scope-picker > p { margin: 0 0 12px; color: var(--vc-muted); font-size: 11px; }
@@ -639,5 +644,5 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 @media(max-width:980px){.device-status-grid,.device-network-grid{grid-template-columns:1fr}.device-status-card>header,.device-network-card>header{align-items:flex-start;flex-direction:column}}
 @media(max-width:760px){.firmware-card{align-items:stretch;flex-direction:column}.firmware-actions{min-width:0}.firmware-actions>*{flex:1 1 100%}.firmware-upload-grid{grid-template-columns:1fr}.firmware-upload-action{align-items:stretch;flex-direction:column}.firmware-upload-action small{max-width:none}.network-live-state{align-items:flex-start;flex-wrap:wrap}.network-live-state>span:last-child:not(.network-state-icon){width:100%;margin-left:52px}}
 @media(max-width:760px){.app-download-options{grid-template-columns:1fr}}
-@media(max-width:560px){.native-handoff-actions .button{width:100%;flex:1 1 100%}}
+@media(max-width:560px){.native-handoff-actions .button{width:100%;flex:1 1 100%}.native-handoff-request{grid-template-columns:1fr}.native-handoff-request>.button{width:100%;justify-self:stretch}}
 @media(max-width:560px){.device-vitals,.device-protocol-status{grid-template-columns:1fr}.device-protocol-status>div,.device-protocol-status>div:nth-child(odd),.device-protocol-status>div:nth-last-child(-n+2){border-right:0;border-bottom:1px solid var(--vc-border)}.device-protocol-status>div:last-child{border-bottom:0}.device-vital footer{flex-direction:column}.device-control-actions>*{flex:1 1 100%}.network-live-state>span:last-child:not(.network-state-icon){margin-left:0}.server-candidate-list small{white-space:normal}}
