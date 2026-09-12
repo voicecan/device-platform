@@ -5,6 +5,7 @@ import type { DeviceConnectCallback } from '@voicecan/device-connect-web';
 import { api, errorMessage, setCsrfToken } from './api.js';
 import { initialLocale, saveLocale, translate } from './i18n.js';
 import type { Locale } from './i18n.js';
+import { urlForView } from './navigation.js';
 import { AdminWorkspace, labels, navGroups, resourcePaths } from './workspaces.js';
 import { DeviceManagement } from './device-management.js';
 import type { View } from './workspaces.js';
@@ -23,10 +24,7 @@ function viewFromLocation(): View {
 }
 
 function updateViewLocation(view: View, mode: 'push' | 'replace' = 'push'): void {
-  const url = new URL(globalThis.location.href);
-  if (view === 'overview') url.searchParams.delete('view');
-  else url.searchParams.set('view', view);
-  if (view !== 'devices') url.searchParams.delete('device');
+  const url = urlForView(globalThis.location.href, view);
   if (mode === 'push') globalThis.history.pushState({ view }, '', url);
   else globalThis.history.replaceState({ view }, '', url);
 }
@@ -226,8 +224,7 @@ export function App() {
   };
 
   const selectDevice = (deviceId: string): void => {
-    const url = new URL(globalThis.location.href);
-    url.searchParams.set('view', 'devices');
+    const url = urlForView(globalThis.location.href, 'devices');
     url.searchParams.set('device', deviceId);
     globalThis.history.pushState({ view: 'devices', deviceId }, '', url);
     setView('devices');
@@ -235,8 +232,7 @@ export function App() {
   };
 
   const releaseDevice = (deviceId: string): void => {
-    const url = new URL(globalThis.location.href);
-    url.searchParams.set('view', 'release');
+    const url = urlForView(globalThis.location.href, 'release');
     url.searchParams.set('device', deviceId);
     globalThis.history.pushState({ view: 'release', deviceId }, '', url);
     setView('release');

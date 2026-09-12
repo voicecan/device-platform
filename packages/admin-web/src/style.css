@@ -285,6 +285,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .app-download-placeholder-file { border-radius: 14px; }
 .app-download-status { position: absolute; top: 8px; right: 8px; padding: 3px 7px; border-radius: 999px; color: var(--vc-muted); background: var(--vc-surface); font-size: .66rem; font-weight: 700; }
 .native-handoff-actions { align-items: center; margin-top: 14px; }
+.native-handoff-status { margin-top: 16px; }
 .native-open-app-link { text-decoration: none; }
 .impact-note { border: 1px solid #ead7bd; border-radius: 13px; padding: 13px 15px; background: #fbf4e9; color: #795327; }
 .impact-note strong { font-size: 12px; }
@@ -319,7 +320,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .section-divider::before, .section-divider::after { height: 1px; flex: 1; background: var(--vc-border); content: ""; }
 .hint { margin: 0; color: var(--vc-muted); font-size: 12px; }
 
-.stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
+.stepper { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); margin: 0; padding: 0; list-style: none; }
 .stepper li { position: relative; display: flex; align-items: center; flex-direction: column; gap: 7px; color: #a09b93; font-size: 11px; font-weight: 600; text-align: center; }
 .stepper li:not(:last-child)::after { position: absolute; top: 13px; right: -50%; left: 50%; height: 1px; background: var(--vc-border); content: ""; }
 .stepper li.step-complete:not(:last-child)::after { background: #9eb8b1; }
@@ -646,3 +647,25 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 @media(max-width:760px){.app-download-options{grid-template-columns:1fr}}
 @media(max-width:560px){.native-handoff-actions .button{width:100%;flex:1 1 100%}.native-handoff-request{grid-template-columns:1fr}.native-handoff-request>.button{width:100%;justify-self:stretch}}
 @media(max-width:560px){.device-vitals,.device-protocol-status{grid-template-columns:1fr}.device-protocol-status>div,.device-protocol-status>div:nth-child(odd),.device-protocol-status>div:nth-last-child(-n+2){border-right:0;border-bottom:1px solid var(--vc-border)}.device-protocol-status>div:last-child{border-bottom:0}.device-vital footer{flex-direction:column}.device-control-actions>*{flex:1 1 100%}.network-live-state>span:last-child:not(.network-state-icon){margin-left:0}.server-candidate-list small{white-space:normal}}
+
+.native-handoff-request { margin-top: 20px; }
+.native-approval-dialog { position: fixed; inset: 0; box-sizing: border-box; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; border: 0; padding: 24px; background: #f6f8f7; color: var(--vc-text); overflow-y: auto; }
+.native-approval-dialog::backdrop { background: rgb(24 29 28 / 70%); }
+.native-approval-content { width: min(600px, 100%); margin: max(24px, 8vh) auto; display: grid; gap: 24px; }
+.native-approval-content h2 { margin: 0; font-size: clamp(26px, 4vw, 38px); }
+.native-approval-content p { margin: 0; line-height: 1.7; }
+.native-approval-code { display: grid; gap: 14px; padding: 24px; border: 1px solid #e3c89f; background: #fff7e9; border-radius: 16px; }
+.native-approval-code code { overflow-wrap: anywhere; font-size: clamp(18px, 4vw, 28px); letter-spacing: .04em; }
+.native-approval-match { display: flex; align-items: center; gap: 12px; line-height: 1.6; }
+.native-approval-match input { width: 22px; height: 22px; flex-shrink: 0; }
+
+.binding-paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.binding-path { display: grid; gap: 8px; padding: 20px; border: 1px solid var(--vc-border-strong); border-radius: var(--vc-radius-lg); background: var(--vc-surface); color: var(--vc-text); text-align: left; transition: border-color var(--vc-motion-fast), background var(--vc-motion-fast); }
+.binding-path strong { font-size: 15px; }
+.binding-path span { color: var(--vc-muted); font-size: 12px; line-height: 1.6; }
+.binding-path:hover:not(:disabled), .binding-path.is-selected { border-color: var(--vc-primary); background: color-mix(in srgb, var(--vc-primary) 6%, var(--vc-surface)); }
+.binding-path.is-selected strong { color: var(--vc-primary); }
+.binding-path:disabled { cursor: default; }
+@media (max-width: 560px) { .binding-paths { grid-template-columns: 1fr; } }
+
+.binding-path-summary { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border: 1px solid var(--vc-border); border-radius: var(--vc-radius-md); background: var(--vc-surface-subtle); color: var(--vc-primary); }
