@@ -45,11 +45,11 @@ function Tabs({ options, value, onChange, t }: { options: readonly string[]; val
 
 function Actions({ children }: { children: ReactNode }) { return <div className="form-actions">{children}</div>; }
 
-export function AdminWorkspace({ view, t, run, locale, onNavigateDevice, canExportBackup }: { view: View; t: Translate; run: Runner; locale: Locale; onNavigateDevice: (deviceId: string) => void; canExportBackup: boolean }) {
+export function AdminWorkspace({ view, t, run, locale, onNavigateDevice, canExportBackup, headerActions }: { view: View; t: Translate; run: Runner; locale: Locale; onNavigateDevice: (deviceId: string) => void; canExportBackup: boolean; headerActions: HTMLElement | null }) {
   if (view === 'open-platform') return <OpenPlatformWorkspace t={t} run={run} />;
   if (view === 'groups') return <GroupsWorkspace t={t} run={run} />;
   if (view === 'users') return <UsersWorkspace t={t} run={run} />;
-  if (view === 'provision') return <ProvisionWorkspace t={t} run={run} locale={locale} onNavigateDevice={onNavigateDevice} canExportBackup={canExportBackup} />;
+  if (view === 'provision') return <ProvisionWorkspace headerActions={headerActions} t={t} run={run} locale={locale} onNavigateDevice={onNavigateDevice} canExportBackup={canExportBackup} />;
   if (view === 'release') return <ReleaseWorkspace t={t} run={run} />;
   if (view === 'inspector') return <InspectorWorkspace t={t} run={run} />;
   if (view === 'storage') return <StorageWorkspace t={t} run={run} />;
@@ -93,7 +93,7 @@ function UsersWorkspace({ t, run }: { t: Translate; run: Runner }) {
   </form></div><section className="content-card user-list-card"><header><div><p className="eyebrow">{t('Organization')}</p><h2>{t('User list')}</h2></div><Button id="list-users" kind="ghost" icon="refresh" onClick={() => void refreshUsers()}>{t('Refresh users')}</Button></header>{listError ? <div className="inline-alert inline-alert-error">{listError}</div> : <DataTable data={users} t={t} pageSize={10}/>}</section></div>;
 }
 
-function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup }: { t: Translate; run: Runner; locale: Locale; onNavigateDevice: (deviceId: string) => void; canExportBackup: boolean }) {
+function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup, headerActions }: { t: Translate; run: Runner; locale: Locale; onNavigateDevice: (deviceId: string) => void; canExportBackup: boolean; headerActions: HTMLElement | null }) {
   type BindingIntent = { id: string; group_id: string; expected_sn?: string | null; display_name?: string | null; ble_service_uuid: string; device_ws_url: string; network_mode: 'existing' | 'ask'; provisioning_session_id?: string | null; device_id?: string | null; status: string; failure_code?: string | null; expires_at: string };
   const initialIntentId = new URLSearchParams(globalThis.location.search).get('binding_intent') ?? '';
   const [bindingIntentId, setBindingIntentId] = useState(initialIntentId);
@@ -190,7 +190,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup 
   };
   const intentWaiting = bindingIntent?.status === 'configured';
   return <div className="flow-layout">
-    <BindingHistory t={t} currentId={bindingIntentId} disabled={started || creatingNative}/>
+    <BindingHistory target={headerActions} t={t} currentId={bindingIntentId} disabled={started || creatingNative}/>
     <Stepper steps={['Choose a binding path', ...(appPath ? ['Choose ownership', 'Approve the phone', 'Configure in app', 'Binding complete'] : steps)]} current={!pathLocked ? 0 : 1 + (intentWaiting ? 2 : appPath && bindingIntentId ? nativeExecutor ? 2 : 1 : current)} t={t}/>
     {!pathLocked ? <div className="binding-paths" role="group" aria-label={t('Choose a binding path')}>
       <button type="button" className="binding-path" disabled={pathLocked} onClick={() => choosePath('web')}>

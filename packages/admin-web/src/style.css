@@ -670,7 +670,11 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 
 .binding-path-summary { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border: 1px solid var(--vc-border); border-radius: var(--vc-radius-md); background: var(--vc-surface-subtle); color: var(--vc-primary); }
 
-.binding-history-entry { display: flex; justify-content: flex-end; }
+.binding-page-heading { width: 100%; min-width: 0; }
+.binding-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.binding-title-row > div { flex-shrink: 0; }
+.binding-history-entry { display: flex; }
+.binding-history-entry > .button { white-space: nowrap; }
 .binding-history-dialog { box-sizing: border-box; width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; border: 1px solid var(--vc-border); border-radius: var(--vc-radius-md); background: var(--vc-surface); color: var(--vc-text); overflow-y: auto; }
 .binding-history-dialog::backdrop { background: rgb(24 29 28 / 45%); }
 .binding-history-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--vc-border); background: var(--vc-surface); }

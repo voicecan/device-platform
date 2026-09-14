@@ -658,10 +658,12 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
   const adminAsset = (name: 'index.html' | 'style.css' | 'app.js') => readFile(new URL(`../../admin-web/dist/${name}`, import.meta.url));
   app.get('/admin', async (_request, reply) => {
-    const page = (await adminAsset('index.html')).toString('utf8').replace('__VOICECAN_CONNECT_URL__', config.deviceConnectUrl.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'));
+    const [html, css] = await Promise.all([adminAsset('index.html'), adminAsset('style.css')]);
+    const styleVersion = createHash('sha256').update(css).digest('hex').slice(0, 16);
+    const page = html.toString('utf8').replace('/admin/style.css', `/admin/style.css?v=${styleVersion}`).replace('__VOICECAN_CONNECT_URL__', config.deviceConnectUrl.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'));
     return reply.type('text/html; charset=utf-8').header('Cache-Control', 'no-store').send(page);
   });
-  app.get('/admin/style.css', async (_request, reply) => reply.type('text/css; charset=utf-8').header('Cache-Control', 'public, max-age=300').send(await adminAsset('style.css')));
+  app.get('/admin/style.css', async (_request, reply) => reply.type('text/css; charset=utf-8').header('Cache-Control', 'no-store').send(await adminAsset('style.css')));
   app.get('/admin/app.js', async (_request, reply) => reply.type('text/javascript; charset=utf-8').header('Cache-Control', 'no-store').send(await adminAsset('app.js')));
   const requireHumanAssetAccess = async (request: FastifyRequest): Promise<void> => {
     const context = await resolveAccess(request);

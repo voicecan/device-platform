@@ -12,12 +12,13 @@ type HistoryTask = {
 };
 type History = { items: HistoryTask[]; total_count: number };
 
-export function BindingHistory({ t, currentId, disabled }: { t: Translate; currentId: string; disabled: boolean }) {
+export function BindingHistory({ t, currentId, disabled, target }: { t: Translate; currentId: string; disabled: boolean; target: HTMLElement | null }) {
   const [visible, setVisible] = useState(false);
-  return <div className="binding-history-entry">
+  if (!target) return null;
+  return createPortal(<div className="binding-history-entry">
     <Button kind="ghost" icon="clock" aria-haspopup="dialog" onClick={() => setVisible(true)}>{t('Task history')}</Button>
     {visible ? <BindingHistoryDialog t={t} currentId={currentId} disabled={disabled} onClose={() => setVisible(false)}/> : null}
-  </div>;
+  </div>, target);
 }
 
 function BindingHistoryDialog({ t, currentId, disabled, onClose }: { t: Translate; currentId: string; disabled: boolean; onClose: () => void }) {

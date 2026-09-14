@@ -62,6 +62,12 @@ test('independent server setup, immutable upload, group isolation and device tra
   }
   const adminPage = await app.inject({ method: 'GET', url: '/admin' });
   assert.match(adminPage.body, /id="root"/);
+  const adminStyle = await app.inject({ method: 'GET', url: '/admin/style.css' });
+  const styleVersion = createHash('sha256').update(adminStyle.body).digest('hex').slice(0, 16);
+  assert.ok(adminPage.body.includes(`/admin/style.css?v=${styleVersion}`), 'stylesheet URL must change with the CSS content');
+  assert.equal(adminStyle.headers['cache-control'], 'no-store');
+  const versionedStyle = await app.inject({ method: 'GET', url: `/admin/style.css?v=${styleVersion}` });
+  assert.equal(versionedStyle.body, adminStyle.body);
   assert.match(adminPage.body, /content="https:\/\/connector\.example\.test\/connect\/"/);
   assert.doesNotMatch(adminPage.body, /__VOICECAN_CONNECT_URL__/);
   const deviceUiBundle = await app.inject({ method: 'GET', url: '/sdk/device-ui.js' });
