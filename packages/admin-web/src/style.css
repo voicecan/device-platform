@@ -669,3 +669,11 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 @media (max-width: 560px) { .binding-paths { grid-template-columns: 1fr; } }
 
 .binding-path-summary { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border: 1px solid var(--vc-border); border-radius: var(--vc-radius-md); background: var(--vc-surface-subtle); color: var(--vc-primary); }
+
+.binding-history-entry { display: flex; justify-content: flex-end; }
+.binding-history-dialog { box-sizing: border-box; width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; border: 1px solid var(--vc-border); border-radius: var(--vc-radius-md); background: var(--vc-surface); color: var(--vc-text); overflow-y: auto; }
+.binding-history-dialog::backdrop { background: rgb(24 29 28 / 45%); }
+.binding-history-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--vc-border); background: var(--vc-surface); }
+.binding-history-header h2 { margin: 0; font-size: 18px; }
+.binding-history-content { display: grid; gap: 16px; padding: 20px 24px; }
+.binding-history-content > p { margin: 0; color: var(--vc-muted); line-height: 1.6; }

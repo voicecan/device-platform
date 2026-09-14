@@ -1,3 +1,4 @@
+import { BindingHistory } from './binding-history.js';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { supportsLocalWebBluetooth } from '@voicecan/device-connect-web';
@@ -135,7 +136,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup 
       if (!active) return;
       setBindingIntent(intent); setBleServiceUuid(intent.ble_service_uuid); setGroupId(intent.group_id); setSerial(intent.expected_sn ?? ''); setDeviceWsUrl(intent.device_ws_url);
       if (intent.status === 'completed' && intent.device_id) { onNavigateDevice(intent.device_id); return; }
-      if (['pending', 'user_action', 'ble_selected', 'claimed', 'configured'].includes(intent.status)) timer = globalThis.setTimeout(() => void loadIntent(), bindingIntentPollMs);
+      if (['pending', 'user_action', 'ble_selected', 'claimed', 'configured', 'failed', 'expired'].includes(intent.status)) timer = globalThis.setTimeout(() => void loadIntent(), bindingIntentPollMs);
     };
     const loadIntent = async (): Promise<void> => {
       try { applyIntent(await api<BindingIntent>(`/binding-intents/${encodeURIComponent(bindingIntentId)}/browser`)); }
@@ -161,7 +162,14 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup 
   const current = !started ? 0 : deviceStep === 0 ? 1 : deviceStep === 1 || deviceStep === 2 ? 2 : 3;
   const createGrant = async (): Promise<{ expires_at: string; provisioning_token: string }> => {
     if (bindingIntentId) return api(`/binding-intents/${encodeURIComponent(bindingIntentId)}/grant`, { method: 'POST', body: '{}' });
-    const expectedSn = serial.trim(); return api('/provisioning-sessions', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, ...(!localBluetooth ? { connector_origin: new URL(connectorUrl).origin } : {}), ...(expectedSn ? { expected_sn: expectedSn } : {}) }) });
+    const expectedSn = serial.trim();
+    const created = await api<{ id: string; launch_url: string }>('/binding-intents', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, device_ws_url: deviceWsUrl.trim(), ...(!localBluetooth ? { connector_origin: new URL(connectorUrl).origin } : {}), ...(expectedSn ? { expected_sn: expectedSn } : {}), locale }) });
+    // Browser binding also needs a durable root before a device Token is issued.
+    const launchToken = new URLSearchParams(new URL(created.launch_url).hash.slice(1)).get('launch');
+    const intent = await api<BindingIntent>('/binding-intents/exchange', { method: 'POST', body: JSON.stringify({ launch_token: launchToken }) });
+    const url = new URL(globalThis.location.href); url.searchParams.set('binding_intent', created.id); url.searchParams.set('binding_path', 'web'); url.searchParams.set('binding_path_locked', '1'); url.hash = '';
+    globalThis.history.replaceState(globalThis.history.state, '', url); setBindingIntentId(created.id); setBindingIntent(intent);
+    return api(`/binding-intents/${encodeURIComponent(created.id)}/grant`, { method: 'POST', body: '{}' });
   };
   const reportError = (integrationError: unknown): void => { setStarted(false); setDeviceStep(0); const message = integrationError instanceof Error ? integrationError.message : 'Device selection failed unexpectedly.'; void run(() => Promise.reject(new Error(t(message)))); };
   const beginBinding = (): void => {
@@ -182,6 +190,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup 
   };
   const intentWaiting = bindingIntent?.status === 'configured';
   return <div className="flow-layout">
+    <BindingHistory t={t} currentId={bindingIntentId} disabled={started || creatingNative}/>
     <Stepper steps={['Choose a binding path', ...(appPath ? ['Choose ownership', 'Approve the phone', 'Configure in app', 'Binding complete'] : steps)]} current={!pathLocked ? 0 : 1 + (intentWaiting ? 2 : appPath && bindingIntentId ? nativeExecutor ? 2 : 1 : current)} t={t}/>
     {!pathLocked ? <div className="binding-paths" role="group" aria-label={t('Choose a binding path')}>
       <button type="button" className="binding-path" disabled={pathLocked} onClick={() => choosePath('web')}>

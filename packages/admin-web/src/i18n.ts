@@ -3,6 +3,21 @@ export type Locale = 'zh-CN' | 'en';
 const localeKey = 'voicecan.locale';
 
 const zhCN: Readonly<Record<string, string>> = {
+  'Task history': '历史任务',
+  'Close': '关闭',
+  'Binding task history': '绑定任务历史',
+  'Tasks are saved on the platform. Reopen the original task after switching modules or refreshing. Expired app tasks require reauthorization.': '任务保存在平台，切换模块或刷新后可以重开原任务。已过期的 App 任务需重新授权。',
+  'Unfinished tasks': '未完成任务',
+  'All tasks': '全部任务',
+  'Loading tasks…': '正在加载任务…',
+  'No binding tasks found.': '暂无绑定任务。',
+  'Current task': '当前任务',
+  'View task': '查看任务',
+  'Resume task': '恢复任务',
+
+  'Device progress': '设备进度',
+  'Last attempt failed; keep this task and retry in the app.': '上次执行失败，请保留任务并在 App 中重试。',
+  'Reauthorize the original app to continue with the same device credential.': '重新授权原 App，使用同一设备凭据继续任务。',
   'Use Voicecan Connect on your phone to complete this binding:': '请使用手机上的 Voicecan Connect 完成本次绑定：',
   'Open Voicecan Connect and tap “Scan binding QR”.': '打开 Voicecan Connect，点击“扫描绑定二维码”。',
   'Create the binding QR code on this page, then scan it with the app within five minutes.': '在此页面生成绑定二维码，并在五分钟内使用 App 扫描。',

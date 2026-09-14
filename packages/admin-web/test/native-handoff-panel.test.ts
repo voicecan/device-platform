@@ -39,3 +39,13 @@ test('an expired approval requires reauthorization and is no longer active', () 
   assert.equal(hasActiveNativeExecutor(snapshot, Date.now()), false);
   assert.deepEqual(visibleNativeHandoffs(snapshot, Date.now()).map(item => item.id), ['expired-lease']);
 });
+
+
+test('expired original task stays visible for same-credential recovery', () => {
+  const snapshot = { execution_epoch: 2, active_handoff_id: 'original', handoffs: [
+    { id: 'original', status: 'approved', client_fingerprint: 'code', lease_expires_at: future, expires_at: '2020-01-01T00:00:00.000Z', provisioning_stage: 'failed', failure_code: 'PROVISIONING_EXPIRED' },
+    { id: 'unused', status: 'exchanged', client_fingerprint: 'other', lease_expires_at: null, expires_at: '2020-01-01T00:00:00.000Z' },
+  ] };
+  assert.equal(hasActiveNativeExecutor(snapshot), false);
+  assert.deepEqual(visibleNativeHandoffs(snapshot, Date.now()).map(item => item.id), ['original']);
+});

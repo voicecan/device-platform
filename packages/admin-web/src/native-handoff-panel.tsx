@@ -46,7 +46,8 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange, bindingStatu
     finally { setBusy(false); }
   };
   const bindingLocked = ['configured', 'completed', 'expired', 'canceled'].includes(bindingStatus ?? '');
-  const candidates = snapshot && !bindingLocked ? visibleNativeHandoffs(snapshot, clock).filter(item => item.status === 'exchanged' || (item.status === 'approved' && Date.parse(item.lease_expires_at ?? '') <= clock)) : [];
+  const recoveryAllowed = !['completed', 'canceled'].includes(bindingStatus ?? '');
+  const candidates = snapshot && recoveryAllowed ? visibleNativeHandoffs(snapshot, clock).filter(item => item.status === 'exchanged' || (item.status === 'approved' && (Date.parse(item.lease_expires_at ?? '') <= clock || Date.parse(item.expires_at) <= clock))) : [];
   const approval = candidates.find(item => item.id === requestedApproval) ?? candidates.find(item => `${item.id}:${snapshot?.execution_epoch}` !== dismissedApproval);
   const approvalKey = approval ? `${approval.id}:${snapshot?.execution_epoch}:${approval.client_fingerprint}` : '';
   const closeApproval = () => { if (approval) setDismissedApproval(`${approval.id}:${snapshot?.execution_epoch}`); setRequestedApproval(undefined); };
@@ -71,19 +72,22 @@ export function NativeHandoffPanel({ intentId, t, onExecutorChange, bindingStatu
     {liveLaunch ? <div>{qr ? <img src={qr} width={320} height={320} style={{ maxWidth: '100%', height: 'auto' }} alt={t('Scan this task QR in the native app')}/> : null}<div className="form-actions native-handoff-actions"><a className="button native-open-app-link" href={launch.launch_url} referrerPolicy="no-referrer"><span>{t('Open app link')}</span><Icon name="arrow" size={16}/></a><Button id="native-copy-link" kind="secondary" disabled={busy} onClick={() => void mutate(() => navigator.clipboard.writeText(launch.launch_url))}>{t('Copy app link')}</Button>{typeof navigator.share === 'function' ? <Button id="native-share-link" kind="ghost" disabled={busy} onClick={() => void mutate(async () => { try { await navigator.share({ url: launch.launch_url }); } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'AbortError')) throw cause; } })}>{t('Share to app')}</Button> : null}</div></div> : launch ? <p role="status">{t('App link expired. Create a new link.')}</p> : null}
     {error ? <p role="alert" className="inline-alert inline-alert-error">{error}</p> : null}
     {approval && snapshot ? <NativeApprovalDialog key={approvalKey} item={approval} busy={busy} error={error} t={t} onClose={closeApproval} onApprove={() => void mutate(async () => {
-      await api(`/native-handoffs/${encodeURIComponent(approval.id)}/approve`, { method: 'POST', body: JSON.stringify({ expected_execution_epoch: snapshot.execution_epoch }) });
+      await api(`/native-handoffs/${encodeURIComponent(approval.id)}/${Date.parse(approval.expires_at) <= clock ? 'reauthorize' : 'approve'}`, { method: 'POST', body: JSON.stringify({ expected_execution_epoch: snapshot.execution_epoch }) });
       setLaunch(undefined); closeApproval();
     })}/> : null}
     {snapshot && hasActiveNativeExecutor(snapshot, clock) ? <p role="status" className="native-handoff-status">{t('This task is assigned to the native app. Completion is confirmed by the device server.')}</p> : null}
     {snapshot && visibleNativeHandoffs(snapshot, clock).map(item => {
-      const renewable = item.status === 'approved' && Date.parse(item.lease_expires_at ?? '') <= clock;
+      const renewable = item.status === 'approved' && (Date.parse(item.lease_expires_at ?? '') <= clock || Date.parse(item.expires_at) <= clock);
       const activeExecutor = item.id === snapshot.active_handoff_id && hasActiveNativeExecutor(snapshot, clock);
       return <div className="impact-note native-handoff-request" key={item.id}>
         <div className="native-handoff-request-copy">
           <p>{t('Verification code')}: <code>{item.client_fingerprint}</code></p>
+          {item.provisioning_stage ? <p>{t('Device progress')}: {t(item.provisioning_stage)}</p> : null}
+          {item.failure_code ? <p role="status">{t('Last attempt failed; keep this task and retry in the app.')}: {item.failure_code}</p> : null}
+          {Date.parse(item.expires_at) <= clock ? <p>{t('Reauthorize the original app to continue with the same device credential.')}</p> : null}
           <p>{t(item.status)}{activeExecutor ? ` · ${t('Active executor')}` : ''}</p>
         </div>
-        {!bindingLocked && (item.status === 'exchanged' || renewable) ? <Button id={`approve-${item.id}`} disabled={busy} onClick={() => setRequestedApproval(item.id)}>{t(renewable ? 'Reauthorize this app' : 'Approve this app')}</Button> : null}
+        {recoveryAllowed && (item.status === 'exchanged' || renewable) ? <Button id={`approve-${item.id}`} disabled={busy} onClick={() => setRequestedApproval(item.id)}>{t(renewable ? 'Reauthorize this app' : 'Approve this app')}</Button> : null}
       </div>;
     })}
   </section>;

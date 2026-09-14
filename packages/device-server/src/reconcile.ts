@@ -89,7 +89,7 @@ export class Reconciler {
       }
       const expiredProvisioning = await this.db.all<{ id: string; device_id: string | null }>("SELECT id,device_id FROM provisioning_sessions WHERE status IN ('pending','reserved','ble_authenticated','configured','online') AND expires_at<=?", [timestamp]);
       for (const session of expiredProvisioning) {
-        await this.db.run("UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code='PROVISIONING_EXPIRED',updated_at=? WHERE id=? AND status IN ('pending','reserved','ble_authenticated','configured','online')", [timestamp, timestamp, session.id]);
+        await this.db.run("UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code='PROVISIONING_EXPIRED',updated_at=? WHERE id=? AND status IN ('pending','reserved','ble_authenticated','configured','online') AND expires_at<=?", [timestamp, timestamp, session.id, timestamp]);
         result.expiredProvisioning += 1;
       }
       const expiredTransferOut = await this.db.run("UPDATE transfer_out_sessions SET status='expired',failed_at=?,failure_code='TRANSFER_OUT_EXPIRED',updated_at=? WHERE status IN ('pending','claimed') AND expires_at<=?", [timestamp, timestamp, timestamp]);

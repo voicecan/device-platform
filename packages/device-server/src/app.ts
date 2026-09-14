@@ -914,9 +914,59 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
         else if (provisioningStatus === 'failed') status = 'failed';
       }
     }
+    if (status !== 'completed') {
+      if (intent.status === 'canceled') status = 'canceled';
+      else if (String(intent.expires_at) <= now()) status = 'expired';
+    }
     if (status !== intent.status || deviceId !== intent.device_id || failureCode !== intent.failure_code) await db.run('UPDATE binding_intents SET status=?,device_id=?,failure_code=?,completed_at=CASE WHEN ?=\'completed\' THEN COALESCE(completed_at,?) ELSE completed_at END,updated_at=? WHERE id=? AND provisioning_session_id IS NOT DISTINCT FROM ? AND (status NOT IN (\'completed\',\'canceled\') OR ?=\'completed\') AND (CAST(? AS TEXT) IS NULL OR EXISTS(SELECT 1 FROM provisioning_sessions p WHERE p.id=binding_intents.provisioning_session_id AND p.status=?))', [status, deviceId, failureCode, status, now(), now(), intent.id, intent.provisioning_session_id, status, observedSessionStatus, observedSessionStatus]);
     return { id: intent.id, group_id: intent.group_id, expected_sn: intent.expected_sn, display_name: intent.display_name, ble_service_uuid: config.bleServiceUuid, device_ws_url: intent.resolved_device_ws_url, network_mode: intent.network_mode, locale: intent.locale, provisioning_session_id: intent.provisioning_session_id, device_id: deviceId, status, failure_code: failureCode, expires_at: intent.expires_at, completed_at: status === 'completed' ? (intent.completed_at ?? now()) : intent.completed_at };
   };
+
+  app.get('/api/v1/binding-intents', async (request, reply) => {
+    const context = await resolveAccess(request);
+    if (context.actorType !== 'user') throw new AccessDeniedError();
+    const query = request.query as Row;
+    const offset = query.offset === undefined ? 0 : Number(query.offset);
+    const limit = query.limit === undefined ? 20 : Number(query.limit);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+        (query.filter !== undefined && !['unfinished', 'all'].includes(String(query.filter)))) throw new HttpError(400, 'INVALID_QUERY', 'Invalid history pagination or filter');
+    const groupId = context.isSystemAdmin ? null : requireGroup(context);
+    if (groupId) requireGroupAdmin(context, groupId);
+    const where = [groupId ? 'b.group_id=?' : '1=1'];
+    const params: string[] = groupId ? [groupId] : [];
+    if (query.filter !== 'all') where.push("b.status NOT IN ('completed','canceled') AND NOT EXISTS(SELECT 1 FROM provisioning_sessions p WHERE p.id=b.provisioning_session_id AND p.status='completed')");
+    const predicate = where.join(' AND ');
+    const total = await db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM binding_intents b WHERE ${predicate}`, params);
+    const rows = await db.all<Row>(`SELECT b.*,g.name AS group_name,d.sn AS actual_sn,
+      EXISTS(SELECT 1 FROM native_handoffs h WHERE h.binding_intent_id=b.id) AS native_task
+      FROM binding_intents b JOIN user_groups g ON g.id=b.group_id LEFT JOIN provisioning_sessions p ON p.id=b.provisioning_session_id LEFT JOIN devices d ON d.id=COALESCE(p.device_id,b.device_id)
+      WHERE ${predicate} ORDER BY b.created_at DESC,b.id DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    const items = [];
+    for (const row of rows) {
+      const state = await bindingIntentState(row);
+      items.push({ ...state, group_name: row.group_name, serial_number: row.actual_sn ?? row.expected_sn,
+        created_at: row.created_at, binding_path: row.native_task ? 'app' : 'web' });
+    }
+    reply.header('cache-control', 'private, no-store');
+    return success(reply, { items, total_count: Number(total?.count ?? 0), limit, offset });
+  });
+
+  app.post('/api/v1/binding-intents/:id/reopen', async (request, reply) => {
+    if (Object.keys(bodyOf(request)).length) throw new HttpError(400, 'INVALID_REQUEST', 'Reopen accepts no task overrides');
+    const context = await resolveAccess(request, true);
+    if (context.actorType !== 'user') throw new AccessDeniedError();
+    const intent = await db.get<Row>('SELECT * FROM binding_intents WHERE id=?', [String((request.params as Row).id)]);
+    if (!intent) throw new AccessDeniedError();
+    requireGroupAdmin(context, String(intent.group_id));
+    // Restore only browser continuation. Device ownership, original Token, executor
+    // and authorization deadlines are unchanged; expired native work needs Web reapproval.
+    if (request.headers.origin !== intent.allowed_origin) throw new HttpError(403, 'BINDING_ORIGIN_MISMATCH', 'Reopen this task on its original platform origin');
+    const browserToken = `vcd_bind_browser_${opaqueToken()}`;
+    await db.run("UPDATE binding_intents SET browser_session_hash=?,launch_token_hash=NULL,launch_consumed_at=COALESCE(launch_consumed_at,?),status=CASE WHEN status='pending' THEN 'user_action' ELSE status END,updated_at=? WHERE id=?", [tokenHash(browserToken), now(), now(), intent.id]);
+    reply.setCookie('vc_binding', browserToken, { ...browserCookieOptions, httpOnly: true, maxAge: 600 });
+    reply.header('cache-control', 'private, no-store');
+    return success(reply, { id: intent.id });
+  });
 
   app.post('/api/v1/binding-intents', async (request, reply) => {
     const context = await resolveAccess(request, true); if (context.actorType !== 'user') throw new AccessDeniedError(); const body = bodyOf(request);
@@ -958,7 +1008,19 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   };
 
   app.get('/api/v1/binding-intents/:id/browser', async (request, reply) => {
-    const intent = await requireBrowserIntent(request, String((request.params as Row).id)); reply.header('cache-control', 'private, no-store'); return success(reply, await bindingIntentState(intent));
+    const intentId = String((request.params as Row).id);
+    let intent: Row;
+    if (request.cookies.vc_binding) intent = await requireBrowserIntent(request, intentId);
+    else {
+      // A signed-in group administrator can reopen an original task after its
+      // short browser continuation cookie has expired.
+      const context = await resolveAccess(request);
+      if (context.actorType !== 'user') throw new AccessDeniedError();
+      const saved = await db.get<Row>('SELECT * FROM binding_intents WHERE id=?', [intentId]);
+      if (!saved) throw new AccessDeniedError();
+      requireGroupAdmin(context, String(saved.group_id)); intent = saved;
+    }
+    reply.header('cache-control', 'private, no-store'); return success(reply, await bindingIntentState(intent));
   });
 
   app.post('/api/v1/binding-intents/:id/grant', async (request, reply) => {

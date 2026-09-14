@@ -104,7 +104,8 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
   };
   const authenticated = async (request: FastifyRequest, body: Row, operation: string): Promise<Row> => {
     if (!Number.isSafeInteger(body.execution_epoch) || Number(body.execution_epoch) < 0) return fail(400, 'INVALID_NATIVE_REQUEST');
-    const handoff = await read(String((request.params as Row).id)); assertAlive(handoff);
+    const handoff = await read(String((request.params as Row).id));
+    if (operation !== 'observe') assertAlive(handoff);
     if (!handoff.client_public_key) return fail(401, 'NATIVE_EXCHANGE_REQUIRED');
     const audience = audienceFor(await intentFor(handoff));
     const proof = verifyProof(request, audience, String(handoff.client_public_key), body);
@@ -116,13 +117,15 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
     const intent = await intentFor(handoff); const state = await deps.intentState(intent);
     const audience = audienceFor(intent); const instanceId = instanceIdFor(audience);
     const executor = await db.get<Row>('SELECT handoff_id,execution_epoch FROM binding_executors WHERE binding_intent_id=?', [intent.id]);
-    const owns = handoff.status === 'approved' && String(handoff.lease_expires_at) > now() && executor?.handoff_id === handoff.id && Number(executor?.execution_epoch) === Number(handoff.execution_epoch);
+    const session = handoff.provisioning_session_id ? await db.get<Row>('SELECT p.status,p.failure_code,p.failed_at,d.sn FROM provisioning_sessions p LEFT JOIN devices d ON d.id=p.device_id WHERE p.id=?', [handoff.provisioning_session_id]) : null;
+    const owns = String(handoff.expires_at) > now() && String(intent.expires_at) > now() && handoff.status === 'approved' && String(handoff.lease_expires_at) > now() && executor?.handoff_id === handoff.id && Number(executor?.execution_epoch) === Number(handoff.execution_epoch);
     return {
       schema_version: 1, instance_id: instanceId, audience, binding_intent_id: intent.id, handoff_id: handoff.id,
       status: handoff.status, binding_status: state.status, device_id: state.device_id,
+      provisioning_stage: session?.status ?? null, failure_code: session?.failure_code ?? null, failed_at: session?.failed_at ?? null,
       client_fingerprint: fingerprint(handoff.client_public_key),
       execution_epoch: handoff.execution_epoch ?? 0, owns_execution: owns, lease_expires_at: handoff.lease_expires_at,
-      expires_at: handoff.expires_at, expected_identity: { serial_number: intent.expected_sn }, display_name: intent.display_name,
+      expires_at: handoff.expires_at, expected_identity: { serial_number: session?.sn ?? intent.expected_sn }, display_name: intent.display_name,
       network_mode: intent.network_mode, resolved_device_ws_url: intent.resolved_device_ws_url,
       scope: ['device:bind'], scan_config: { schema_version: 1, kind: 'voicecan.scan-config', revision: 'native-v1', profiles: [{ id: 'platform', advertised_service_uuids: [config.bleServiceUuid], gatt_profile_id: 'voicecan-default-v1' }] },
       callback_registration: { url: `${audience}/admin?view=provision&binding_intent=${encodeURIComponent(String(intent.id))}`, state: String(intent.id) },
@@ -167,7 +170,7 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
 
   app.get('/api/v1/binding-intents/:id/native-handoffs', async (request, reply) => {
     const { intent } = await deps.authorizeWeb(request, String((request.params as Row).id));
-    const rows = await db.all<Row>('SELECT id,status,client_public_key,execution_epoch,lease_expires_at,expires_at FROM native_handoffs WHERE binding_intent_id=? ORDER BY created_at DESC,id DESC', [intent.id]);
+    const rows = await db.all<Row>('SELECT h.id,h.status,h.client_public_key,h.execution_epoch,h.lease_expires_at,h.expires_at,p.status AS provisioning_stage,p.failure_code FROM native_handoffs h LEFT JOIN provisioning_sessions p ON p.id=h.provisioning_session_id WHERE h.binding_intent_id=? ORDER BY h.created_at DESC,h.id DESC', [intent.id]);
     const executor = await db.get<Row>('SELECT execution_epoch,handoff_id FROM binding_executors WHERE binding_intent_id=?', [intent.id]);
     return ok(reply, { execution_epoch: executor?.execution_epoch ?? 0, active_handoff_id: executor?.handoff_id ?? null, handoffs: rows.map(({ client_public_key, ...row }) => ({ ...row, client_fingerprint: fingerprint(client_public_key) })) });
   });
@@ -203,7 +206,8 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
   });
 
   app.post('/api/v1/native-handoffs/:id/claim', { bodyLimit: 4096 }, async (request, reply) => {
-    const body = bodyOf(request, ['request_id', 'execution_epoch', 'manufacturer', 'serial_number', 'model', 'firmware_version']);
+    const body = bodyOf(request, ['request_id', 'execution_epoch', 'manufacturer', 'serial_number', 'model', 'firmware_version', 'recover_only']);
+    if (body.recover_only !== undefined && body.recover_only !== 1) return fail(400, 'INVALID_NATIVE_REQUEST');
     const handoff = await authenticated(request, body, 'claim');
     if (body.execution_epoch !== Number(handoff.execution_epoch)) return fail(409, 'NATIVE_EXECUTION_CONFLICT');
     const intent = await intentFor(handoff);
@@ -222,6 +226,7 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
       const raw = decryptSecret(String(credential.token_ciphertext), config.masterKeys.get(Number(credential.key_version)) ?? config.masterKey, `${session.device_id}:${credential.credential_id}`);
       try { return ok(reply, { ...(await summary(handoff)), device_token: encodeDeviceToken(raw), recovered: true }); } finally { raw.fill(0); }
     }
+    if (body.recover_only === 1) return fail(409, 'NATIVE_RECOVERY_NOT_AVAILABLE');
     let claimed: Row;
     try { claimed = await deps.claim(session, body, String(intent.resolved_device_ws_url), [fence(handoff)]); }
     catch (error) {
@@ -254,9 +259,53 @@ export function registerNativeHandoffRoutes(app: FastifyInstance, deps: Dependen
     const target = order.indexOf(stage), current = order.indexOf(String(session.status));
     if (target > current + 1) return fail(409, 'PROVISIONING_STAGE_CONFLICT');
     const statements = [fence(handoff)];
-    if (target > current) statements.push({ sql: 'UPDATE provisioning_sessions SET status=?,updated_at=? WHERE id=? AND status=?', params: [stage, now(), handoff.provisioning_session_id, session.status], expectChanges: 1 });
+    if (target > current) statements.push({ sql: 'UPDATE provisioning_sessions SET status=?,failure_code=NULL,failed_at=NULL,updated_at=? WHERE id=? AND status=?', params: [stage, now(), handoff.provisioning_session_id, session.status], expectChanges: 1 });
     await atomic(statements);
     return ok(reply, await summary(handoff));
+  });
+  app.post('/api/v1/native-handoffs/:id/failure', { bodyLimit: 4096 }, async (request, reply) => {
+    const body = bodyOf(request, ['request_id', 'execution_epoch', 'stage', 'failure_code']);
+    const handoff = await authenticated(request, body, 'failure');
+    if (body.execution_epoch !== Number(handoff.execution_epoch)) return fail(409, 'NATIVE_EXECUTION_CONFLICT');
+    const stage = text(body, 'stage', 32), code = text(body, 'failure_code', 64);
+    if (!['binding', 'ble_authenticated', 'wifi', 'server', 'configured'].includes(stage) ||
+        !['DEVICE_REJECTED_COMMAND', 'DEVICE_OPERATION_TIMEOUT', 'OUTCOME_UNKNOWN', 'STOPPED', 'NETWORK', 'AUTH', 'DEVICE_OPERATION_FAILED'].includes(code)) return fail(400, 'INVALID_NATIVE_REQUEST');
+    await atomic([fence(handoff), { sql: "UPDATE provisioning_sessions SET failure_code=?,failed_at=?,updated_at=? WHERE id=? AND status IN ('reserved','ble_authenticated','configured')", params: [`${stage}:${code}`, now(), now(), handoff.provisioning_session_id], expectChanges: 1 }]);
+    return ok(reply, await summary(handoff));
+  });
+
+  // Explicit Web authorization renews only the original executor and original credential.
+  // It never creates a Token, revives a revoked credential, or takes over another session.
+  app.post('/api/v1/native-handoffs/:id/reauthorize', { bodyLimit: 4096 }, async (request, reply) => {
+    const body = bodyOf(request, ['expected_execution_epoch']);
+    const handoff = await read(String((request.params as Row).id), 'NOT_FOUND');
+    const { intent, actorId } = await deps.authorizeWeb(request, String(handoff.binding_intent_id));
+    const expected = body.expected_execution_epoch;
+    if (!Number.isSafeInteger(expected) || Number(expected) < 0) return fail(400, 'INVALID_NATIVE_REQUEST');
+    if (handoff.status !== 'approved' || !handoff.client_public_key || intent.status === 'canceled' || intent.status === 'completed' ||
+        intent.provisioning_session_id !== handoff.provisioning_session_id) return fail(409, 'NATIVE_RECOVERY_NOT_AVAILABLE');
+    const executor = await db.get<Row>('SELECT * FROM binding_executors WHERE binding_intent_id=?', [intent.id]);
+    if (!executor || executor.handoff_id !== handoff.id) return fail(409, 'NATIVE_EXECUTION_CONFLICT');
+    if (Number(executor.execution_epoch) === Number(expected) + 1 && String(handoff.expires_at) > now() && String(handoff.lease_expires_at) > now()) return ok(reply, await summary(handoff));
+    if (Number(executor.execution_epoch) !== expected) return fail(409, 'NATIVE_EXECUTION_CONFLICT');
+    const session = await db.get<Row>('SELECT * FROM provisioning_sessions WHERE id=?', [handoff.provisioning_session_id]);
+    if (!session?.device_id || !['reserved', 'ble_authenticated', 'configured', 'failed'].includes(String(session.status)) ||
+        (session.status === 'failed' && session.failure_code !== 'PROVISIONING_EXPIRED')) return fail(409, 'NATIVE_RECOVERY_NOT_AVAILABLE');
+    const credential = await db.get<Row>(`SELECT c.id FROM device_credentials c JOIN devices d ON d.id=c.device_id
+      WHERE d.id=? AND d.group_id=? AND d.deleted_at IS NULL AND d.claim_status='reserved'
+      AND c.credential_epoch=d.credential_epoch AND c.status='temporary' AND c.revoked_at IS NULL`, [session.device_id, intent.group_id]);
+    if (!credential) return fail(409, 'NATIVE_RECOVERY_NOT_AVAILABLE');
+    const timestamp = now(), expiry = new Date(Date.now() + 30 * 60_000).toISOString(), epoch = Number(expected) + 1;
+    await atomic([
+      { sql: 'UPDATE binding_executors SET execution_epoch=?,updated_at=? WHERE binding_intent_id=? AND handoff_id=? AND execution_epoch=?', params: [epoch, timestamp, intent.id, handoff.id, expected], expectChanges: 1 },
+      { sql: "UPDATE binding_intents SET expires_at=?,status='claimed',failure_code=NULL,updated_at=? WHERE id=? AND provisioning_session_id=? AND status NOT IN ('completed','canceled')", params: [expiry, timestamp, intent.id, session.id], expectChanges: 1 },
+      { sql: "UPDATE provisioning_sessions SET expires_at=?,status=CASE WHEN status='failed' THEN 'reserved' ELSE status END,updated_at=? WHERE id=? AND device_id=? AND (status IN ('reserved','ble_authenticated','configured') OR (status='failed' AND failure_code='PROVISIONING_EXPIRED'))", params: [expiry, timestamp, session.id, session.device_id], expectChanges: 1 },
+      { sql: "UPDATE device_credentials SET expires_at=? WHERE id=? AND status='temporary' AND revoked_at IS NULL AND EXISTS(SELECT 1 FROM devices d WHERE d.id=device_credentials.device_id AND d.deleted_at IS NULL AND d.group_id=? AND d.claim_status='reserved' AND d.credential_epoch=device_credentials.credential_epoch)", params: [expiry, credential.id, intent.group_id], expectChanges: 1 },
+      { sql: "UPDATE native_handoffs SET expires_at=?,lease_expires_at=?,execution_epoch=?,approved_by=?,updated_at=? WHERE id=? AND status='approved' AND execution_epoch=?", params: [expiry, new Date(Date.now() + 120_000).toISOString(), epoch, actorId, timestamp, handoff.id, expected], expectChanges: 1 },
+      fence({ ...handoff, execution_epoch: epoch }),
+      { sql: 'DELETE FROM native_request_keys WHERE handoff_id=?', params: [handoff.id] },
+    ]);
+    return ok(reply, await summary(await read(String(handoff.id))));
   });
   app.post('/api/v1/native-handoffs/:id/cancel', { bodyLimit: 4096 }, async (request, reply) => {
     const body = bodyOf(request, ['request_id', 'execution_epoch']); const handoff = await authenticated(request, body, 'cancel');

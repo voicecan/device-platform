@@ -33,6 +33,7 @@ components:
       additionalProperties: false
       required: [request_id, execution_epoch, manufacturer, serial_number]
       properties:
+        recover_only: { type: integer, enum: [1], description: Require the already issued credential; never mint a new Token. }
         request_id: { type: string, maxLength: 200 }
         execution_epoch: { type: integer, minimum: 0 }
         manufacturer: { type: string, maxLength: 64 }
@@ -586,6 +587,14 @@ paths:
   /user-groups/{id}/api-tokens/{tokenId}:
     delete: { summary: Revoke a group token, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked }, '404': { description: Missing or unauthorized } } }
   /binding-intents:
+    get:
+      summary: List saved binding tasks visible to the signed-in group administrator
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: filter, in: query, schema: { type: string, enum: [unfinished, all], default: unfinished } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses: { '200': { description: Paginated items and total_count; no launch or device credentials }, '400': { description: Invalid pagination }, '403': { description: Administrator required } }
     post:
       summary: Prepare a resumable server-authoritative device binding Intent
       security: [{ sessionCookie: [] }]
@@ -599,6 +608,14 @@ paths:
       summary: Resume a Binding Intent after refresh without an Admin session
       security: [{ bindingBrowser: [] }]
       responses: { '200': { description: Authoritative binding state }, '401': { description: Binding browser session required } }
+  /binding-intents/{id}/reopen:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Restore browser continuation for a historical task without changing its device credential or execution authorization
+      description: Requires a signed-in group administrator, CSRF and the original allowed Origin. Reopening an expired native task does not reauthorize it.
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false } } } }
+      responses: { '200': { description: Original task ID and refreshed HttpOnly continuation cookie }, '403': { description: CSRF or origin rejected }, '404': { description: Task missing or outside group } }
   /binding-intents/{id}/grant:
     post:
       summary: Create or replace the short-lived provisioning session behind a Binding Intent
@@ -1168,7 +1185,7 @@ paths:
   /native-handoffs/{id}/observe:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
     post:
-      summary: Read authoritative state, including a newly approved epoch; does not renew the lease
+      summary: Read authoritative state even after expiry, including a newly approved epoch; does not renew the lease
       security: [{ nativeProof: [] }]
       parameters:
         - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
@@ -1219,6 +1236,45 @@ paths:
         '409': { description: Replay, stale epoch, stage or idempotency conflict }
         '410': { description: Expired ticket or task }
         '429': { description: Task request limit }
+  /native-handoffs/{id}/failure:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Record a retryable device execution failure without terminating provisioning
+      security: [{ nativeProof: [] }]
+      parameters:
+        - { name: X-VC-Timestamp, in: header, required: true, schema: { type: string, pattern: '^\d{13}$' } }
+        - { name: X-VC-Nonce, in: header, required: true, schema: { type: string, minLength: 22, maxLength: 80 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [request_id, execution_epoch, stage, failure_code]
+              properties:
+                request_id: { type: string }
+                execution_epoch: { type: integer, minimum: 0 }
+                stage: { type: string, enum: [binding, ble_authenticated, wifi, server, configured] }
+                failure_code: { type: string, enum: [DEVICE_REJECTED_COMMAND, DEVICE_OPERATION_TIMEOUT, OUTCOME_UNKNOWN, STOPPED, NETWORK, AUTH, DEVICE_OPERATION_FAILED] }
+      responses: { '200': { description: Saved failure metadata and authoritative task context }, '400': { description: Invalid stage or error code }, '401': { description: Invalid proof }, '409': { description: Stale executor or terminal session }, '410': { description: Expired task } }
+  /native-handoffs/{id}/reauthorize:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Explicitly renew the original task and original temporary credential for thirty minutes
+      description: Requires Web authorization and fingerprint confirmation. Never rotates Token or recovers cancelled, superseded, revoked or completed work. Old execution epochs are fenced.
+      security: [{ sessionCookie: [] }, { bindingBrowser: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_execution_epoch]
+              properties:
+                expected_execution_epoch: { type: integer, minimum: 0 }
+      responses: { '200': { description: Renewed context and two-minute execution lease; no Token }, '403': { description: Invalid Web authorization }, '404': { description: Not found or outside group }, '409': { description: Stale epoch or credential recovery unavailable } }
   /native-handoffs/{id}/cancel:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
     post:

@@ -19,3 +19,13 @@ export function urlForView(currentHref: string, view: View): URL {
 
   return url;
 }
+
+/** Restoring history never reuses launch fragments, device links, or another task's flow state. */
+export function bindingTaskUrl(currentHref: string, intentId: string, path: 'app' | 'web'): URL {
+  const url = new URL('/admin', currentHref);
+  url.searchParams.set('view', 'provision');
+  url.searchParams.set('binding_intent', intentId);
+  url.searchParams.set('binding_path', path);
+  url.searchParams.set('binding_path_locked', '1');
+  return url;
+}
