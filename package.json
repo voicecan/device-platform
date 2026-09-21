@@ -34,7 +34,7 @@
     "npm:platform:publish": "node scripts/publish-device-platform.mjs"
   },
   "dependencies": {
-    "@voicecan/device-core": "file:vendor/voicecan-device-core-0.1.0-preview.18.tgz"
+    "@voicecan/device-core": "file:vendor/voicecan-device-core-0.1.0-preview.19.tgz"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

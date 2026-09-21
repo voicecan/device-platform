@@ -44,7 +44,7 @@
     "@fastify/websocket": "^11.2.0",
     "@voicecan/access-control": "0.1.0-preview.0",
     "@voicecan/contracts": "1.0.0",
-    "@voicecan/device-core": "0.1.0-preview.18",
+    "@voicecan/device-core": "0.1.0-preview.19",
     "fastify": "^5.6.2",
     "pino": "^10.3.1",
     "pg": "^8.22.0"

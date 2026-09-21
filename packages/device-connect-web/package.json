@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit --pretty false"
   },
   "dependencies": {
-    "@voicecan/device-core": "0.1.0-preview.18",
+    "@voicecan/device-core": "0.1.0-preview.19",
     "@voicecan/device-ui": "0.1.0-preview.0",
     "@voicecan/device-web": "0.1.0-preview.0"
   },
