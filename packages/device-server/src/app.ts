@@ -1070,6 +1070,10 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       }
       if (!existing.credential_id || !existing.token_ciphertext || existing.key_version === null) throw new HttpError(409, 'DEVICE_RECOVERY_UNAVAILABLE', 'The reserved device has no recoverable credential and must be reset before provisioning');
       const continuationToken = `vcd_continue_${opaqueToken()}`; const timestamp = now();
+      const owner = await db.get<Row>(`SELECT h.id FROM provisioning_sessions p JOIN native_handoffs h ON h.provisioning_session_id=p.id
+        JOIN binding_executors e ON e.handoff_id=h.id AND e.execution_epoch=h.execution_epoch
+        WHERE p.device_id=? AND p.id<>? AND h.status='approved' AND h.expires_at>? AND h.lease_expires_at>? LIMIT 1`, [existing.id, session.id, timestamp, timestamp]);
+      if (owner) throw new HttpError(409, 'DEVICE_EXECUTOR_ACTIVE', 'Another task still holds the device execution lease; resume that task or retry after its lease expires');
       const rawDeviceToken = decryptSecret(existing.token_ciphertext, config.masterKeys.get(existing.key_version) ?? config.masterKey, `${existing.id}:${existing.credential_id}`);
       try {
         await db.batch([
@@ -1077,7 +1081,11 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
           { sql: `UPDATE devices SET updated_at=updated_at WHERE id=? AND claim_status='reserved' AND NOT EXISTS(
             SELECT 1 FROM provisioning_sessions p JOIN native_handoffs h ON h.provisioning_session_id=p.id
             JOIN binding_executors e ON e.handoff_id=h.id AND e.execution_epoch=h.execution_epoch
-            WHERE p.device_id=devices.id AND p.id<>? AND h.status='approved' AND h.expires_at>?)`, params: [existing.id, session.id, timestamp], expectChanges: 1 },
+            WHERE p.device_id=devices.id AND p.id<>? AND h.status='approved' AND h.expires_at>? AND h.lease_expires_at>?)`, params: [existing.id, session.id, timestamp, timestamp], expectChanges: 1 },
+          // Fence previous owners in the same transaction as credential recovery.
+          // Expired leases can be recovered, but must never be reapproved afterward.
+          { sql: `UPDATE native_handoffs SET status='cancelled',lease_expires_at=?,updated_at=? WHERE status='approved'
+            AND provisioning_session_id IN (SELECT id FROM provisioning_sessions WHERE device_id=? AND id<>?)`, params: [timestamp, timestamp, existing.id, session.id] },
           { sql: "UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code='SUPERSEDED_BY_RECOVERY',updated_at=? WHERE device_id=? AND id<>? AND status IN ('reserved','ble_authenticated','configured','online')", params: [timestamp, timestamp, existing.id, session.id] },
           { sql: "UPDATE provisioning_sessions SET status='reserved',consumed_at=COALESCE(consumed_at,?),device_id=?,continuation_token_hash=?,failed_at=NULL,failure_code=NULL,completed_at=NULL,updated_at=? WHERE id=? AND status IN ('pending','failed') AND expires_at>?", params: [timestamp, existing.id, tokenHash(continuationToken), timestamp, session.id, timestamp], expectChanges: 1 },
           { sql: "UPDATE device_credentials SET expires_at=? WHERE id=? AND device_id=? AND status='temporary' AND revoked_at IS NULL", params: [session.expires_at, existing.credential_id, existing.id], expectChanges: 1 },

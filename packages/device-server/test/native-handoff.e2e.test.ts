@@ -12,6 +12,57 @@ import { nativeProofMessage } from '../src/native-handoff.js';
 
 const audience = 'http://127.0.0.1:8787';
 const taskAudience = 'http://192.168.50.20:8787';
+test('new native task recovers an expired lease with the same token and fences the former owner', async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-native-recovery-'));
+  const config = await loadConfig({ VOICECAN_DATA_DIR: dataDir, VOICECAN_PUBLIC_BASE_URL: audience, VOICECAN_DEVICE_ADVERTISE_HOST: '192.168.50.20', VOICECAN_LOG_LEVEL: 'silent' });
+  migrate(config);
+  const db = new DatabaseActor(config.databaseFile);
+  const app = await buildServer(config, { database: db });
+  t.after(async () => { await app.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const setup = await app.inject({ method: 'POST', url: '/api/v1/setup/admin', payload: { setup_token: (await readFile(join(dataDir, 'setup-token'), 'utf8')).trim(), username: 'admin', password: 'correct horse battery staple' } });
+  assert.equal(setup.statusCode, 201);
+  const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'admin', password: 'correct horse battery staple' } });
+  const headers = { cookie: String(login.headers['set-cookie']).split(';')[0]!, 'x-csrf-token': login.json().data.csrf_token as string };
+  const key = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const post = (url: string, payload: Record<string, unknown>) => {
+    const timestamp = String(Date.now()), nonce = randomBytes(24).toString('base64url');
+    return app.inject({ method: 'POST', url, payload, headers: { 'x-vc-timestamp': timestamp, 'x-vc-nonce': nonce,
+      'x-vc-signature': sign('sha256', Buffer.from(nativeProofMessage(taskAudience, url, timestamp, nonce, payload)), key.privateKey).toString('base64url') } });
+  };
+  const createTask = async () => {
+    const intent = await app.inject({ method: 'POST', url: '/api/v1/binding-intents', headers, payload: { group_id: setup.json().data.group_id, allowed_origin: audience, device_ws_url: `${taskAudience.replace('http:', 'ws:')}/device/v1/ws`, expected_sn: 'RECOVER-0001' } });
+    assert.equal(intent.statusCode, 201);
+    const handoff = await app.inject({ method: 'POST', url: `/api/v1/binding-intents/${intent.json().data.id}/native-handoffs`, headers, payload: {} });
+    assert.equal(handoff.statusCode, 201);
+    const id = handoff.json().data.handoff_id as string;
+    const ticket = new URLSearchParams(new URL(handoff.json().data.launch_url).hash.slice(1)).get('ticket');
+    assert.equal((await post('/api/v1/native-handoffs/exchange', { handoff_id: id, ticket, client_public_key: key.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'), request_id: randomUUID() })).statusCode, 200);
+    assert.equal((await app.inject({ method: 'POST', url: `/api/v1/native-handoffs/${id}/approve`, headers, payload: { expected_execution_epoch: 0 } })).statusCode, 200);
+    return id;
+  };
+  const action = (id: string, op: string, extra: Record<string, unknown> = {}) => post(`/api/v1/native-handoffs/${id}/${op}`, { request_id: randomUUID(), execution_epoch: 1, ...extra });
+  const identity = { manufacturer: 'Voicecan', serial_number: 'RECOVER-0001' };
+  const old = await createTask();
+  const original = await action(old, 'claim', identity);
+  assert.equal(original.statusCode, 201);
+  assert.equal((await action(old, 'failure', { stage: 'binding', failure_code: 'DEVICE_OPERATION_FAILED' })).statusCode, 200);
+  const next = await createTask();
+  assert.equal((await action(next, 'claim', identity)).json().code, 'DEVICE_EXECUTOR_ACTIVE');
+  // Failure alone does not permit two in-flight BLE executors. Stop renewing the old lease.
+  await db.run('UPDATE native_handoffs SET lease_expires_at=? WHERE id=?', [new Date(Date.now() - 1000).toISOString(), old]);
+  const recovered = await action(next, 'claim', identity);
+  assert.equal(recovered.statusCode, 201, recovered.body);
+  assert.equal(recovered.json().data.recovered, true);
+  assert.equal(recovered.json().data.device_token, original.json().data.device_token);
+  assert.equal(recovered.json().data.device_id, original.json().data.device_id);
+  assert.equal((await db.get<{ count: number }>('SELECT COUNT(*) AS count FROM device_credentials'))?.count, 1);
+  assert.equal((await action(old, 'observe')).json().data.status, 'cancelled');
+  assert.equal((await action(old, 'claim', identity)).statusCode, 409);
+  assert.equal((await action(old, 'progress', { stage: 'ble_authenticated' })).statusCode, 409);
+  assert.equal((await app.inject({ method: 'POST', url: `/api/v1/native-handoffs/${old}/approve`, headers, payload: { expected_execution_epoch: 1 } })).json().code, 'NATIVE_APPROVAL_NOT_READY');
+  assert.equal((await app.inject({ method: 'POST', url: `/api/v1/native-handoffs/${old}/reauthorize`, headers, payload: { expected_execution_epoch: 1 } })).statusCode, 409);
+  assert.equal((await action(next, 'claim', identity)).json().data.device_token, original.json().data.device_token);
+});
 test('native handoff: proof, Web approval, fencing, same-token recovery and authoritative completion', async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-native-'));
   const config = await loadConfig({ VOICECAN_DATA_DIR: dataDir, VOICECAN_PUBLIC_BASE_URL: audience, VOICECAN_DEVICE_ADVERTISE_HOST: '192.168.50.20', VOICECAN_BLE_SERVICE_UUID: '1a12', VOICECAN_LOG_LEVEL: 'silent' });
