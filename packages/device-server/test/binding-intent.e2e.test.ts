@@ -6,6 +6,8 @@ import test from 'node:test';
 import { buildServer } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { migrate } from '../src/migrate.js';
+import { ApiError } from '../../admin-web/src/api-error.js';
+import { bindingBrowserRequest } from '../../admin-web/src/binding-browser-session.js';
 
 test('binding intent survives browser refresh and remains server-authoritative without a page callback', async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-binding-intent-'));
@@ -46,7 +48,7 @@ test('binding intent survives browser refresh and remains server-authoritative w
   const exchanged = await app.inject({ method: 'POST', url: '/api/v1/binding-intents/exchange', headers: { origin: 'http://127.0.0.1:8787' }, payload: { launch_token: launchToken } });
   assert.equal(exchanged.statusCode, 200, exchanged.body);
   assert.equal(exchanged.json().data.status, 'user_action');
-  const browserCookie = String(exchanged.headers['set-cookie']).split(';')[0]!;
+  let browserCookie = String(exchanged.headers['set-cookie']).split(';')[0]!;
   assert.match(browserCookie, /^vc_binding=/);
   const launchReplay = await app.inject({ method: 'POST', url: '/api/v1/binding-intents/exchange', headers: { origin: 'http://127.0.0.1:8787' }, payload: { launch_token: launchToken } });
   assert.equal(launchReplay.statusCode, 403, launchReplay.body);
@@ -58,11 +60,32 @@ test('binding intent survives browser refresh and remains server-authoritative w
   assert.equal('ble_name_prefix' in refreshedBeforeSelection.json().data, false);
   assert.equal(refreshedBeforeSelection.json().data.device_ws_url, 'ws://192.168.50.20:8787/device/v1/ws');
 
-  const grant = await app.inject({ method: 'POST', url: `/api/v1/binding-intents/${intentId}/grant`, headers: { cookie: browserCookie }, payload: {} });
-  assert.equal(grant.statusCode, 200, grant.body);
-  const claim = await app.inject({ method: 'POST', url: '/api/v1/provisioning-sessions/claim', headers: { origin: 'http://127.0.0.1:8787' }, payload: { provisioning_token: grant.json().data.provisioning_token, manufacturer: 'Voicecan', serial_number: 'INTENT-0001', bluetooth_name: 'CAPSO-INTENT' } });
+  const withoutBindingCookie = await app.inject({ method: 'GET', url: `/api/v1/binding-intents/${intentId}/browser`, headers: adminHeaders });
+  assert.equal(withoutBindingCookie.statusCode, 200, 'administrator can still read a task after the browser cookie expires');
+  const deniedGrant = await app.inject({ method: 'POST', url: `/api/v1/binding-intents/${intentId}/grant`, headers: adminHeaders, payload: {} });
+  assert.equal(deniedGrant.statusCode, 401);
+  assert.equal(deniedGrant.json().code, 'BINDING_SESSION_REQUIRED');
+  const resumedPaths: string[] = [];
+  let resumedCookie = adminHeaders.cookie;
+  const resumedGrant = await bindingBrowserRequest<{ provisioning_token: string }>(async <T>(path: string, options?: RequestInit): Promise<T> => {
+    resumedPaths.push(path);
+    const response = await app.inject({ method: options?.method === 'POST' ? 'POST' : 'GET', url: `/api/v1${path}`, headers: { ...adminHeaders, cookie: resumedCookie, origin: 'http://127.0.0.1:8787' }, ...(options?.body ? { payload: {} } : {}) });
+    if (response.headers['set-cookie']) {
+      browserCookie = String(response.headers['set-cookie']).split(';')[0]!;
+      resumedCookie = `${adminHeaders.cookie}; ${browserCookie}`;
+    }
+    const payload = response.json();
+    if (response.statusCode >= 400) throw new ApiError(response.statusCode, payload.code, payload.message);
+    return payload.data as T;
+  }, intentId, 'grant');
+  assert.deepEqual(resumedPaths, [`/binding-intents/${intentId}/grant`, `/binding-intents/${intentId}/reopen`, `/binding-intents/${intentId}/grant`]);
+  const claim = await app.inject({ method: 'POST', url: '/api/v1/provisioning-sessions/claim', headers: { origin: 'http://127.0.0.1:8787' }, payload: { provisioning_token: resumedGrant.provisioning_token, manufacturer: 'Voicecan', serial_number: 'INTENT-0001', bluetooth_name: 'CAPSO-INTENT' } });
   assert.equal(claim.statusCode, 201, claim.body);
   assert.equal(claim.json().data.display_name, 'AI prepared recorder');
+  const recovery = await app.inject({ method: 'GET', url: '/api/v1/admin/backups/status', headers: adminHeaders });
+  assert.equal(recovery.statusCode, 200);
+  assert.equal(recovery.json().data.current, true, 'the newly issued device credential must already have a verified recovery copy');
+
   for (const stage of ['ble_authenticated', 'configured']) {
     const progress = await app.inject({ method: 'POST', url: `/api/v1/provisioning-sessions/${claim.json().data.provisioning_session_id}/progress`, headers: { origin: 'http://127.0.0.1:8787' }, payload: { continuation_token: claim.json().data.continuation_token, stage } });
     assert.equal(progress.statusCode, 200, progress.body);
@@ -100,6 +123,8 @@ test('binding intent survives browser refresh and remains server-authoritative w
   assert.equal(restored.json().data.device_id, claim.json().data.device_id);
   assert.equal(restored.json().data.status, 'configured');
   assert.equal(restored.json().data.expires_at, created.json().data.expires_at, 'reopening history does not extend device authorization');
+  const configuredGrant = await app.inject({ method: 'POST', url: `/api/v1/binding-intents/${intentId}/grant`, headers: { cookie: newCookie }, payload: {} });
+  assert.equal(configuredGrant.statusCode, 409, 'renewing the browser cookie cannot restart configured work');
   const outsider = await app.inject({ method: 'POST', url: '/api/v1/users', headers: adminHeaders, payload: { username: 'history-outsider', password: 'another long password', role: 'user' } });
   assert.equal(outsider.statusCode, 201);
   const outsiderLogin = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'history-outsider', password: 'another long password' } });

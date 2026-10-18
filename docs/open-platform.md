@@ -2,6 +2,17 @@
 
 The Open Platform exposes the reviewed device capability surface through REST and MCP while keeping one authorization and audit model.
 
+## Learning applications and optional AI clients
+
+These are independent integrations; connecting MCP is not a prerequisite for a learning application.
+
+- **Learning application (REST):** create a Group-scoped Application with the `rest` channel and a least-privilege `api_token`. Use `devices:read` and `recordings:read` for metadata; explicitly authorize `recordings:download_link:create` when the application needs audio. Keep the token on the application's server. Model API configuration and course materials belong to the learning application, not Device Platform. A recording is downloaded/transcribed once; course work consumes saved transcript revisions.
+- **Codex or another AI client (MCP, optional):** quick setup uses a separate `mcp_stdio` Application and the `metadata_reader` permissions: `devices:read`, `recordings:read`, and `events:read`. It can list server recordings but cannot obtain audio by default. Explicitly authorize content access before enabling or using recording download tools. The client must honor user consent; a tool's `reason` argument is audit context, not proof of human consent.
+
+The local Elio preview links to the student application at `http://127.0.0.1:8811/study` and an illustrative test-data demo at `http://127.0.0.1:18915/study`. Opening either link does not create credentials or grant recording access. Real model generation requires the student's own API settings and an explicit generation action in the learning application.
+
+The existing one-click **Local Full Studio** connection is separate: it targets `http://127.0.0.1:8815`, requires the `local-full` runtime, and uses embedded local models. Its confirmation grants the selected Group's recording metadata/download access through REST. It does not configure the own-API student application.
+
 ## Recording, device, and synchronization capabilities
 
 - Recording responses include immutable `media` (`recording.media.v1`), objective `timing`, discovery firmware, and `resource_version`. Unknown historical facts remain `null`, `application/octet-stream`, or `bin`; the server never guesses from a requested filename.

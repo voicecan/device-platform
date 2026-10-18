@@ -174,9 +174,10 @@ class WebBluetoothTransport implements ProtocolTransport {
   readonly #disconnectListener = () => {
     deviceDebug('GATT disconnected after initialization', { device_name: this.device.name ?? 'unknown', device_id: this.device.id ?? 'unavailable', command_pending: Boolean(this.#pending) });
     this.#fail(new DeviceSdkError('DEVICE_DISCONNECTED', 'Bluetooth device disconnected'));
+    this.onDisconnected?.();
   };
   readonly deviceName: string | undefined;
-  constructor(private readonly device: BluetoothDeviceLike, private readonly writer: BluetoothCharacteristic, private readonly reader: BluetoothCharacteristic, private readonly timeoutMs: number) {
+  constructor(private readonly device: BluetoothDeviceLike, private readonly writer: BluetoothCharacteristic, private readonly reader: BluetoothCharacteristic, private readonly timeoutMs: number, private readonly onDisconnected?: () => void) {
     this.deviceName = device.name?.trim() || undefined;
     reader.addEventListener('characteristicvaluechanged', this.#notificationListener);
     device.addEventListener('gattserverdisconnected', this.#disconnectListener);
@@ -214,6 +215,7 @@ class WebBluetoothTransport implements ProtocolTransport {
     return this.interact(request, async (response) => ({ complete: complete(response) }), signal);
   }
   async interact(request: Uint8Array, consume: (response: Uint8Array) => ProtocolInteraction | Promise<ProtocolInteraction>, signal?: AbortSignal): Promise<Uint8Array[]> {
+    if (this.#closed || this.device.gatt?.connected === false) throw new DeviceSdkError('DEVICE_DISCONNECTED', 'Bluetooth device disconnected');
     if (this.#pending) throw new DeviceSdkError('COMMAND_PENDING', 'A Bluetooth command is already in flight');
     signal?.throwIfAborted();
     const exchangeId = ++this.#nextExchangeId;
@@ -250,7 +252,7 @@ class WebBluetoothTransport implements ProtocolTransport {
 
 export class WebBluetoothTransportFactory implements DeviceTransportFactory {
   #requestInProgress = false;
-  constructor(private readonly options: { serviceUuid: BluetoothUuid; writeCharacteristicUuid: BluetoothUuid; notifyCharacteristicUuid: BluetoothUuid; advertisedServiceUuid?: BluetoothUuid; timeoutMs?: number; scanToConnectDelayMs?: number; postConnectDelayMs?: number; connectionRetryDelayMs?: number; notificationSetupTimeoutMs?: number }) {}
+  constructor(private readonly options: { serviceUuid: BluetoothUuid; writeCharacteristicUuid: BluetoothUuid; notifyCharacteristicUuid: BluetoothUuid; advertisedServiceUuid?: BluetoothUuid; timeoutMs?: number; scanToConnectDelayMs?: number; postConnectDelayMs?: number; connectionRetryDelayMs?: number; notificationSetupTimeoutMs?: number; onDisconnected?: () => void }) {}
   supported(): boolean { return typeof navigator !== 'undefined' && Boolean((navigator as Navigator & { bluetooth?: BluetoothApi }).bluetooth); }
   async requestDevice(onStateChange?: (state: DeviceSelectionState) => void): Promise<DeviceTransport> {
     if (this.#requestInProgress) throw new DeviceSdkError('BLUETOOTH_CONNECTION_PENDING', 'A Bluetooth device connection is already in progress. Wait for it to finish before trying again.');
@@ -372,7 +374,7 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
       phase = 'ready';
       deviceDebug('BLE notifications enabled', { elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown' });
       deviceDebug('GATT initialization completed', { elapsed_ms: Date.now() - startedAt, device_name: device.name ?? 'unknown', device_id: device.id ?? 'unavailable' });
-      return new WebBluetoothTransport(device, writer, reader, this.options.timeoutMs ?? 15_000);
+      return new WebBluetoothTransport(device, writer, reader, this.options.timeoutMs ?? 15_000, this.options.onDisconnected);
     } finally {
       device.removeEventListener('gattserverdisconnected', initializationDisconnectListener);
     }
@@ -442,9 +444,10 @@ class SelectedDevice {
   async completeProvisioning(input: { wifi?: WifiConfiguration; signal?: AbortSignal; networkTimeoutMs?: number } = {}): Promise<ProvisioningResult> {
     try {
       if (!this.#session || !this.#info || !this.#compatibility || !this.#claim) throw new DeviceSdkError('PROVISIONING_CONNECTION_REQUIRED', 'Connect to the nearby device before configuring its network');
-      if (input.wifi) {
+      const wifi = input.wifi;
+      if (wifi) {
         this.owner.setState('configuring_network');
-        await this.#session.configureWifi(input.wifi, input.signal);
+        await this.#runCommand(() => this.#session!.configureWifi(wifi, input.signal));
         deviceDebug('Device Wi-Fi configuration acknowledged');
       } else {
         deviceDebug('Device Wi-Fi configuration skipped; retaining the existing network');
@@ -452,7 +455,8 @@ class SelectedDevice {
       this.owner.setState('waiting_network');
       await this.#waitForNetwork(input.networkTimeoutMs ?? provisioningNetworkTimeoutMs, input.signal);
       this.owner.setState('configuring_server');
-      await this.#session.configureServer({ wssUrl: this.#claim.wssUrl, token: this.#claim.rawToken }, input.signal);
+      const serverConfiguration = { wssUrl: this.#claim.wssUrl, token: this.#claim.rawToken };
+      await this.#runCommand(() => this.#session!.configureServer(serverConfiguration, input.signal));
       deviceDebug('Device server configuration acknowledged', { device_ws_url: this.#claim.wssUrl });
       await this.owner.broker.reportProgress({ provisioningSessionId: this.#claim.provisioningSessionId, continuationToken: this.#claim.continuationToken, stage: 'configured' });
       this.owner.setState('waiting_server');

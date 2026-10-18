@@ -1,3 +1,4 @@
+import { RecordingLibrary } from './recording-library.js';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { decodeConnectCallback } from '@voicecan/device-connect-web';
@@ -5,9 +6,11 @@ import type { DeviceConnectCallback } from '@voicecan/device-connect-web';
 import { api, errorMessage, setCsrfToken } from './api.js';
 import { initialLocale, saveLocale, translate } from './i18n.js';
 import type { Locale } from './i18n.js';
-import { urlForView } from './navigation.js';
+import { deviceListUrl, urlForView } from './navigation.js';
 import { AdminWorkspace, labels, navGroups, resourcePaths } from './workspaces.js';
 import { DeviceManagement } from './device-management.js';
+import { DeviceFleet } from './device-fleet.js';
+import { AddDeviceDialog } from './add-device-dialog.js';
 import type { View } from './workspaces.js';
 import { Button, containsRevealedSecrets, DataTable, Icon, ResultPanel, SecretRevealDialog, Select, Stepper, collectionOf } from './ui.js';
 import type { Translate } from './ui.js';
@@ -86,6 +89,9 @@ export function App() {
   const [user, setUser] = useState<SessionUser>();
   const [bindingHeaderActions, setBindingHeaderActions] = useState<HTMLDivElement | null>(null);
   const [view, setView] = useState<View>(viewFromLocation);
+  const [deviceId, setDeviceId] = useState(() => new URLSearchParams(globalThis.location.search).get('device') ?? '');
+  const pageView = view === 'provision' ? 'devices' : view;
+  useEffect(() => { if (view === 'devices' && deviceId) globalThis.scrollTo({ top: 0, left: 0, behavior: 'instant' }); }, [view, deviceId]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [resourceData, setResourceData] = useState<unknown>();
   const [resourcePage, setResourcePage] = useState(0);
@@ -155,7 +161,7 @@ export function App() {
 
   useEffect(() => { document.documentElement.lang = locale; saveLocale(locale); void refreshSession(); }, [locale]);
   useEffect(() => {
-    const restoreView = (): void => setView(viewFromLocation());
+    const restoreView = (): void => { setView(viewFromLocation()); setDeviceId(new URLSearchParams(globalThis.location.search).get('device') ?? ''); };
     globalThis.addEventListener('popstate', restoreView);
     return () => globalThis.removeEventListener('popstate', restoreView);
   }, []);
@@ -219,8 +225,9 @@ export function App() {
   };
 
   const selectView = (nextView: View): void => {
-    if (nextView !== view) updateViewLocation(nextView);
-    setView(nextView);
+    if (nextView === 'devices') globalThis.history.pushState({ view: 'devices' }, '', deviceListUrl(globalThis.location.href));
+    else if (nextView !== view) updateViewLocation(nextView);
+    setDeviceId(''); setView(nextView); setError(''); setOperationResult(undefined);
     setMobileNavOpen(false);
   };
 
@@ -228,7 +235,7 @@ export function App() {
     const url = urlForView(globalThis.location.href, 'devices');
     url.searchParams.set('device', deviceId);
     globalThis.history.pushState({ view: 'devices', deviceId }, '', url);
-    setView('devices');
+    setDeviceId(deviceId); setView('devices'); setError(''); setOperationResult(undefined);
     setMobileNavOpen(false);
   };
 
@@ -258,24 +265,38 @@ export function App() {
     void loadResource(view, nextResourceCursor);
   };
 
-  return <LocaleContext.Provider value={locale}>{mode === 'ready' ? <div className="app-shell">
+  return <LocaleContext.Provider value={locale}>{mode === 'ready' ? <div className="app-shell admin-linear">
     <aside className={`sidebar ${mobileNavOpen ? 'sidebar-open' : ''}`}>
       <div className="brand"><span className="brand-mark">V<span>○</span></span><div><strong>Voicecan</strong><small>{t('Device platform')}</small></div><button type="button" className="sidebar-close" aria-label={t('Close navigation')} onClick={() => setMobileNavOpen(false)}><Icon name="close"/></button></div>
-      <nav className="side-nav" aria-label={t('Main navigation')}>{navGroups.map((group) => <section key={group.label}><p>{t(group.label)}</p>{group.items.filter((item) => !['storage'].includes(item) || user?.role === 'system_admin').map((item) => <button type="button" key={item} className={view === item ? 'active' : undefined} aria-current={view === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{view === item ? <i/> : null}</button>)}</section>)}</nav>
+      <nav className="side-nav" aria-label={t('Main navigation')}>
+        <section>{navGroups[0]?.items.map((item) => <button type="button" key={item} className={pageView === item ? 'active' : undefined} aria-current={pageView === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{pageView === item ? <i/> : null}</button>)}</section>
+        <details className="admin-navigation" open={navGroups.slice(1).some((group) => group.items.includes(view)) ? true : undefined}>
+          <summary><Icon name="storage"/><span>{t('Management and advanced settings')}</span><Icon name="arrow" size={14}/></summary>
+          {navGroups.slice(1).map((group) => <section key={group.label}><p>{t(group.label)}</p>{group.items.filter((item) => !['storage'].includes(item) || user?.role === 'system_admin').map((item) => <button type="button" key={item} className={pageView === item ? 'active' : undefined} aria-current={pageView === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{pageView === item ? <i/> : null}</button>)}</section>)}
+        </details>
+      </nav>
       <div className="sidebar-footer"><div className="server-mini"><span className={`health-dot health-${health}`}/><div><strong>{t('Device Server')}</strong><small>{t(health)}</small></div></div><button type="button" onClick={() => void logout()}><Icon name="logout"/><span>{t('Sign out')}</span></button></div>
     </aside>
     {mobileNavOpen ? <button type="button" aria-label={t('Close navigation')} className="nav-scrim" onClick={() => setMobileNavOpen(false)}/> : null}
     <div className="app-main">
-      <header className="app-topbar"><button type="button" className="mobile-menu" aria-label={t('Open navigation')} onClick={() => setMobileNavOpen(true)}><Icon name="menu"/></button><div className="breadcrumbs"><span>{t('Voicecan device platform')}</span><Icon name="arrow" size={14}/><strong>{t(labels[view])}</strong></div><div className="topbar-actions"><label className="language-control"><Icon name="globe" size={16}/><span className="sr-only">{t('Language')}</span><Select compact ariaLabel={t('Language')} value={locale} options={[{ value: 'zh-CN', label: '中文' }, { value: 'en', label: 'English' }]} onChange={(next) => setLocale(next as Locale)}/></label><div className="user-chip"><span>{user?.username.slice(0, 1).toUpperCase()}</span><div><strong>{user?.username}</strong><small>{t(user?.role.replaceAll('_', ' ') ?? '')}</small></div></div></div></header>
-      <main className="page"><header className="page-header"><div className={view === 'provision' ? 'binding-page-heading' : undefined}><p className="eyebrow">{t(pageEyebrow(view))}</p>{view === 'provision' ? <div className="binding-title-row"><h1>{t(labels[view])}</h1><div ref={setBindingHeaderActions}/></div> : <h1>{t(labels[view])}</h1>}<p>{t(pageDescription(view))}</p></div><PageActions view={view} t={t} onNavigate={selectView} onRefresh={() => void loadResource(view, resourceCursors[resourcePage] ?? '')}/></header>
+      <header className="app-topbar"><button type="button" className="mobile-menu" aria-label={t('Open navigation')} onClick={() => setMobileNavOpen(true)}><Icon name="menu"/></button><div className="breadcrumbs"><span>{t('Voicecan device platform')}</span><Icon name="arrow" size={14}/><strong>{t(deviceId && pageView === 'devices' ? 'Device details' : labels[pageView])}</strong></div><div className="topbar-actions"><label className="language-control"><Icon name="globe" size={16}/><span className="sr-only">{t('Language')}</span><Select compact ariaLabel={t('Language')} value={locale} options={[{ value: 'zh-CN', label: '中文' }, { value: 'en', label: 'English' }]} onChange={(next) => setLocale(next as Locale)}/></label><div className="user-chip"><span>{user?.username.slice(0, 1).toUpperCase()}</span><div><strong>{user?.username}</strong><small>{t(user?.role.replaceAll('_', ' ') ?? '')}</small></div></div></div></header>
+      <main className="page"><header className="page-header"><div>{deviceId && pageView === 'devices' ? <Button className="fleet-back" kind="ghost" onClick={() => selectView('devices')}>{t('Back to device list')}</Button> : <p className="eyebrow">{t(pageEyebrow(pageView))}</p>}<h1>{t(deviceId && pageView === 'devices' ? 'Device details' : labels[pageView])}</h1><p>{t(deviceId && pageView === 'devices' ? 'Manage this device’s connection, recordings and settings.' : pageDescription(pageView))}</p></div><PageActions view={pageView} t={t} onNavigate={selectView} onRefresh={() => void loadResource(view, resourceCursors[resourcePage] ?? '')}/></header>
+        {view === 'files' ? <RecordingLibrary t={t}/> : null}
         {view === 'overview' ? <Overview t={t} health={health} onNavigate={selectView}/> : null}
-        {resourcePaths[view] ? <section className="content-card resource-card">{loading && resourceData === undefined ? <ResourceSkeleton/> : error && resourceData === undefined ? <ResultPanel result={undefined} error={error} loading={false} t={t}/> : view === 'devices' ? <DeviceManagement devices={resourceData} t={t} canEdit={user?.role === 'system_admin' || user?.membership_role === 'group_admin'} canRelease={user?.role === 'system_admin'} onRelease={releaseDevice} onDevicesRefresh={() => void loadResource('devices')}/> : <><DataTable data={resourceData} t={t} pageSize={cursorPaginated ? 100 : 12}/>{cursorPaginated && resourceData !== undefined ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={resourcePage === 0 || loading} onClick={goToPreviousResourcePage}>{t('Previous')}</Button><span>{t('Page {page}', { page: resourcePage + 1 })}</span><Button kind="ghost" disabled={!nextResourceCursor || loading} onClick={goToNextResourcePage}>{t('Next')}</Button></nav> : null}</>}</section> : null}
-        {!resourcePaths[view] && view !== 'overview' ? <AdminWorkspace headerActions={bindingHeaderActions} key={view} view={view} t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'}/> : null}
-        {view === 'provision' && connectReturn ? <section className={`connect-return connect-return-${connectReturn.phase}`} role="status"><span>{connectReturn.phase === 'checking' ? <span className="spinner"/> : connectReturn.phase === 'completed' ? '✓' : '!'}</span><div><strong>{t(connectReturn.phase === 'checking' ? 'Checking connection result' : connectReturn.phase === 'completed' ? 'Device connected' : 'Connection needs attention')}</strong><p>{connectReturn.message}</p>{connectReturn.deviceId ? <code>{connectReturn.deviceId}</code> : null}</div></section> : null}
+        {pageView === 'devices' ? <><DeviceFleet t={t} onSelect={selectDevice} active={!deviceId}/>{deviceId ? <DeviceManagement key={deviceId} devices={undefined} t={t} canEdit={user?.role === 'system_admin' || user?.membership_role === 'group_admin'} canRelease={user?.role === 'system_admin'} onRelease={releaseDevice} onDevicesRefresh={() => {}}/> : null}</> : null}
+        {resourcePaths[view] ? <section className="content-card resource-card">{loading && resourceData === undefined ? <ResourceSkeleton/> : error && resourceData === undefined ? <ResultPanel result={undefined} error={error} loading={false} t={t}/> : <><DataTable data={resourceData} t={t} pageSize={cursorPaginated ? 100 : 12}/>{cursorPaginated && resourceData !== undefined ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={resourcePage === 0 || loading} onClick={goToPreviousResourcePage}>{t('Previous')}</Button><span>{t('Page {page}', { page: resourcePage + 1 })}</span><Button kind="ghost" disabled={!nextResourceCursor || loading} onClick={goToNextResourcePage}>{t('Next')}</Button></nav> : null}</>}</section> : null}
+        {!resourcePaths[view] && !['overview', 'devices', 'provision', 'files'].includes(view) ? <AdminWorkspace headerActions={bindingHeaderActions} key={view} view={view} t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'}/> : null}
+
         {view !== 'overview' && !['provision', 'release'].includes(view) && (!resourcePaths[view] || operationResult !== undefined) ? <ResultPanel result={operationResult} error={error} loading={loading} t={t}/> : null}
-        {['provision', 'release'].includes(view) && (loading || error) ? <ResultPanel result={undefined} error={error} loading={loading} t={t}/> : null}
+        {view === 'release' && (loading || error) ? <ResultPanel result={undefined} error={error} loading={loading} t={t}/> : null}
       </main>
     </div>
+    {view === 'provision' ? <AddDeviceDialog t={t} busy={loading} onClose={() => selectView('devices')} headerRef={setBindingHeaderActions}>
+      <AdminWorkspace headerActions={bindingHeaderActions} view="provision" t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'}/>
+      {view === 'provision' && connectReturn ? <section className={`connect-return connect-return-${connectReturn.phase}`} role="status"><span>{connectReturn.phase === 'checking' ? <span className="spinner"/> : connectReturn.phase === 'completed' ? '✓' : '!'}</span><div><strong>{t(connectReturn.phase === 'checking' ? 'Checking connection result' : connectReturn.phase === 'completed' ? 'Device connected' : 'Connection needs attention')}</strong><p>{connectReturn.message}</p>{connectReturn.deviceId ? <code>{connectReturn.deviceId}</code> : null}</div></section> : null}
+      {connectReturn?.phase === 'completed' && connectReturn.deviceId ? <Button onClick={() => selectDevice(connectReturn.deviceId!)}>{t('Open device details')}</Button> : null}
+      {loading || error ? <ResultPanel result={undefined} error={error} loading={loading} t={t}/> : null}
+    </AddDeviceDialog> : null}
     {secretReveal !== undefined ? <SecretRevealDialog result={secretReveal} t={t} onClose={() => { setSecretReveal(undefined); setOperationResult(undefined); }}/>: null}
   </div> : <AuthExperience mode={mode} notice={notice} health={health} locale={locale} setLocale={setLocale} onSetup={submitSetup} onLogin={submitLogin}/>}</LocaleContext.Provider>;
 }
@@ -292,12 +313,12 @@ function pageDescription(view: View): string {
   const descriptions: Record<View, string> = {
     overview: 'A calm view of device health, activity and the next action that needs attention.',
     devices: 'Monitor ownership and connection state across the current authorized scope.',
-    files: 'Track recording discovery, storage and synchronization without exposing recording content.',
-    provision: 'Bind a nearby Voicecan device to this platform through a short-lived, origin-bound flow. Network setup is one step when needed.',
+    files: 'Find recordings by device, check synchronization and use them in your AI tool.',
+    provision: 'Choose your nearby device, connect its network, and wait for this platform to confirm it online.',
     release: 'Release control safely while preserving recordings and audit history.',
     groups: 'Use user groups to assign devices and recordings to a shared access boundary, then control which members can manage or view them.',
     users: 'Create local accounts and control administrative access.',
-    'open-platform': 'Manage Applications, shared REST/MCP permissions, credentials, OAuth clients, Webhooks, download delivery policies, usage and audit.',
+    'open-platform': 'Choose OpenClaw, Codex or another AI tool to work with your recordings.',
     'open-platform-overview': 'Monitor Application health, credential risk, API and MCP calls, temporary download use and security alerts.',
     'permission-catalog': 'Review the server-owned permission catalog shared by REST, MCP and every credential.',
     'oauth-clients': 'Review approved remote MCP OAuth clients, redirect URIs, scopes and lifecycle state.',
@@ -313,7 +334,8 @@ function pageDescription(view: View): string {
 }
 
 function PageActions({ view, t, onNavigate, onRefresh }: { view: View; t: Translate; onNavigate: (view: View) => void; onRefresh: () => void }) {
-  if (view === 'overview' || view === 'devices') return <div className="page-actions"><Button kind="secondary" icon="refresh" onClick={onRefresh}>{t('Refresh')}</Button><Button icon="provision" onClick={() => onNavigate('provision')}>{t('Bind device')}</Button></div>;
+  if (view === 'devices') return <Button data-add-device-trigger kind="secondary" icon="provision" onClick={() => onNavigate('provision')}>{t('Add device')}</Button>;
+  if (view === 'overview') return null;
   if (resourcePaths[view]) return <Button kind="secondary" icon="refresh" onClick={onRefresh}>{t('Refresh')}</Button>;
   return null;
 }
@@ -337,7 +359,7 @@ function Overview({ t, health, onNavigate }: { t: Translate; health: string; onN
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
-    void Promise.allSettled([api('/devices'), api('/files?limit=20'), api('/events?limit=5'), api('/open-platform/applications')]).then((results) => {
+    void Promise.allSettled([api('/admin/devices?limit=1'), api('/files?limit=20'), api('/events?limit=5'), api('/open-platform/applications')]).then((results) => {
       if (!active) return;
       const value = (index: number): unknown => results[index]?.status === 'fulfilled' ? results[index].value : [];
       setData({ devices: value(0), files: value(1), events: value(2), applications: value(3) });
@@ -359,7 +381,16 @@ function Overview({ t, health, onNavigate }: { t: Translate; health: string; onN
     { label: 'Events', value: count('events'), icon: 'pulse' as const, target: 'events' as const },
     { label: 'Applications', value: count('applications'), icon: 'code' as const, target: 'open-platform' as const },
   ];
-  return <div className="overview-grid"><section className="welcome-card"><div><span className={`status-pill status-${health}`}>{t('Server {status}', { status: t(health) })}</span><h2>{t('Your device workspace is ready.')}</h2><p>{t('Bind a nearby device or inspect the latest activity across this independent deployment.')}</p><div className="welcome-actions"><Button icon="provision" onClick={() => onNavigate('provision')}>{t('Bind device')}</Button><Button kind="secondary" icon="pulse" onClick={() => onNavigate('events')}>{t('View activity')}</Button></div></div><div className="overview-device" aria-hidden="true"><span className="overview-logo">V○</span><i/></div></section><section className="metrics-grid">{metrics.map((metric) => <button type="button" className="metric-card" key={metric.label} onClick={() => onNavigate(metric.target)}><span className="metric-icon"><Icon name={metric.icon}/></span><div><span>{t(metric.label)}</span><strong>{loading ? '—' : metric.value}</strong></div><Icon name="arrow"/></button>)}</section><section className="content-card quick-start"><header><div><p className="eyebrow">{t('Guided actions')}</p><h2>{t('What would you like to do?')}</h2></div></header><div className="quick-grid"><QuickAction icon="provision" title={t('Bind a device')} description={t('Assign ownership, connect a nearby Voicecan device, and configure its network only when needed.')} onClick={() => onNavigate('provision')}/><QuickAction icon="code" title={t('Connect an application')} description={t('Create an Open Platform Application with reviewed permissions and credentials.')} onClick={() => onNavigate('open-platform')}/><QuickAction icon="webhook" title={t('Receive events')} description={t('Configure signed Webhooks within an Open Platform Application.')} onClick={() => onNavigate('open-platform')}/></div></section><section className="content-card recent-card"><header><div><p className="eyebrow">{t('Recent activity')}</p><h2>{t('Latest events')}</h2></div><Button kind="ghost" onClick={() => onNavigate('events')}>{t('View all')}</Button></header><DataTable data={data.events} t={t} maxRows={5} emptyMessage={t('Device and server activity will appear here.')}/></section></div>;
+  return <div className="platform-home">
+    <section className="home-intro"><div><p className="eyebrow">{t('Start here')}</p><h2>{t('From your device to your AI tool')}</h2><p>{t('Connect once. Record whenever you need. Your recordings synchronize here, ready for your own AI tool.')}</p></div><span className={`status-pill status-${health}`}>{t('Server {status}',{status:t(health)})}</span></section>
+    <section className="home-journey" aria-label={t('Getting started')}>
+      <article><span className="journey-number">1</span><h3>{t('Add your device')}</h3><p>{t('Connect Bluetooth, then Wi-Fi. Backup and server setup happen automatically.')}</p><Button onClick={()=>onNavigate('provision')}>{t('Add device')}</Button></article>
+      <article><span className="journey-number">2</span><h3>{t('Find your recordings')}</h3><p>{t('Record on the device. Check synchronization here before handing audio to your AI tool.')}</p><Button kind="secondary" onClick={()=>onNavigate('files')}>{t('View recordings')}</Button></article>
+      <article><span className="journey-number">3</span><h3>{t('Connect AI tools')}</h3><p>{t('Choose OpenClaw or Codex, authorize access and check the connection.')}</p><Button kind="secondary" onClick={()=>onNavigate('open-platform')}>{t('Choose an AI tool')}</Button></article>
+    </section>
+    <section className="home-inventory"><h3>{t('Your platform')}</h3><div>{metrics.filter(m=>m.target!=='events').map(m=><button type="button" key={m.label} onClick={()=>onNavigate(m.target)}><span>{t(m.label)}</span><strong>{loading?'—':m.value}</strong><Icon name="arrow"/></button>)}</div><p>{t('An authorized connection is not the same as a connected client. Verify it in your AI tool.')}</p></section>
+  </div>;
+
 }
 
 function QuickAction({ icon, title, description, onClick }: { icon: Parameters<typeof Icon>[0]['name']; title: string; description: string; onClick: () => void }) {

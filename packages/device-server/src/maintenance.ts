@@ -1,9 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 import type { ServerConfig } from './config.js';
-import { decryptSecretWithKeyring, encryptSecret, hashPassword, tokenHash } from './security.js';
+import { decryptSecretWithKeyring, deviceTokenVerifier, encryptSecret, hashPassword, tokenHash } from './security.js';
 
 function openExclusive(config: ServerConfig): DatabaseSync {
   const database = new DatabaseSync(config.databaseFile, { enableForeignKeyConstraints: true });
@@ -35,7 +35,9 @@ async function readBackupManifest(root: string): Promise<BackupManifest> {
   return manifest as BackupManifest;
 }
 
-export async function createBackup(config: ServerConfig, outputDirectory: string): Promise<void> {
+export type BackupConfig = Pick<ServerConfig, 'dataDir' | 'databaseFile' | 'storageDir' | 'firmwareDir' | 'storageDriver'>;
+
+export async function createBackup(config: BackupConfig, outputDirectory: string): Promise<void> {
   const target = resolve(outputDirectory);
   try { await stat(target); throw new Error('BACKUP_TARGET_EXISTS'); } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
   await mkdir(target, { recursive: false, mode: 0o700 });
@@ -44,6 +46,7 @@ export async function createBackup(config: ServerConfig, outputDirectory: string
   try {
     administratorUsernames = (database.prepare("SELECT username FROM users WHERE role='system_admin' AND disabled_at IS NULL ORDER BY username").all() as Array<{ username: string }>).map((row) => row.username);
     await backup(database, resolve(target, 'device-platform.sqlite'));
+    await chmod(resolve(target, 'device-platform.sqlite'), 0o600);
   } finally { database.close(); }
   await cp(config.storageDir, resolve(target, 'objects'), { recursive: true, errorOnExist: true, force: false });
   await cp(config.firmwareDir, resolve(target, 'firmware'), { recursive: true, errorOnExist: true, force: false });
@@ -74,7 +77,10 @@ export async function createBackup(config: ServerConfig, outputDirectory: string
 export async function verifyBackup(directory: string): Promise<void> {
   const root = resolve(directory);
   const manifest = await readBackupManifest(root);
-  await readFile(resolve(root, manifest.keyring)); await readFile(resolve(root, manifest.pepper));
+  const ring = JSON.parse(await readFile(resolve(root, manifest.keyring), 'utf8')) as { keys: Record<string, string> };
+  const keys = new Map(Object.entries(ring.keys).map(([version, key]) => [Number(version), Buffer.from(key, 'base64url')]));
+  const pepper = Buffer.from((await readFile(resolve(root, manifest.pepper), 'utf8')).trim(), 'base64url');
+  if (pepper.length !== 32 || keys.size === 0 || [...keys.values()].some((key) => key.length !== 32)) throw new Error('BACKUP_KEYS_INVALID');
   if (manifest.firmware) await readdir(resolve(root, manifest.firmware));
   const database = new DatabaseSync(resolve(root, manifest.database), { readOnly: true });
   try {
@@ -82,6 +88,13 @@ export async function verifyBackup(directory: string): Promise<void> {
     if (integrity.integrity_check !== 'ok') throw new Error(`BACKUP_INTEGRITY_FAILED: ${integrity.integrity_check}`);
     const setup = database.prepare('SELECT setup_completed_at FROM server_settings WHERE singleton=1').get() as { setup_completed_at: string | null } | undefined;
     if (!setup?.setup_completed_at) throw new Error('BACKUP_SETUP_NOT_COMPLETE');
+    const credentials = database.prepare('SELECT id,device_id,token_ciphertext,key_version,token_verifier FROM device_credentials').all() as Array<{ id: string; device_id: string; token_ciphertext: string; key_version: number; token_verifier: string }>;
+    for (const credential of credentials) {
+      const plaintext = decryptSecretWithKeyring(credential.token_ciphertext, keys, `${credential.device_id}:${credential.id}`, credential.key_version);
+      try {
+        if (deviceTokenVerifier(plaintext, pepper) !== credential.token_verifier) throw new Error('BACKUP_CREDENTIAL_VERIFICATION_FAILED');
+      } finally { plaintext.fill(0); }
+    }
   } finally { database.close(); }
 }
 

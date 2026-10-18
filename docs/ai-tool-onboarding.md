@@ -1,0 +1,27 @@
+# AI tool connection flow
+
+The platform owns devices, recording sync/storage and authorization. Transcription and agent workflows belong to the user's chosen tool. Demo apps are optional.
+
+Local setup supports OpenClaw, Codex, Claude Desktop and generic stdio clients. OpenClaw configuration uses `mcp.servers` with command/args, and generates `openclaw mcp add` plus `openclaw mcp doctor <name> --probe`. Current official references: https://docs.openclaw.ai/tools/mcp and https://docs.openclaw.ai/cli/mcp/registry (checked 2026-10-04). The user must use a version that supports these commands. No OpenClaw installation is bundled or automatically modified.
+
+Quick setup runs on the Platform computer only. The runner reads an owner-only token reference and is restricted to loopback callers. Remote OpenClaw needs reachable HTTPS and the existing remote OAuth client flow; local paths cannot be copied to a cloud Gateway.
+
+Metadata permission is the default. Recording content is a separate opt-in profile requiring `consent: true`; it adds temporary download link creation and revocation, never device controls/deletion. Existing metadata credentials are not widened. Same group/profile reuses a credential across client formats; revoking it affects every client using that credential. The content profile uses a distinct MCP server name to avoid overwriting existing Codex setup. Revoked/expired connections require explicit management.
+
+Generated configuration is not client verification. Codex automatic installation checks the runner/tool catalog and saved config, not audio processing. OpenClaw verification happens in that user's running installation. Audio access grants allow retrieval of original audio, which may require a codec and transcription service configured by the user. No ASR or LLM dependency is added to Platform.
+
+Main UI: overview -> add device dialog -> recordings -> AI tools. Recording date means server ingestion date, not an inferred capture timestamp. Original download remains the existing authenticated streaming Admin route; app/MCP consumers use temporary grants. Technical metadata and device maintenance remain available under disclosures.
+
+## Recording use entry points (2026-10-04)
+The basic page starts with Download / AI tools / Own application. Downloads lead to the existing filtered recording library. AI setup includes WorkBuddy using standard mcpServers, alongside Codex and OpenClaw. Remote setup displays the configured public MCP URL and OAuth instructions, with a local/HTTP address blocker. This is configuration guidance, not proof of remote reachability or transcription. REST application authorization remains independent of MCP.
+
+Validation: CI 185 passed, 1 skipped (Postgres); local browser verified entry selection and rendered layout. External WorkBuddy/OpenClaw authorization and audio processing have not been exercised.
+Sources: https://www.workbuddy.ai/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/MCP-Guide and https://docs.openclaw.ai/tools/mcp .
+
+## Real Codex first-run check, 2026-10-18
+- Restored stopped local Platform on 8788; reused existing metadata and recording credentials without broadening permissions.
+- Actual installed Codex CLI called MCP search/get successfully. Selected audio was streamed through a short-lived MCP download grant, size and SHA-256 verified, grant revoked after download. No download URL or credential was persisted in the result.
+- Unknown/bin media followed the documented LC3 fallback only after header validation; existing client-side decoder and verified local Faster-Whisper model were used outside Platform. ASR output is provisional evidence, not automatically reliable speech. Empty or implausible ASR is not a summary.
+- Changes: context-specific prompts for local files / metadata / recording content, consent still required for content, per-recording task copy, and a real authorized recording query as part of the MCP setup check. Platform has no ASR or model dependency.
+
+Final verification for the 2026-10-18 first-run changes: Platform CI 189 passed, 1 existing Postgres skip, 0 failed; final Admin typecheck/build passed. Actual UI add-to-Codex reused existing credentials and passed the new recording search check. Date filter returned 12 records and per-record task copy was verified by pasting it into the UI and checking the expected recording ID. Two independent visual reviews approved all six final captures (download / Codex result+help / recordings+details at 1440px and 320px). Five existing candidate recordings downloaded and decoded correctly but did not yield trustworthy ASR. A gain-normalized diagnostic window also produced unreliable mixed/repeated language; no substantive summary was accepted. Reliable recording-to-summary acceptance remains incomplete.

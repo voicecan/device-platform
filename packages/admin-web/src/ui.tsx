@@ -82,41 +82,43 @@ export function Field({ label, hint, value, onChange, type = 'text', options, id
 export type DeviceWsCandidate = { url: string; host: string; preferred: boolean };
 
 export function CredentialBackupWarning({ t, canExport }: { t: Translate; canExport: boolean }) {
-  const [guideVisible, setGuideVisible] = useState(false);
-  const [downloadStarted, setDownloadStarted] = useState(false);
-  const exportBackup = (): void => {
-    const anchor = document.createElement('a');
-    anchor.href = '/api/v1/admin/backups/export'; anchor.download = ''; anchor.hidden = true;
-    document.body.append(anchor); anchor.click(); anchor.remove();
-    setDownloadStarted(true);
+  const [status, setStatus] = useState<{ supported: boolean; current: boolean; latest: { created_at: string; directory: string } | null }>();
+  const [error, setError] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!canExport) return;
+    let active = true;
+    const load = (): void => { void api<typeof status>('/admin/backups/status').then((value) => { if (active) { setStatus(value); setError(false); } }, () => { if (active) setError(true); }); };
+    load();
+    const timer = globalThis.setInterval(load, 30_000);
+    globalThis.addEventListener('voicecan:backup-saved', load);
+    return () => { active = false; globalThis.clearInterval(timer); globalThis.removeEventListener('voicecan:backup-saved', load); };
+  }, [canExport, attempt]);
+  const save = async (): Promise<void> => {
+    setBusy(true); setError(false);
+    try { setStatus(await api('/admin/backups/create', { method: 'POST', body: '{}' })); }
+    catch { setError(true); }
+    finally { setBusy(false); }
   };
-  return <section className="credential-backup-warning field-wide" role="alert" aria-label={t('Back up credentials before binding')}>
-    <span className="credential-backup-mark" aria-hidden="true">!</span>
-    <div>
-      <strong>{t('Back up credentials before binding')}</strong>
-      <p>{t('Keep an offline copy of the administrator username and the device binding Token, or a verified complete server backup that contains the Token and its encryption keys.')}</p>
-      <small>{t('If this server is reset or the binding Token is lost, data on the device cannot be read. Only a factory reset can unlock the device, and the existing data cannot be recovered.')}</small>
-      <div className="form-actions">
-        <Button type="button" kind="secondary" onClick={() => setGuideVisible((visible) => !visible)}>{t(guideVisible ? 'Hide backup guide' : 'View backup guide')}</Button>
-        {canExport ? <Button type="button" icon="storage" onClick={exportBackup}>{t('Export complete recovery backup')}</Button> : null}
-      </div>
-      {guideVisible ? <div className="inline-alert inline-alert-error">
-        <strong>{t('What the recovery backup contains')}</strong>
-        <ol>
-          <li>{t('The active administrator username is listed in RECOVERY.txt. Passwords are not exported in plaintext.')}</li>
-          <li>{t('Device binding Tokens remain encrypted in the database; the package includes the keyring and Token pepper required after restore.')}</li>
-          <li>{t('Keep the whole archive offline and encrypted. Export a new copy after binding a device or rotating a Token or key.')}</li>
-          <li>{t('On the server host, extract the archive, run backup verify on the directory containing manifest.json, then restore only while the Server is stopped.')}</li>
-        </ol>
-      </div> : null}
-      {!canExport ? <div className="inline-alert inline-alert-error">{t('Only a System Admin can export the complete recovery backup. Ask the server administrator to export and store it securely.')}</div> : null}
-      {downloadStarted ? <div className="inline-alert inline-alert-success" role="status">{t('Recovery backup export started. Store the downloaded archive offline and encrypted, then verify it from the server host.')}</div> : null}
+  return <section className="recovery-backup field-wide" aria-label={t('Automatic recovery backup')}>
+    <Icon name="shield" size={20}/><div>
+      <strong>{t(error ? 'Recovery backup needs attention' : status?.supported === false ? 'Operator-managed backup required' : status?.current ? 'Recovery copy saved and verified' : 'Recovery backup is automatic')}</strong>
+      <p>{t(error ? 'Could not verify the backup. Try again; an unprotected device credential will not be sent.' : status?.supported === false ? 'This deployment uses external storage or keys. Ask the administrator to prepare a recovery backup before binding.' : 'Before binding or Bluetooth maintenance, the server saves and checks the device credential and recovery keys. No manual export is needed to continue.')}</p>
+      {status?.current && status.latest ? <small>{t('Last verified backup: {time}', { time: formatLocalDateTime(status.latest.created_at) })}</small> : null}
+      <details><summary>{t('Backup location and optional download')}</summary><div className="recovery-backup-details">
+        <p>{t('The automatic copy is on the server computer. Download an additional copy to another secure location to protect against computer or disk loss.')}</p>
+        {status?.latest ? <code>{status.latest.directory}</code> : null}
+        <p>{t('The package includes the database, recovery keys and server files. Treat it as a private key: anyone with the complete package may access bound devices.')}</p>
+        {canExport ? <div className="form-actions">{status?.supported !== false ? <Button kind="secondary" disabled={busy} onClick={() => void save()}>{t(busy ? 'Saving recovery copy…' : 'Save recovery copy now')}</Button> : null}<a className="button button-secondary" href="/api/v1/admin/backups/export" download>{t('Download recovery package')}</a></div> : <p>{t('Only a System Admin can download the recovery package.')}</p>}
+      </div></details>
+      {error ? <Button kind="secondary" onClick={() => setAttempt((value) => value + 1)}>{t('Try again')}</Button> : null}
     </div>
   </section>;
 }
 
-export function DeviceWsCandidatePicker({ candidates, value, onChange, t, canExportBackup }: { candidates: readonly DeviceWsCandidate[]; value: string; onChange: (value: string) => void; t: Translate; canExportBackup: boolean }) {
-  return <><CredentialBackupWarning t={t} canExport={canExportBackup}/>{candidates.length > 0 ? <div className="server-candidate-list"><span>{t('Detected server addresses')}</span>{candidates.map((candidate) => <button key={candidate.url} type="button" className={value === candidate.url ? 'is-selected' : ''} aria-pressed={value === candidate.url} onClick={() => onChange(candidate.url)}><Icon name="server"/><span><strong>{candidate.host}{candidate.preferred ? <em>{t('Recommended')}</em> : null}</strong><small>{candidate.url}</small></span><Icon name="arrow"/></button>)}</div> : null}</>;
+export function DeviceWsCandidatePicker({ candidates, value, onChange, t, canExportBackup, showBackupWarning = true }: { candidates: readonly DeviceWsCandidate[]; value: string; onChange: (value: string) => void; t: Translate; canExportBackup: boolean; showBackupWarning?: boolean }) {
+  return <>{showBackupWarning ? <CredentialBackupWarning t={t} canExport={canExportBackup}/> : null}{candidates.length > 0 ? <div className="server-candidate-list"><span>{t('Detected server addresses')}</span>{candidates.map((candidate) => <button key={candidate.url} type="button" className={value === candidate.url ? 'is-selected' : ''} aria-pressed={value === candidate.url} onClick={() => onChange(candidate.url)}><Icon name="server"/><span><strong>{candidate.host}{candidate.preferred ? <em>{t('Recommended')}</em> : null}</strong><small>{candidate.url}</small></span><Icon name="arrow"/></button>)}</div> : null}</>;
 }
 
 function collectionOf(data: unknown): readonly Record<string, unknown>[] {

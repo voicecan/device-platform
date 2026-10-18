@@ -148,6 +148,52 @@ export async function resolveOAuthPrincipalPermissions(db: Database, userId: str
 export class OpenPlatformService {
   constructor(private readonly dependencies: Omit<OpenPlatformDependencies, 'app' | 'resolveAccess' | 'audit'>) {}
 
+  async createApplication(context: AccessContext, body: Row): Promise<Record<string, unknown>> {
+    const { db, config } = this.dependencies;
+    if (context.actorType !== 'user') throw new AccessDeniedError();
+    const groupId = context.isSystemAdmin ? requiredString(body, 'group_id', 100) : requireGroup(context);
+    requireGroupAdmin(context, groupId);
+    const name = requiredString(body, 'name', 120);
+    const description = optionalString(body, 'description', 2000);
+    const environment = optionalString(body, 'environment', 32) ?? 'development';
+    if (!['development', 'staging', 'production'].includes(environment)) throw new OpenPlatformError(400, 'INVALID_ENVIRONMENT', 'environment is invalid');
+    const channels = validChannels(body.channels === undefined ? ['rest'] : stringArray(body, 'channels'));
+    const permissions = validPermissions(body.permissions === undefined ? [...OPEN_PLATFORM_PERMISSION_TEMPLATES.metadata_reader] : stringArray(body, 'permissions'));
+    const applicationId = id('app');
+    const timestamp = now();
+    await db.batch([
+      { sql: 'INSERT INTO open_platform_applications(id,group_id,name,description,environment,status,channels_json,owner_user_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', params: [applicationId, groupId, name, description, environment, 'active', JSON.stringify(channels), context.actorId, context.actorId, timestamp, timestamp] },
+      { sql: 'INSERT INTO application_collaborators(id,application_id,user_id,role,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?)', params: [id('collab'), applicationId, context.actorId, 'owner', context.actorId, timestamp, timestamp] },
+      { sql: 'INSERT INTO application_policies(application_id,download_ttl_seconds,s3_redirect_ttl_seconds,download_delivery_mode,updated_by,updated_at) VALUES(?,?,?,?,?,?)', params: [applicationId, config.downloadGrantDefaultTtlSeconds, config.s3DownloadRedirectTtlSeconds, environment === 'production' ? 'external_object_only' : config.downloadDeliveryMode, context.actorId, timestamp] },
+      ...permissions.map((permission): SqlStatement => ({ sql: 'INSERT INTO application_permission_grants(application_id,permission,created_by,created_at) VALUES(?,?,?,?)', params: [applicationId, permission, context.actorId, timestamp] })),
+    ]);
+    return this.getApplication(context, applicationId);
+  }
+
+  async createCredential(context: AccessContext, applicationId: string, body: Row): Promise<Record<string, unknown>> {
+    const { db, config } = this.dependencies;
+    requiredString(body, 'reason', 256);
+    await this.requireApplicationAccess(context, applicationId, 'developer');
+    const detail = await this.getApplication(context, applicationId);
+    if (detail.status !== 'active') throw new OpenPlatformError(409, 'APPLICATION_NOT_ACTIVE', 'Activate the Application before creating a credential');
+    const kind = optionalString(body, 'kind', 32) ?? 'api_token';
+    if (!['api_token', 'mcp_stdio_token'].includes(kind)) throw new OpenPlatformError(400, 'INVALID_CREDENTIAL_KIND', 'kind is invalid');
+    const requiredChannel = kind === 'mcp_stdio_token' ? 'mcp_stdio' : 'rest';
+    if (!(detail.channels as string[]).includes(requiredChannel)) throw new OpenPlatformError(409, 'APPLICATION_CHANNEL_DISABLED', `Enable the ${requiredChannel} channel before creating this credential`);
+    const granted = new Set(detail.permissions as string[]);
+    const scopes = validPermissions(body.scopes === undefined ? [...granted] : stringArray(body, 'scopes'));
+    if (scopes.some((scope) => !granted.has(scope))) throw new OpenPlatformError(400, 'SCOPE_EXCEEDS_APPLICATION', 'Credential scope exceeds Application permissions');
+    const expiration = optionalString(body, 'expires_at', 64);
+    if (detail.environment === 'production' && !expiration) throw new OpenPlatformError(400, 'EXPIRATION_REQUIRED', 'Production credentials require expires_at');
+    const expiresAt = expiration ?? plus(90 * 24 * 60 * 60_000);
+    if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now() + 60_000 || Date.parse(expiresAt) > Date.now() + 365 * 24 * 60 * 60_000) throw new OpenPlatformError(400, 'INVALID_EXPIRATION', 'expires_at must be between one minute and one year from now');
+    const secret = `vcd_app_${opaqueToken()}`;
+    const credentialId = id('credential');
+    const cidrs = validCidrs(body.allowed_ip_cidrs === undefined ? [] : stringArray(body, 'allowed_ip_cidrs', 50));
+    await db.run('INSERT INTO application_credentials(id,application_id,group_id,kind,name,token_prefix,token_fingerprint,token_hash,scopes_json,allowed_ip_cidrs_json,status,expires_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [credentialId, applicationId, detail.group_id, kind, requiredString(body, 'name', 120), secret.slice(0, 16), fingerprint(secret), tokenHash(secret, config.groupTokenPepper), JSON.stringify(scopes), JSON.stringify(cidrs), 'active', expiresAt, context.actorId, now()]);
+    return { id: credentialId, application_id: applicationId, kind, name: body.name, token: secret, token_prefix: secret.slice(0, 16), token_fingerprint: fingerprint(secret), scopes, expires_at: expiresAt };
+  }
+
   private async applicationAccess(context: AccessContext, applicationId: string, minimum: 'viewer' | 'developer' | 'owner' = 'viewer'): Promise<ApplicationAccess> {
     if (context.actorType !== 'user') throw new AccessDeniedError();
     const application = await this.dependencies.db.get<Row>('SELECT * FROM open_platform_applications WHERE id=?', [applicationId]);
@@ -375,16 +421,10 @@ export function registerOpenPlatformRoutes(dependencies: OpenPlatformDependencie
   });
   app.get('/api/v1/open-platform/applications', async (request, reply) => success(reply, await service.listApplications(await resolveAccess(request))));
   app.post('/api/v1/open-platform/applications', async (request, reply) => {
-    const context = await resolveAccess(request, true); const body = bodyOf(request); const groupId = context.isSystemAdmin ? requiredString(body, 'group_id', 100) : requireGroup(context); requireGroupAdmin(context, groupId);
-    const name = requiredString(body, 'name', 120); const description = optionalString(body, 'description', 2000); const environment = optionalString(body, 'environment', 32) ?? 'development'; if (!['development', 'staging', 'production'].includes(environment)) throw new OpenPlatformError(400, 'INVALID_ENVIRONMENT', 'environment is invalid');
-    const channels = validChannels(body.channels === undefined ? ['rest'] : stringArray(body, 'channels')); const permissions = validPermissions(body.permissions === undefined ? [...OPEN_PLATFORM_PERMISSION_TEMPLATES.metadata_reader] : stringArray(body, 'permissions')); const applicationId = id('app'); const timestamp = now();
-    await db.batch([
-      { sql: 'INSERT INTO open_platform_applications(id,group_id,name,description,environment,status,channels_json,owner_user_id,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', params: [applicationId, groupId, name, description, environment, 'active', JSON.stringify(channels), context.actorId, context.actorId, timestamp, timestamp] },
-      { sql: 'INSERT INTO application_collaborators(id,application_id,user_id,role,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?)', params: [id('collab'), applicationId, context.actorId, 'owner', context.actorId, timestamp, timestamp] },
-      { sql: 'INSERT INTO application_policies(application_id,download_ttl_seconds,s3_redirect_ttl_seconds,download_delivery_mode,updated_by,updated_at) VALUES(?,?,?,?,?,?)', params: [applicationId, config.downloadGrantDefaultTtlSeconds, config.s3DownloadRedirectTtlSeconds, environment === 'production' ? 'external_object_only' : config.downloadDeliveryMode, context.actorId, timestamp] },
-      ...permissions.map((permission): SqlStatement => ({ sql: 'INSERT INTO application_permission_grants(application_id,permission,created_by,created_at) VALUES(?,?,?,?)', params: [applicationId, permission, context.actorId, timestamp] })),
-    ]);
-    await audit(request, context, 'open_platform.application_created', 'open_platform_application', applicationId, groupId, optionalString(body, 'reason', 256) ?? undefined); return success(reply, await service.getApplication(context, applicationId), 201);
+    const context = await resolveAccess(request, true); const body = bodyOf(request);
+    const created = await service.createApplication(context, body);
+    await audit(request, context, 'open_platform.application_created', 'open_platform_application', String(created.id), String(created.group_id), optionalString(body, 'reason', 256) ?? undefined);
+    return success(reply, created, 201);
   });
   app.get('/api/v1/open-platform/applications/:id', async (request, reply) => success(reply, await service.getApplication(await resolveAccess(request), String((request.params as Row).id))));
   app.patch('/api/v1/open-platform/applications/:id', async (request, reply) => {
@@ -421,8 +461,11 @@ export function registerOpenPlatformRoutes(dependencies: OpenPlatformDependencie
 
   app.get('/api/v1/open-platform/applications/:id/credentials', async (request, reply) => { const detail = await service.getApplication(await resolveAccess(request), String((request.params as Row).id)); return success(reply, detail.credentials); });
   app.post('/api/v1/open-platform/applications/:id/credentials', async (request, reply) => {
-    const context = await resolveAccess(request, true); const applicationId = String((request.params as Row).id); await service.requireApplicationAccess(context, applicationId, 'developer'); const detail = await service.getApplication(context, applicationId); if (detail.status !== 'active') throw new OpenPlatformError(409, 'APPLICATION_NOT_ACTIVE', 'Activate the Application before creating a credential'); const body = bodyOf(request); const kind = optionalString(body, 'kind', 32) ?? 'api_token'; if (!['api_token', 'mcp_stdio_token'].includes(kind)) throw new OpenPlatformError(400, 'INVALID_CREDENTIAL_KIND', 'kind is invalid'); const requiredChannel = kind === 'mcp_stdio_token' ? 'mcp_stdio' : 'rest'; if (!(detail.channels as string[]).includes(requiredChannel)) throw new OpenPlatformError(409, 'APPLICATION_CHANNEL_DISABLED', `Enable the ${requiredChannel} channel before creating this credential`); const granted = new Set(detail.permissions as string[]); const scopes = validPermissions(body.scopes === undefined ? [...granted] : stringArray(body, 'scopes')); if (scopes.some((scope) => !granted.has(scope))) throw new OpenPlatformError(400, 'SCOPE_EXCEEDS_APPLICATION', 'Credential scope exceeds Application permissions'); const expiration = optionalString(body, 'expires_at', 64); if (detail.environment === 'production' && !expiration) throw new OpenPlatformError(400, 'EXPIRATION_REQUIRED', 'Production credentials require expires_at'); const expiresAt = expiration ?? plus(90 * 24 * 60 * 60_000); if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now() + 60_000 || Date.parse(expiresAt) > Date.now() + 365 * 24 * 60 * 60_000) throw new OpenPlatformError(400, 'INVALID_EXPIRATION', 'expires_at must be between one minute and one year from now'); const secret = `vcd_app_${opaqueToken()}`; const credentialId = id('credential'); const cidrs = validCidrs(body.allowed_ip_cidrs === undefined ? [] : stringArray(body, 'allowed_ip_cidrs', 50));
-    await db.run('INSERT INTO application_credentials(id,application_id,group_id,kind,name,token_prefix,token_fingerprint,token_hash,scopes_json,allowed_ip_cidrs_json,status,expires_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [credentialId, applicationId, detail.group_id, kind, requiredString(body, 'name', 120), secret.slice(0, 16), fingerprint(secret), tokenHash(secret, config.groupTokenPepper), JSON.stringify(scopes), JSON.stringify(cidrs), 'active', expiresAt, context.actorId, now()]); await audit(request, context, 'open_platform.credential_created', 'application_credential', credentialId, String(detail.group_id), requiredString(body, 'reason', 256)); reply.header('cache-control', 'private, no-store'); return success(reply, { id: credentialId, application_id: applicationId, kind, name: body.name, token: secret, token_prefix: secret.slice(0, 16), token_fingerprint: fingerprint(secret), scopes, expires_at: expiresAt }, 201);
+    const context = await resolveAccess(request, true); const applicationId = String((request.params as Row).id); const body = bodyOf(request);
+    const created = await service.createCredential(context, applicationId, body);
+    const detail = await service.getApplication(context, applicationId);
+    await audit(request, context, 'open_platform.credential_created', 'application_credential', String(created.id), String(detail.group_id), requiredString(body, 'reason', 256));
+    reply.header('cache-control', 'private, no-store'); return success(reply, created, 201);
   });
   app.post('/api/v1/open-platform/applications/:id/credentials/:credentialId/rotate', async (request, reply) => {
     const context = await resolveAccess(request, true); const params = request.params as Row; const applicationId = String(params.id); const oldId = String(params.credentialId); await service.requireApplicationAccess(context, applicationId, 'developer'); const detail = await service.getApplication(context, applicationId); const old = await db.get<Row>('SELECT * FROM application_credentials WHERE id=? AND application_id=? AND status IN (\'active\',\'suspended\')', [oldId, applicationId]); if (!old) throw new AccessDeniedError(); const body = bodyOf(request); const graceSeconds = integer(body, 'grace_seconds', 0, 0, 86_400); const secret = `vcd_app_${opaqueToken()}`; const credentialId = id('credential'); const timestamp = now(); const graceEndsAt = graceSeconds === 0 ? timestamp : plus(graceSeconds * 1_000);

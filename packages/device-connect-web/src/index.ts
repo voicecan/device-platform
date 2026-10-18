@@ -19,19 +19,24 @@ export type BoundDeviceMaintenance = {
   close(): Promise<void>;
 };
 
-export async function connectBoundDevice(input: { rawToken: Uint8Array; expectedSerialNumber: string; coreModuleUrl: string; bleServiceUuid?: string; signal?: AbortSignal }): Promise<BoundDeviceMaintenance> {
+export async function connectBoundDevice(input: { rawToken: Uint8Array; expectedSerialNumber: string; coreModuleUrl: string; bleServiceUuid?: string; signal?: AbortSignal; onDisconnected?: () => void; onStage?: (stage: 'load_sdk' | 'select_device' | 'authenticate' | 'read_status') => void }): Promise<BoundDeviceMaintenance> {
+  input.onStage?.('load_sdk');
   const protocol = await loadBrowserPrivateCore(() => import(/* @vite-ignore */ input.coreModuleUrl));
+  input.onStage?.('select_device');
   const transport = await new WebBluetoothTransportFactory({
+    ...(input.onDisconnected ? { onDisconnected: input.onDisconnected } : {}),
     advertisedServiceUuid: input.bleServiceUuid ?? '00001a10-0000-1000-8000-00805f9b34fb',
     serviceUuid: '00001a10-0000-1000-8000-00805f9b34fb', writeCharacteristicUuid: '00002dd1-0000-1000-8000-00805f9b34fb', notifyCharacteristicUuid: '00002dd0-0000-1000-8000-00805f9b34fb',
   }).requestDevice();
   const serverToken = input.rawToken.slice();
   let session: SemanticProtocolSession | undefined;
   try {
+    input.onStage?.('authenticate');
     session = await protocol.createSession(transport); await session.authenticate(input.rawToken, input.signal);
     const info = await session.getInfo(input.signal);
     if (info.serialNumber !== input.expectedSerialNumber) throw new Error(`BLE_DEVICE_MISMATCH: Expected ${input.expectedSerialNumber}, selected ${info.serialNumber}`);
     await session.syncTime({ unixTimeSeconds: Math.floor(Date.now() / 1_000), timezoneOffsetHours: Math.max(-12, Math.min(14, Math.trunc(-new Date().getTimezoneOffset() / 60))) }, input.signal);
+    input.onStage?.('read_status');
     let status = await session.getStatus(input.signal); const activeSession = session;
     const refresh = async (): Promise<DeviceStatus> => { status = await activeSession.getStatus(); return status; };
     return {

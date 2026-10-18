@@ -1,3 +1,4 @@
+import type { BackupConfig } from './maintenance.js';
 import { Worker } from 'node:worker_threads';
 
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
@@ -58,6 +59,14 @@ export class DatabaseActor implements Database {
 
   batch(statements: SqlStatement[]): Promise<Array<{ changes: number }>> {
     return this.#send({ op: 'batch', statements });
+  }
+
+  createVerifiedBackup(config: BackupConfig, directory: string): Promise<void> {
+    return this.#send({ op: 'backup', config, directory });
+  }
+
+  verifyBackup(directory: string): Promise<void> {
+    return this.#send({ op: 'verify-backup', directory });
   }
 
   async close(): Promise<void> {

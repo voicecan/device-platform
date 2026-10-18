@@ -659,6 +659,37 @@ paths:
       responses: { '200': { description: Stage accepted }, '409': { description: Stale or terminal stage } }
   /provisioning-sessions/{id}/observe:
     post: { summary: Origin-bound polling endpoint for authoritative online/completed state, responses: { '200': { description: Current state }, '404': { description: Invalid continuation credential } } }
+  /admin/devices:
+    get:
+      summary: Paginated human-session device management within the authorized group scope
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque cursor bound to actor, permissions and filters }
+        - { name: search, in: query, schema: { type: string, maxLength: 128 }, description: Literal case-insensitive name or serial substring }
+        - { name: online, in: query, schema: { type: string, enum: ['true', 'false'] } }
+        - { name: group_id, in: query, schema: { type: string, maxLength: 80 } }
+      responses:
+        '200':
+          description: Current page and totals for the same authorized filters; the legacy /devices response is unchanged
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, count, total_count, summary, next_cursor]
+                        properties:
+                          items: { type: array, items: { allOf: [{ $ref: '#/components/schemas/Device' }, { type: object, properties: { group_name: { type: [string, 'null'] } } }] } }
+                          count: { type: integer }
+                          total_count: { type: integer }
+                          summary: { type: object, properties: { online: { type: integer }, offline: { type: integer } } }
+                          next_cursor: { type: [string, 'null'] }
+        '400': { description: Invalid filter or limit }
+        '410': { description: Invalid cursor or changed actor, permission scope or filters }
   /devices:
     get:
       summary: List group-scoped devices
@@ -997,6 +1028,22 @@ paths:
       responses:
         '200': { description: Updated storage state }
         '400': { description: Invalid capacity or watermark ordering }
+  /admin/backups/status:
+    get:
+      summary: Get verified local recovery backup status and server-owned location; System Admin only
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: supported, current, and latest backup creation time and directory; no credential material }
+        '401': { description: Login required }
+        '403': { description: System Admin required }
+  /admin/backups/create:
+    post:
+      summary: Save and verify a fresh local recovery snapshot; System Admin and CSRF required
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: Verified backup status; supported=false for externally managed deployments }
+        '403': { description: System Admin and valid CSRF required }
+        '503': { description: Recovery copy could not be saved or verified; no credential is handed to the device }
   /admin/backups/export:
     get:
       summary: Export a verified complete SQLite recovery backup as a gzip-compressed tar archive; System Admin only
@@ -1040,6 +1087,52 @@ paths:
       security: [{ applicationToken: [recordings:download_link:revoke] }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 256 } } } } } }
       responses: { '200': { description: Revoked }, '404': { description: Missing or owned by another Application } }
+  /open-platform/mcp-quick-connect:
+    get:
+      summary: Check local MCP quick setup availability, can_install for local system administrators, and fixed read-only scopes
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: Availability and metadata reader scopes }
+    post:
+      summary: Prepare or reuse an owner-only local MCP connection without returning its token
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [group_id, client]
+              properties:
+                group_id: { type: string }
+                client: { type: string, enum: [openclaw, codex, claude, generic] }
+                access: { type: string, enum: [metadata, recordings], default: metadata }
+                consent: { type: boolean, description: Must be true for recordings access. A separate credential is created; existing metadata credentials are not widened. }
+                install: { type: boolean, default: false, description: Only local system administrators may install Codex configuration. Runs an authenticated MCP handshake and preserves conflicting entries. }
+      responses:
+        '200': { description: Application and credential IDs, owner-only secret reference, client configuration, optional Codex setup command, installation result and verified_tools count; no plaintext token }
+        '403': { description: CSRF, group authorization or local origin check failed }
+        '409': { description: Local runtime unavailable or existing connection needs advanced management }
+  /open-platform/studio-quick-connect:
+    post:
+      summary: Explicitly authorize the installed loopback Local Full Studio to read team recordings
+      description: Creates or reuses one REST application with devices:read, recordings:read and recordings:download_link:create only. Credentials expire in 90 days and allow loopback callers only. Never returns secrets. Requires local system administrator, matching Origin, CSRF and group administration. An inactive credential requires explicit advanced management.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [group_id]
+              properties:
+                group_id: { type: string }
+      responses:
+        '200': { description: Application and credential metadata plus Studio URL; no plaintext token }
+        '403': { description: Local administrator, group, Origin or CSRF requirement failed }
+        '409': { description: Studio unavailable, already configured, inactive credential or local processing validation failed }
   /open-platform/permission-catalog:
     get: { summary: Shared REST/MCP permission catalog and templates, security: [{ sessionCookie: [] }], responses: { '200': { description: Catalog } } }
   /open-platform/overview:

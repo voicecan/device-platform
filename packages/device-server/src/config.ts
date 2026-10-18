@@ -14,6 +14,7 @@ export type ServerConfig = {
   publicBaseUrl: string;
   deviceWssUrl?: string;
   deviceAdvertiseHost: string;
+  deviceAdvertiseHostConfigured?: boolean;
   deviceAdvertiseHosts: readonly string[];
   deviceConnectUrl: string;
   bleServiceUuid: string;
@@ -113,6 +114,10 @@ export function detectedAdvertiseHosts(): string[] {
     .map((entry) => entry.address);
   const priority = (address: string): number => address.startsWith('192.168.') ? 0 : address.startsWith('10.') ? 1 : /^172\.(?:1[6-9]|2\d|3[01])\./.test(address) ? 2 : 3;
   return [...new Set(addresses)].sort((left, right) => priority(left) - priority(right) || left.localeCompare(right));
+}
+
+export function currentDeviceAdvertiseHosts(config: Pick<ServerConfig, 'deviceAdvertiseHost' | 'deviceAdvertiseHostConfigured'>, detected = detectedAdvertiseHosts()): string[] {
+  return [...new Set([...(config.deviceAdvertiseHostConfigured ? [config.deviceAdvertiseHost] : []), ...detected])];
 }
 
 export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): Promise<ServerConfig> {
@@ -224,6 +229,7 @@ export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): 
     publicBaseUrl: parsedPublicBaseUrl.href.replace(/\/$/, ''),
     ...(deviceWssUrl ? { deviceWssUrl } : {}),
     deviceAdvertiseHost,
+    deviceAdvertiseHostConfigured: Boolean(configuredAdvertiseHost),
     deviceAdvertiseHosts,
     deviceConnectUrl: parsedConnectUrl.href,
     bleServiceUuid,

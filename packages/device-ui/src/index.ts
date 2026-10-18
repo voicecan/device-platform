@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing } from 'lit';
 import type { PropertyValues } from 'lit';
 import type { ProvisioningResult, TransferOutBroker, VoicecanDeviceClient } from '@voicecan/device-web';
 import { deviceUiText, normalizeDeviceUiLocale, type DeviceUiLocale } from './i18n.js';
+import { readLiveDeviceStatus } from './live-device-status.js';
 
 type SelectedDevice = Awaited<ReturnType<VoicecanDeviceClient['requestDevice']>>;
 type ConnectedDeviceInfo = ProvisioningResult['deviceInfo'] & { hardwareVersion?: string };
@@ -14,6 +15,11 @@ const sharedStyles = css`
   .card::before { position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, rgb(255 255 255 / 90%), transparent); content: ''; }
   .card.compact-status-card { overflow: visible; border: 0; border-radius: 0; padding: 0; background: transparent; box-shadow: none; }
   .card.compact-status-card::before { display: none; }
+  .field-error { white-space: pre-line; }
+  .connection-checks + p { white-space: pre-line; }
+  .connection-checks { padding: 0; margin: 16px 0; border-top: 1px solid var(--vc-border, #e3e0d9); font-size: 13px; }
+  .connection-checks > div { display: flex; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--vc-border, #e3e0d9); }
+  .connection-checks dd { margin: 0; text-align: right; color: var(--vc-primary, #466873); }
   .compact-status { display: flex; min-height: 0; align-items: center; gap: 8px; margin: 0; padding: 9px 2px; color: var(--vc-muted, var(--voicecan-muted, #75716a)); font-size: 11px; }
   .compact-status::before { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #7d9b91; content: ''; }
   .heading { display: flex; align-items: flex-start; gap: 13px; margin-bottom: 24px; }
@@ -192,6 +198,7 @@ export class VoicecanProvisionerElement extends LitElement {
     deviceStatus: { state: true },
     deviceLinkOnline: { state: true },
     serverOnline: { state: true },
+    networkVerified: { state: true },
     statusUpdatedAt: { state: true },
     statusRefreshing: { state: true },
     liveStatusError: { state: true },
@@ -213,6 +220,7 @@ export class VoicecanProvisionerElement extends LitElement {
   declare protected deviceStatus: ConnectedDeviceStatus | undefined;
   declare protected deviceLinkOnline: boolean | undefined;
   declare protected serverOnline: boolean;
+  declare protected networkVerified: boolean;
   declare protected statusUpdatedAt: number;
   declare protected statusRefreshing: boolean;
   declare protected liveStatusError: string;
@@ -239,6 +247,7 @@ export class VoicecanProvisionerElement extends LitElement {
     this.deviceStatus = undefined;
     this.deviceLinkOnline = undefined;
     this.serverOnline = false;
+    this.networkVerified = false;
     this.statusUpdatedAt = 0;
     this.statusRefreshing = false;
     this.liveStatusError = '';
@@ -263,6 +272,7 @@ export class VoicecanProvisionerElement extends LitElement {
     const stateListener = (event: Event): void => {
       const state = String((event as CustomEvent).detail);
       this.statusMessage = state.replaceAll('_', ' ');
+      if (state === 'configuring_server') this.networkVerified = true;
       if (state === 'waiting_server') { this.#stopLiveStatus(); this.liveStatusError = ''; }
     };
     const claimListener = (event: Event): void => { this.deviceId = (event as CustomEvent<{ deviceId: string }>).detail.deviceId; };
@@ -286,6 +296,7 @@ export class VoicecanProvisionerElement extends LitElement {
     this.#grant = '';
     this.#grantProvidedExternally = false;
     this.#password = '';
+    this.#retryGrant = undefined;
     super.disconnectedCallback();
   }
 
@@ -302,11 +313,31 @@ export class VoicecanProvisionerElement extends LitElement {
       ${this.compact ? nothing : html`<div class="heading"><span class="heading-icon">⌁</span><div><h2>${this.#t('Bind Voicecan device')}</h2><p>${this.#t('Assign ownership and securely bring a nearby device online. Network setup is one step when needed.')}</p></div></div>`}
       ${this.compact ? nothing : this.#steps(['Connect & bind', 'Network', 'Server', 'Online'])}
       ${this.step === 0 ? this.compact ? this.busy ? html`<div class="stage progress-visual selection-progress"><div class="progress-panel"><div class="connection-visual" aria-hidden="true"><span class="connection-orbit outer"></span><span class="connection-orbit"></span><span class="device-beacon"><span class="device-signal"><span></span><span></span><span></span></span></span></div><div class="progress-copy"><span class="monitor-kicker">${this.#t('Nearby Bluetooth')}</span><h3>${this.#t('Connecting to the selected device')}</h3><div class="progress-status" role="status" aria-live="polite"><span class="progress-status-dot" aria-hidden="true"></span><span>${this.#t(this.statusMessage)}</span></div><p class="selection-help">${this.#t('Keep the device awake and nearby while its identity and secure binding channel are verified.')}</p></div></div></div>` : html`<div class="compact-status" role="status">${this.#t(this.statusMessage)}</div>` : html`<div class="stage"><div class="stage-copy"><h3>${this.#t('Connect and bind the nearby device')}</h3><p>${this.#t('Select the device, read its identity, obtain the binding token, and complete the secure handshake. Network configuration becomes available only after binding succeeds.')}</p></div>${this.#grantProvidedExternally ? nothing : html`<label>${this.#t('Device binding grant')}<input type="password" autocomplete="off" @input=${(event: InputEvent) => { this.#grant = (event.target as HTMLInputElement).value; }}></label>`}<div class=${unsupported ? 'capability blocked' : 'capability'}><span>●</span><span>${unsupported ? this.#t('Web Bluetooth is unavailable. Use the native Android device tool.') : this.#t('Keep the expected Voicecan device nearby and verify its serial number when the browser asks you to choose.')}</span></div><form @submit=${this.#connectDevice}><div class="actions"><button type="submit" ?disabled=${unsupported || this.busy}>${this.#t('Choose device and bind')}</button></div></form></div>` : nothing}
-      ${this.step === 1 ? html`<div class="stage"><div class="stage-copy"><h3>${this.#t('Check the device network')}</h3><p>${this.#t('Token binding is complete. You can now keep the current network or provide new Wi-Fi settings. The server address will not be written until the network becomes available.')}</p></div><div class="network-status"><div><span>${this.#t('Current network status')}</span><strong><span class=${this.deviceStatus?.wifiConfigured ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.wifiConfigured ? this.#t('Available') : this.#t('Unavailable')}</strong></div><span class=${this.statusRefreshing ? 'live-meta refreshing' : 'live-meta'}>${this.#liveUpdateLabel()}</span></div><div class="network-note"><span>⌂</span><div><strong>${this.#t('Use the same network as the server')}</strong><span>${this.#t('The device must join the same network as the Voicecan Platform server so it can complete the first connection.')}</span></div></div><form @submit=${this.#configureNetwork} novalidate><div class="form-grid"><label class="wide" for="wifi-ssid">Wi-Fi SSID<input id="wifi-ssid" autocomplete="off" maxlength="32" .value=${this.#ssid} aria-invalid=${this.networkError ? 'true' : 'false'} aria-describedby=${this.networkError ? 'wifi-ssid-error' : nothing} @input=${this.#updateSsid}>${this.networkError ? html`<span id="wifi-ssid-error" class="field-error" role="alert">${this.networkError}</span>` : nothing}</label><label>${this.#t('Wi-Fi password')}<input type="password" autocomplete="off" maxlength="32" @input=${(event: InputEvent) => { this.#password = (event.target as HTMLInputElement).value; }}></label><label>${this.#t('Security')}<select .value=${this.#encryption} @change=${(event: Event) => { this.#encryption = (event.target as HTMLSelectElement).value as 'open' | 'wpa2' | 'wpa3'; }}><option value="wpa2">WPA2</option><option value="wpa3">WPA3</option><option value="open">${this.#t('Open')}</option></select></label></div><div class="actions"><button type="submit" ?disabled=${this.busy}>${this.#t('Configure network and continue')}</button></div></form><div class="network-skip"><div><strong>${this.#t('Keep the current device network')}</strong><span>${this.#t('The flow will keep checking until the existing network becomes available.')}</span></div><button type="button" class="secondary" ?disabled=${this.busy} @click=${this.#keepNetwork}>${this.#t('Keep network and continue')}</button></div></div>` : nothing}
-      ${this.step === 2 ? html`<div class="stage provisioning-monitor"><div class="monitor-header"><div class="connection-visual" aria-hidden="true"><span class="connection-orbit outer"></span><span class="connection-orbit"></span><span class="device-beacon"><span class="device-signal"><span></span><span></span><span></span></span></span></div><div class="progress-copy"><span class="monitor-kicker">${this.#t('Connection diagnostics')}</span><h3>${this.#t('Completing device setup')}</h3><div class="progress-status" role="status" aria-live="polite"><span class="progress-status-dot" aria-hidden="true"></span><span>${this.#t(this.statusMessage)}</span></div>${this.deviceInfo ? html`<div class="provisioning-device-snapshot"><strong>${this.deviceInfo.model} · ${this.deviceInfo.serialNumber}</strong><span>•</span><code>${this.deviceInfo.firmwareVersion}</code></div>` : nothing}</div></div><div class="waiting-telemetry-grid"><div class="telemetry-card"><span class="telemetry-label">${this.#t('Nearby connection')}</span><strong class="telemetry-value"><span class=${this.deviceLinkOnline ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceLinkOnline === undefined ? this.#t('Checking') : this.deviceLinkOnline ? this.#t('Connected') : this.#t('Disconnected')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Wi-Fi configuration')}</span><strong class="telemetry-value"><span class=${this.deviceStatus?.wifiConfigured ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.wifiConfigured ? this.#t('Configured') : this.#t('Not configured')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Server connection')}</span><strong class="telemetry-value"><span class=${this.serverOnline ? 'telemetry-dot online' : 'telemetry-dot'}></span>${!this.deviceId ? this.#t('Checking') : this.serverOnline ? this.#t('Server online') : this.#t('Waiting for server')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Battery')}</span><strong class="telemetry-value">${batteryPercent === null || batteryPercent === undefined ? this.#t('Checking') : `${batteryPercent}%`}${batteryPercent === null || batteryPercent === undefined ? nothing : html`<span class="battery-track" aria-hidden="true"><span style=${`width:${batteryWidth}%`}></span></span>`}</strong>${batteryStateLabel ? html`<span class="telemetry-note">${batteryStateLabel}</span>` : nothing}</div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Recording')}</span><strong class="telemetry-value"><span class=${this.deviceStatus?.recording ? 'telemetry-dot recording' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.recording ? this.#t('Recording now') : this.#t('Idle')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Device storage')}</span><strong class="telemetry-value"><span class=${storage ? 'telemetry-dot online' : 'telemetry-dot'}></span>${storageSummary}</strong>${storageRecordingTime ? html`<span class="telemetry-note">${storageRecordingTime}</span>` : nothing}</div></div>${this.deviceInfo ? html`<div class="device-details"><div class="device-detail"><span>${this.#t('Manufacturer')}</span><strong>${this.deviceInfo.manufacturer}</strong></div><div class="device-detail"><span>${this.#t('Hardware version')}</span><code>${this.deviceInfo.hardwareVersion ?? '—'}</code></div><div class="device-detail"><span>${this.#t('Firmware version')}</span><code>${this.deviceInfo.firmwareVersion}</code></div><div class="device-detail"><span>${this.#t('Server device ID')}</span><code title=${this.deviceId}>${this.deviceId || '—'}</code></div></div>` : nothing}<div class="monitor-footer"><span class=${this.statusRefreshing ? 'live-meta refreshing' : 'live-meta'} aria-live="polite">${this.#liveUpdateLabel()}</span><div class="actions"><button type="button" class="secondary" @click=${this.#cancel}>${this.#t('Cancel')}</button></div></div>${this.liveStatusError ? html`<div class="live-error" role="alert">${this.#t('Live status unavailable')}: ${this.#t(this.liveStatusError)}</div>` : nothing}</div>` : nothing}
+      ${this.compact && this.step === 1 ? this.#simpleNetwork() : this.step === 1 ? html`<div class="stage"><div class="stage-copy"><h3>${this.#t('Check the device network')}</h3><p>${this.#t('Token binding is complete. You can now keep the current network or provide new Wi-Fi settings. The server address will not be written until the network becomes available.')}</p></div><div class="network-status"><div><span>${this.#t('Current network status')}</span><strong><span class=${this.deviceStatus?.wifiConfigured ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.wifiConfigured ? this.#t('Available') : this.#t('Unavailable')}</strong></div><span class=${this.statusRefreshing ? 'live-meta refreshing' : 'live-meta'}>${this.#liveUpdateLabel()}</span></div><div class="network-note"><span>⌂</span><div><strong>${this.#t('Use the same network as the server')}</strong><span>${this.#t('The device must join the same network as the Voicecan Platform server so it can complete the first connection.')}</span></div></div><form @submit=${this.#configureNetwork} novalidate><div class="form-grid"><label class="wide" for="wifi-ssid">Wi-Fi SSID<input id="wifi-ssid" autocomplete="off" maxlength="32" .value=${this.#ssid} aria-invalid=${this.networkError ? 'true' : 'false'} aria-describedby=${this.networkError ? 'wifi-ssid-error' : nothing} @input=${this.#updateSsid}>${this.networkError ? html`<span id="wifi-ssid-error" class="field-error" role="alert">${this.networkError}</span>` : nothing}</label><label>${this.#t('Wi-Fi password')}<input type="password" autocomplete="off" maxlength="32" @input=${(event: InputEvent) => { this.#password = (event.target as HTMLInputElement).value; }}></label><label>${this.#t('Security')}<select .value=${this.#encryption} @change=${(event: Event) => { this.#encryption = (event.target as HTMLSelectElement).value as 'open' | 'wpa2' | 'wpa3'; }}><option value="wpa2">WPA2</option><option value="wpa3">WPA3</option><option value="open">${this.#t('Open')}</option></select></label></div><div class="actions"><button type="submit" ?disabled=${this.busy}>${this.#t('Configure network and continue')}</button></div></form><div class="network-skip"><div><strong>${this.#t('Keep the current device network')}</strong><span>${this.#t('The flow will keep checking until the existing network becomes available.')}</span></div><button type="button" class="secondary" ?disabled=${this.busy} @click=${this.#keepNetwork}>${this.#t('Keep network and continue')}</button></div></div>` : nothing}
+      ${this.compact && this.step === 2 ? html`<div class="stage"><h3>${this.#t('Connecting your device')}</h3><p role="status">${this.#t(this.statusMessage)}</p>${this.#connectionChecks()}<p>${this.#t('Server setup is automatic. Device details open after connection is confirmed.')}</p><button type="button" class="secondary" @click=${this.#cancel}>${this.#t('Cancel')}</button></div>` : this.step === 2 ? html`<div class="stage provisioning-monitor"><div class="monitor-header"><div class="connection-visual" aria-hidden="true"><span class="connection-orbit outer"></span><span class="connection-orbit"></span><span class="device-beacon"><span class="device-signal"><span></span><span></span><span></span></span></span></div><div class="progress-copy"><span class="monitor-kicker">${this.#t('Connection diagnostics')}</span><h3>${this.#t('Completing device setup')}</h3><div class="progress-status" role="status" aria-live="polite"><span class="progress-status-dot" aria-hidden="true"></span><span>${this.#t(this.statusMessage)}</span></div>${this.deviceInfo ? html`<div class="provisioning-device-snapshot"><strong>${this.deviceInfo.model} · ${this.deviceInfo.serialNumber}</strong><span>•</span><code>${this.deviceInfo.firmwareVersion}</code></div>` : nothing}</div></div><div class="waiting-telemetry-grid"><div class="telemetry-card"><span class="telemetry-label">${this.#t('Nearby connection')}</span><strong class="telemetry-value"><span class=${this.deviceLinkOnline ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceLinkOnline === undefined ? this.#t('Checking') : this.deviceLinkOnline ? this.#t('Connected') : this.#t('Disconnected')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Wi-Fi configuration')}</span><strong class="telemetry-value"><span class=${this.deviceStatus?.wifiConfigured ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.wifiConfigured ? this.#t('Configured') : this.#t('Not configured')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Server connection')}</span><strong class="telemetry-value"><span class=${this.serverOnline ? 'telemetry-dot online' : 'telemetry-dot'}></span>${!this.deviceId ? this.#t('Checking') : this.serverOnline ? this.#t('Server online') : this.#t('Waiting for server')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Battery')}</span><strong class="telemetry-value">${batteryPercent === null || batteryPercent === undefined ? this.#t('Checking') : `${batteryPercent}%`}${batteryPercent === null || batteryPercent === undefined ? nothing : html`<span class="battery-track" aria-hidden="true"><span style=${`width:${batteryWidth}%`}></span></span>`}</strong>${batteryStateLabel ? html`<span class="telemetry-note">${batteryStateLabel}</span>` : nothing}</div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Recording')}</span><strong class="telemetry-value"><span class=${this.deviceStatus?.recording ? 'telemetry-dot recording' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.recording ? this.#t('Recording now') : this.#t('Idle')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Device storage')}</span><strong class="telemetry-value"><span class=${storage ? 'telemetry-dot online' : 'telemetry-dot'}></span>${storageSummary}</strong>${storageRecordingTime ? html`<span class="telemetry-note">${storageRecordingTime}</span>` : nothing}</div></div>${this.deviceInfo ? html`<div class="device-details"><div class="device-detail"><span>${this.#t('Manufacturer')}</span><strong>${this.deviceInfo.manufacturer}</strong></div><div class="device-detail"><span>${this.#t('Hardware version')}</span><code>${this.deviceInfo.hardwareVersion ?? '—'}</code></div><div class="device-detail"><span>${this.#t('Firmware version')}</span><code>${this.deviceInfo.firmwareVersion}</code></div><div class="device-detail"><span>${this.#t('Server device ID')}</span><code title=${this.deviceId}>${this.deviceId || '—'}</code></div></div>` : nothing}<div class="monitor-footer"><span class=${this.statusRefreshing ? 'live-meta refreshing' : 'live-meta'} aria-live="polite">${this.#liveUpdateLabel()}</span><div class="actions"><button type="button" class="secondary" @click=${this.#cancel}>${this.#t('Cancel')}</button></div></div>${this.liveStatusError ? html`<div class="live-error" role="alert">${this.#t('Live status unavailable')}: ${this.#t(this.liveStatusError)}</div>` : nothing}</div>` : nothing}
       ${this.step === 3 ? html`<div class="stage device-overview"><div class="overview-heading"><span class="success-mark">✓</span><div><span class="overview-kicker">${this.#t('Live device')}</span><h3>${this.#t('Device is online')}</h3><p>${this.#t(this.statusMessage)}</p></div><span class="live-badge">${this.serverOnline ? this.#t('Server online') : this.#t('Server offline')}</span></div><div class="overview-main"><div class="identity-card"><span class="device-portrait" aria-hidden="true"></span><strong>${this.deviceInfo?.model ?? this.#t('Unknown model')}</strong><code>${this.deviceInfo?.serialNumber ?? '—'}</code></div><div class="telemetry-grid"><div class="telemetry-card"><span class="telemetry-label">${this.#t('Nearby connection')}</span><strong class="telemetry-value"><span class=${this.deviceLinkOnline ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceLinkOnline === undefined ? this.#t('Checking') : this.deviceLinkOnline ? this.#t('Connected') : this.#t('Disconnected')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Battery')}</span><strong class="telemetry-value">${batteryPercent === null || batteryPercent === undefined ? '—' : `${batteryPercent}%`}${batteryPercent === null || batteryPercent === undefined ? nothing : html`<span class="battery-track" aria-hidden="true"><span style=${`width:${batteryWidth}%`}></span></span>`}</strong>${batteryStateLabel ? html`<span class="telemetry-note">${batteryStateLabel}</span>` : nothing}</div><div class="telemetry-card"><span class="telemetry-label">Wi-Fi</span><strong class="telemetry-value"><span class=${this.deviceStatus?.wifiConfigured ? 'telemetry-dot online' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.wifiConfigured ? this.#t('Configured') : this.#t('Not configured')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Recording')}</span><strong class="telemetry-value"><span class=${this.deviceStatus?.recording ? 'telemetry-dot recording' : 'telemetry-dot'}></span>${this.deviceStatus === undefined ? this.#t('Checking') : this.deviceStatus.recording ? this.#t('Recording now') : this.#t('Idle')}</strong></div><div class="telemetry-card"><span class="telemetry-label">${this.#t('Device storage')}</span><strong class="telemetry-value"><span class=${storage ? 'telemetry-dot online' : 'telemetry-dot'}></span>${storageSummary}</strong>${storageRecordingTime ? html`<span class="telemetry-note">${storageRecordingTime}</span>` : nothing}</div></div></div><div class="device-details"><div class="device-detail"><span>${this.#t('Manufacturer')}</span><strong>${this.deviceInfo?.manufacturer ?? '—'}</strong></div><div class="device-detail"><span>${this.#t('Hardware version')}</span><code>${this.deviceInfo?.hardwareVersion ?? '—'}</code></div><div class="device-detail"><span>${this.#t('Firmware version')}</span><code>${this.deviceInfo?.firmwareVersion ?? '—'}</code></div><div class="device-detail"><span>${this.#t('Server device ID')}</span><code title=${this.deviceId}>${this.deviceId || '—'}</code></div></div><div class="overview-footer"><span class=${this.statusRefreshing ? 'live-meta refreshing' : 'live-meta'} aria-live="polite">${this.#liveUpdateLabel()}</span><button type="button" class="secondary" ?disabled=${this.statusRefreshing} @click=${this.#refreshStatusNow}>${this.#t('Refresh now')}</button></div>${this.liveStatusError ? html`<div class="live-error" role="alert">${this.#t('Live status unavailable')}: ${this.#t(this.liveStatusError)}</div>` : nothing}</div>` : nothing}
       ${this.step < 2 && (!this.compact || this.step === 1) ? html`<div role="status">${this.#t(this.statusMessage)}</div>` : nothing}
     </section>`;
+  }
+
+  #retryGrant: (() => Promise<string>) | undefined;
+  #connectionChecks() {
+    const label = (confirmed: boolean, started: boolean) => this.#t(confirmed ? 'Connection confirmed' : this.networkError ? started ? 'Connection not confirmed' : 'Waiting for check' : started ? 'Checking connection…' : 'Waiting for check');
+    return html`<dl class="connection-checks" aria-label=${this.#t('Automatic connection checks')} aria-live="polite">
+      <div><dt>${this.#t('Device Wi-Fi connection')}</dt><dd>${label(this.networkVerified, true)}</dd></div>
+      <div><dt>${this.#t('Device connection to server')}</dt><dd>${label(this.serverOnline, this.networkVerified)}</dd></div>
+    </dl><p>${this.#t('These checks confirm Wi-Fi and this service, not general Internet access.')}</p>`;
+  }
+
+  #simpleNetwork() {
+    return html`<div class="stage"><div class="stage-copy"><h3>${this.#t('Connect Wi-Fi')}</h3><p>${this.#t('Choose a Wi-Fi that can reach the server. Wi-Fi names do not have to match.')}</p></div>
+      <form @submit=${this.#configureNetwork} novalidate><div class="form-grid">
+        <label class="wide" for="wifi-ssid">${this.#t('Wi-Fi name')}<input id="wifi-ssid" autocomplete="off" maxlength="32" .value=${this.#ssid} ?disabled=${this.busy} @input=${this.#updateSsid}></label>
+        <label class="wide">${this.#t('Wi-Fi password')}<input type="password" autocomplete="off" .value=${this.#password} ?disabled=${this.busy} @input=${(event: InputEvent) => { this.#password = (event.target as HTMLInputElement).value; }}></label>
+      </div>${this.networkError ? html`<p role="alert" class="field-error">${this.networkError}</p>${this.#connectionChecks()}` : nothing}
+      <div class="actions">${this.selectedDevice ? html`<button type="submit" ?disabled=${this.busy}>${this.#t('Connect and finish')}</button>` : html`<button type="button" ?disabled=${this.busy} @click=${() => void this.startProvisioning(this.#retryGrant)}>${this.#t('Reconnect Bluetooth')}</button>`}</div>
+      <details><summary>${this.#t('Advanced options')}</summary><p>${this.#t('For a server running on this computer, use the same router. Different Wi-Fi bands or Ethernet can work; guest-network isolation can block access. Keep the computer awake.')}</p><label>${this.#t('Security')}<select .value=${this.#encryption} ?disabled=${this.busy} @change=${(event: Event) => { this.#encryption = (event.target as HTMLSelectElement).value as 'open' | 'wpa2' | 'wpa3'; }}><option value="wpa2">WPA2</option><option value="wpa3">WPA3</option><option value="open">${this.#t('Open')}</option></select></label>
+      ${this.deviceStatus?.wifiConfigured ? html`<button type="button" class="secondary" ?disabled=${this.busy || !this.selectedDevice} @click=${this.#keepNetwork}>${this.#t('Keep network and continue')}</button>` : nothing}</details></form></div>`;
   }
 
   #t(message: string, values?: Readonly<Record<string, string | number>>): string { return deviceUiText(this.locale, message, values); }
@@ -328,6 +359,7 @@ export class VoicecanProvisionerElement extends LitElement {
 
   async startProvisioning(resolveGrant?: () => Promise<string>): Promise<void> {
     if (!this.client || this.busy) return;
+    if (resolveGrant) this.#retryGrant = resolveGrant;
     if (!this.#grant.trim() && !resolveGrant) { this.statusMessage = this.#t('Enter the one-time device binding grant.'); return; }
     this.#stopLiveStatus();
     this.deviceId = '';
@@ -335,6 +367,7 @@ export class VoicecanProvisionerElement extends LitElement {
     this.deviceStatus = undefined;
     this.deviceLinkOnline = undefined;
     this.serverOnline = false;
+    this.networkVerified = false;
     this.statusUpdatedAt = 0;
     this.liveStatusError = '';
     this.statusMessage = 'selecting';
@@ -359,12 +392,15 @@ export class VoicecanProvisionerElement extends LitElement {
       this.deviceStatus = connection.deviceStatus;
       this.deviceLinkOnline = true;
       this.statusUpdatedAt = Date.now();
+      this.networkError = '';
       this.statusMessage = connection.deviceStatus.wifiConfigured ? 'Network available' : 'Network unavailable';
       this.step = 1;
       this.#startLiveStatus();
     } catch (error) {
-      this.statusMessage = this.#t(messageOf(error, 'Device binding failed'));
-      this.step = 0;
+      this.statusMessage = [messageOf(error, '').includes('SERVER_ONLINE_TIMEOUT') ? this.#t('The device confirmed Wi-Fi connected, but this server received no device connection within 60 seconds. Keep the computer and service running. Check that the device can reach the server address, and check firewall or guest-network isolation.') : '', messageOf(error, '').includes('WIFI_CONFIGURATION_REJECTED') ? this.#t('The device runtime reported that Wi-Fi settings were rejected. A connection was not confirmed. This error does not identify a wrong password or an incompatible mixed-security network.') : '', this.#t(messageOf(error, 'Device binding failed'))].filter(Boolean).join('\n');
+      this.selectedDevice = undefined;
+      this.step = this.compact && this.#ssid ? 1 : 0;
+      if (this.step === 1) this.networkError = this.statusMessage;
       this.dispatchEvent(new CustomEvent('provisionerror', { detail: error, bubbles: true, composed: true }));
     } finally {
       this.#abort = undefined;
@@ -394,6 +430,7 @@ export class VoicecanProvisionerElement extends LitElement {
     if (!this.client || !this.selectedDevice || this.busy) return;
     this.#stopLiveStatus();
     this.serverOnline = false;
+    this.networkVerified = false;
     this.liveStatusError = '';
     this.busy = true;
     this.step = 2;
@@ -414,9 +451,10 @@ export class VoicecanProvisionerElement extends LitElement {
       this.dispatchEvent(new CustomEvent('provisioned', { detail: result, bubbles: true, composed: true }));
     } catch (error) {
       this.#stopLiveStatus();
-      this.statusMessage = this.#t(messageOf(error, 'Device binding failed'));
+      this.statusMessage = [messageOf(error, '').includes('SERVER_ONLINE_TIMEOUT') ? this.#t('The device confirmed Wi-Fi connected, but this server received no device connection within 60 seconds. Keep the computer and service running. Check that the device can reach the server address, and check firewall or guest-network isolation.') : '', messageOf(error, '').includes('WIFI_CONFIGURATION_REJECTED') ? this.#t('The device runtime reported that Wi-Fi settings were rejected. A connection was not confirmed. This error does not identify a wrong password or an incompatible mixed-security network.') : '', this.#t(messageOf(error, 'Device binding failed'))].filter(Boolean).join('\n');
       this.selectedDevice = undefined;
-      this.step = 0;
+      this.step = this.compact ? 1 : 0;
+      this.networkError = this.statusMessage;
       this.dispatchEvent(new CustomEvent('provisionerror', { detail: error, bubbles: true, composed: true }));
     } finally {
       this.#abort = undefined;
@@ -462,7 +500,7 @@ export class VoicecanProvisionerElement extends LitElement {
       return;
     }
     try {
-      this.deviceStatus = await device.getStatus(controller.signal);
+      this.deviceStatus = await readLiveDeviceStatus(device, controller.signal);
       if (controller.signal.aborted) return;
       this.deviceLinkOnline = true;
       this.statusUpdatedAt = Date.now();

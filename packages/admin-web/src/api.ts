@@ -1,3 +1,5 @@
+import { ApiError } from './api-error.js';
+
 let csrfToken = sessionStorage.getItem('voicecan_csrf') ?? '';
 
 type Envelope<T> = { success: boolean; code: string; message: string; data: T };
@@ -30,7 +32,7 @@ async function request<T>(path: string, options: RequestInit, allowCsrfRefresh: 
     setCsrfToken(refreshed.csrf_token);
     return request<T>(path, options, false);
   }
-  if (!response.ok || !payload.success) throw new Error(`${payload.code}: ${payload.message}`);
+  if (!response.ok || !payload.success) throw new ApiError(response.status, payload.code, payload.message);
   return payload.data;
 }
 

@@ -10,6 +10,7 @@ export function urlForView(currentHref: string, view: View): URL {
   else url.searchParams.set('view', view);
 
   if (view !== 'devices') url.searchParams.delete('device');
+  if (view !== 'files') url.searchParams.delete('recording_device');
 
   // Binding intents belong to one visit of the provisioning workspace. Clear
   // them both when leaving that workspace and when starting a fresh visit.
@@ -27,5 +28,13 @@ export function bindingTaskUrl(currentHref: string, intentId: string, path: 'app
   url.searchParams.set('binding_intent', intentId);
   url.searchParams.set('binding_path', path);
   url.searchParams.set('binding_path_locked', '1');
+  return url;
+}
+
+/** A list entry never restores a selected device or a provisioning authorization. */
+export function deviceListUrl(currentHref: string): URL {
+  const url = urlForView(currentHref, 'devices');
+  url.searchParams.delete('device');
+  url.hash = '';
   return url;
 }

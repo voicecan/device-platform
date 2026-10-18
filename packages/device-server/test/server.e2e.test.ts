@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -166,6 +166,36 @@ test('independent server setup, immutable upload, group isolation and device tra
   const simulated = await app.inject({ method: 'POST', url: '/api/v1/simulator/devices', headers: adminHeaders, payload: { manufacturer: 'Voicecan', sn: 'PREVIEW-0001', group_id: setupData.group_id } });
   assert.equal(simulated.statusCode, 201, simulated.body);
   const deviceId = simulated.json().data.device.id as string;
+  const automaticBackup = await app.inject({ method: 'POST', url: '/api/v1/admin/backups/create', headers: adminHeaders, payload: {} });
+  assert.equal(automaticBackup.statusCode, 200, automaticBackup.body);
+  assert.equal(automaticBackup.json().data.supported, true);
+  assert.equal(automaticBackup.json().data.current, true);
+  assert.ok(automaticBackup.json().data.latest.created_at);
+  const maintenanceGrant = await app.inject({ method: 'POST', url: `/api/v1/devices/${deviceId}/ble-maintenance-session`, headers: adminHeaders, payload: {} });
+  assert.equal(maintenanceGrant.statusCode, 200);
+  const backupAgain = await app.inject({ method: 'GET', url: '/api/v1/admin/backups/status', headers: adminHeaders });
+  assert.equal(backupAgain.json().data.latest.created_at, automaticBackup.json().data.latest.created_at, 'unchanged credentials reuse a verified snapshot');
+  const savedDirectory = automaticBackup.json().data.latest.directory as string;
+  assert.equal((await stat(savedDirectory)).mode & 0o777, 0o700);
+  assert.equal((await stat(join(savedDirectory, 'device-platform.sqlite'))).mode & 0o777, 0o600);
+  await writeFile(join(savedDirectory, 'token-pepper.key'), Buffer.alloc(32).toString('base64url'));
+  const damagedBackup = await app.inject({ method: 'GET', url: '/api/v1/admin/backups/status', headers: adminHeaders });
+  assert.equal(damagedBackup.json().data.current, false, 'a damaged recovery key must not be reported as verified');
+  const repairedBackup = await app.inject({ method: 'POST', url: '/api/v1/admin/backups/create', headers: adminHeaders, payload: {} });
+  assert.equal(repairedBackup.json().data.current, true);
+  assert.notEqual(repairedBackup.json().data.latest.directory, savedDirectory);
+  const keyFile = join(dataDir, 'master-keyring.json');
+  await rename(keyFile, `${keyFile}.test-held`);
+  try {
+    const blockedMaintenance = await app.inject({ method: 'POST', url: `/api/v1/devices/${deviceId}/ble-maintenance-session`, headers: adminHeaders, payload: {} });
+    assert.equal(blockedMaintenance.statusCode, 503);
+    assert.equal(blockedMaintenance.json().code, 'RECOVERY_BACKUP_FAILED');
+    assert.equal(blockedMaintenance.body.includes('device_token'), false);
+  } finally { await rename(`${keyFile}.test-held`, keyFile); }
+  const backupNoCsrf = await app.inject({ method: 'POST', url: '/api/v1/admin/backups/create', headers: { cookie }, payload: {} });
+  assert.equal(backupNoCsrf.statusCode, 403);
+  const backupAnonymous = await app.inject({ method: 'GET', url: '/api/v1/admin/backups/status' });
+  assert.equal(backupAnonymous.statusCode, 401);
   const backupExport = await app.inject({ method: 'GET', url: '/api/v1/admin/backups/export', headers: adminHeaders });
   assert.equal(backupExport.statusCode, 200, backupExport.body);
   assert.equal(backupExport.headers['content-type'], 'application/gzip');

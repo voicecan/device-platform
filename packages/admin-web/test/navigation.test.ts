@@ -36,3 +36,9 @@ test('history restores the original binding without stale device or launch param
   assert.equal(url.searchParams.has('device'), false);
   assert.equal(url.hash, '');
 });
+
+test('device-list navigation leaves a selected device and any binding task behind', async () => {
+  const { deviceListUrl } = await import('../src/navigation.js');
+  const url = deviceListUrl('http://127.0.0.1:8788/admin?view=provision&device=dev_a&binding_intent=old&binding_path=web&binding_path_locked=1#launch=secret');
+  assert.equal(url.href, 'http://127.0.0.1:8788/admin?view=devices');
+});

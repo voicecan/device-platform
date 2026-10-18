@@ -5,7 +5,7 @@ import { basename, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { createGzip } from 'node:zlib';
 import type { ServerConfig } from './config.js';
-import { createBackup, verifyBackup } from './maintenance.js';
+import { DatabaseActor } from './database.js';
 
 const tarBlockSize = 512;
 
@@ -88,17 +88,19 @@ export type DownloadableBackup = {
   stream: Readable;
 };
 
-export async function createDownloadableBackup(config: ServerConfig): Promise<DownloadableBackup> {
+export async function createDownloadableBackup(config: ServerConfig, db: DatabaseActor): Promise<DownloadableBackup> {
   if (config.databaseDriver !== 'sqlite' || config.storageDriver === 's3_direct') throw new Error('BACKUP_EXTERNAL_REQUIRED');
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'voicecan-backup-export-'));
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const archiveRoot = `voicecan-device-backup-${timestamp}`;
   const backupDirectory = join(temporaryRoot, archiveRoot);
   try {
-    await createBackup(config, backupDirectory);
-    await verifyBackup(backupDirectory);
+    await db.createVerifiedBackup({ dataDir: config.dataDir, databaseFile: config.databaseFile, storageDir: config.storageDir, firmwareDir: config.firmwareDir, storageDriver: config.storageDriver }, backupDirectory);
     const gzip = createGzip({ level: 9 });
-    const stream = Readable.from(tarArchive(backupDirectory, basename(backupDirectory))).pipe(gzip);
+    const source = Readable.from(tarArchive(backupDirectory, basename(backupDirectory)));
+    const stream = source.pipe(gzip);
+    source.once('error', (error) => stream.destroy(error));
+    stream.once('close', () => source.destroy());
     let cleaned = false;
     const cleanup = (): void => {
       if (cleaned) return;

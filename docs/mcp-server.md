@@ -1,5 +1,11 @@
 # Voicecan Device MCP Server
 
+## Student workflow: MCP is optional
+
+The learning application connects to server recordings using its own REST Application authorization. Students configure their model API and import learning materials inside that application. MCP provides an independent way for Codex or another AI client to query Device Platform.
+
+Admin quick setup grants metadata access only (`devices:read`, `recordings:read`, `events:read`). Recording search/get does not read audio. Before enabling or using `recordings:download_link:create`, obtain explicit authorization for the recording content and intended use, then review the Application and credential scopes in Advanced mode. The client is responsible for honoring that user consent; the download tool's required `reason` field is not a human-consent handshake. Do not treat a request to list recordings as authorization to download audio or send it to a model provider.
+
 Voicecan has two intentionally separate MCP permission planes:
 
 - **Local Admin MCP** operates the installation through the owner-only local automation channel.

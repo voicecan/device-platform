@@ -592,3 +592,27 @@ test('transfer-out seals the old credential to the browser and requires non-eras
   assert.deepEqual(result, { deviceId: 'device-1', recordingsErased: false });
   assert.equal(client.state, 'released');
 });
+
+test('an idle Bluetooth disconnect immediately notifies the UI and blocks new writes', async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  let writes = 0; let disconnectEvents = 0;
+  const writer = Object.assign(new EventTarget(), { writeValueWithoutResponse: async () => { writes += 1; } });
+  const reader = Object.assign(new EventTarget(), { startNotifications: async () => reader, stopNotifications: async () => reader });
+  const server = { connected: false, disconnect: () => { server.connected = false; }, connect: async () => { server.connected = true; return server; }, getPrimaryService: async () => ({ getCharacteristic: async (uuid: string | number) => uuid === 'writer' ? writer : reader }) };
+  const device = Object.assign(new EventTarget(), { gatt: server });
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { bluetooth: { requestDevice: async () => device } } });
+  try {
+    const transport = await new WebBluetoothTransportFactory({ serviceUuid: 'service', writeCharacteristicUuid: 'writer', notifyCharacteristicUuid: 'reader', scanToConnectDelayMs: 0, postConnectDelayMs: 0, onDisconnected: () => { disconnectEvents += 1; } }).requestDevice();
+    server.connected = false;
+    device.dispatchEvent(new Event('gattserverdisconnected'));
+    assert.equal(disconnectEvents, 1);
+    await assert.rejects(transport.exchange(new Uint8Array()), (error: unknown) => error instanceof DeviceSdkError && error.code === 'DEVICE_DISCONNECTED');
+    assert.equal(writes, 0);
+    await transport.close();
+    device.dispatchEvent(new Event('gattserverdisconnected'));
+    assert.equal(disconnectEvents, 1, 'closing removes the disconnect listener');
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+});

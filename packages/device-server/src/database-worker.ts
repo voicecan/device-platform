@@ -1,9 +1,12 @@
+import { createBackup, verifyBackup, type BackupConfig } from './maintenance.js';
 import { parentPort, workerData } from 'node:worker_threads';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
 type SqlRequest = {
   id: number;
-  op: 'run' | 'get' | 'all' | 'batch' | 'close';
+  op: 'run' | 'get' | 'all' | 'batch' | 'close' | 'backup' | 'verify-backup';
+  config?: BackupConfig;
+  directory?: string;
   sql?: string;
   params?: unknown[];
   statements?: Array<{ sql: string; params?: unknown[]; expectChanges?: number }>;
@@ -12,10 +15,17 @@ type SqlRequest = {
 const database = new DatabaseSync(workerData.filename as string, { enableForeignKeyConstraints: true });
 database.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;');
 
-parentPort?.on('message', (request: SqlRequest) => {
+parentPort?.on('message', async (request: SqlRequest) => {
   try {
     let result: unknown;
-    if (request.op === 'close') {
+    if (request.op === 'backup') {
+      await createBackup(request.config!, request.directory!);
+      await verifyBackup(request.directory!);
+      result = null;
+    } else if (request.op === 'verify-backup') {
+      await verifyBackup(request.directory!);
+      result = null;
+    } else if (request.op === 'close') {
       database.close();
       result = null;
     } else if (request.op === 'run') {

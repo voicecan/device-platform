@@ -10,7 +10,7 @@ import websocket from '@fastify/websocket';
 import { API_VERSION, normalizeOpenPlatformPermissions, type AuthUser, type Device, type DeviceControl, type DeviceStatusSnapshot, type RecordingFile } from '@voicecan/contracts';
 import { AccessDeniedError, requireGroup, requireGroupAdmin, requireScope, requireSystemAdmin, sqlGroupGuard, type AccessContext } from '@voicecan/access-control';
 import { loadNodeGatewayCore } from '@voicecan/device-core/node';
-import type { ServerConfig } from './config.js';
+import { currentDeviceAdvertiseHosts, type ServerConfig } from './config.js';
 import { DatabaseActor, type Database, type SqlStatement } from './database.js';
 import { EventDispatcher, validateWebhookUrl } from './events.js';
 import { decodeDeviceToken, decryptSecret, deviceTokenVerifier, encodeDeviceToken, encryptSecret, hashPassword, opaqueToken, tokenHash, verifyPassword } from './security.js';
@@ -24,10 +24,13 @@ import { PostgresDatabase } from './postgres.js';
 import { deviceHttpBaseUrl, publicRequestDeviceWsUrl, resolveDeviceWsUrl } from './device-url.js';
 import { OpenPlatformError, registerOpenPlatformRoutes, resolveOAuthPrincipalPermissions } from './open-platform.js';
 import { registerOAuthMcpRoutes } from './oauth-mcp.js';
+import { registerQuickStudioRoutes } from './studio-quick-connect.js';
+import { registerQuickMcpRoutes } from './mcp-quick-connect.js';
 import { BlockList, isIP } from 'node:net';
 import { mapPublicCommand, mapPublicRecording, recordingEventFacts, reviewedRecordingMedia } from './public-contract.js';
 import { createServerLogger } from './logging.js';
 import { NativeHandoffError, registerNativeHandoffRoutes } from './native-handoff.js';
+import { RecoveryBackups } from './recovery-backup.js';
 import { createDownloadableBackup } from './backup-download.js';
 
 type Row = Record<string, unknown>;
@@ -308,6 +311,11 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   const db = options.database ?? (config.databaseDriver === 'postgres'
     ? new PostgresDatabase(config.databaseUrl!, { max: config.databasePoolMax })
     : new DatabaseActor(config.databaseFile));
+  const recoveryBackups = new RecoveryBackups(config, db);
+  const protectDeviceCredentials = async (force = false): Promise<void> => {
+    try { await recoveryBackups.ensure(force); }
+    catch { throw new HttpError(503, 'RECOVERY_BACKUP_FAILED', 'Could not save and verify the recovery backup. No device credential was sent. Check server disk space and backup keys, then retry.'); }
+  };
   const storage = new FilesystemStorage(config.storageDir);
   const s3Storage = createS3Storage(config);
   const dispatcher = new EventDispatcher(db, config);
@@ -345,7 +353,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       await db.run('INSERT INTO open_platform_api_logs(id,application_id,credential_id,actor_id,channel,method,route,status_code,duration_ms,request_id,source_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', [id('call'), context.applicationId, context.credentialId ?? null, context.actorId, channel, request.method, route, reply.statusCode, Math.round(durationSeconds * 1_000), request.id, createHash('sha256').update(request.ip).digest('hex').slice(0, 24), now()]).catch(() => undefined);
     }
   });
-  app.addHook('onClose', async () => { dispatcher.stop(); reconciler?.stop(); metrics.close(); await db.close(); });
+  app.addHook('onClose', async () => { dispatcher.stop(); reconciler?.stop(); metrics.close(); await recoveryBackups.settled(); await db.close(); });
   app.setErrorHandler(async (error, request, reply) => {
     const stateConflict = error instanceof Error && error.message.startsWith('DATABASE_CAS_FAILED') ? new HttpError(409, 'PROVISIONING_STATE_CONFLICT', 'Provisioning state changed; observe before retrying') : null;
     const passwordPolicy = error instanceof Error && error.message === 'PASSWORD_POLICY_FAILED' ? new HttpError(400, 'PASSWORD_POLICY_FAILED', 'Password must contain between 12 and 256 characters') : null;
@@ -524,7 +532,13 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     return { eventId, statements };
   };
   const emitEvent = async (deviceRow: Row, type: string, payload: Record<string, unknown>): Promise<string> => {
-    const prepared = await prepareEvent(deviceRow, type, payload); await db.batch(prepared.statements); return prepared.eventId;
+    const prepared = await prepareEvent(deviceRow, type, payload); await db.batch(prepared.statements);
+    if (type === 'device.claimed') {
+      // The first online handshake promotes a temporary credential to active.
+      // Refresh its recovery copy without delaying the device protocol exchange.
+      void recoveryBackups.ensure().catch(() => app.log.warn({ code: 'RECOVERY_BACKUP_FAILED' }, 'Recovery backup needs attention after device binding'));
+    }
+    return prepared.eventId;
   };
   const planGatewayUpload = async (device: Row, file: Row, uploadBaseUrl: string): Promise<{ fileId: string; uploadUrl: string; offset?: number } | null> => {
     const fileId = String(file.id); const expectedSize = Number(file.expected_size);
@@ -606,6 +620,8 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
   reconciler = new Reconciler(db, storage, s3Storage, config, emitEvent);
   const openPlatformService = registerOpenPlatformRoutes({ app, db, config, gateway, storage, s3Storage, resolveAccess, audit });
+  registerQuickMcpRoutes({ app, db, config, service: openPlatformService, resolveAccess, audit });
+  registerQuickStudioRoutes({ app, db, config, service: openPlatformService, resolveAccess, audit });
   registerOAuthMcpRoutes({ app, db, config, service: openPlatformService, resolveAccess, audit });
 
   app.get('/health/live', async (_request, reply) => success(reply, { status: 'ok' }));
@@ -773,9 +789,9 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const candidates = [...new Set([
       ...(config.deviceWssUrl ? [config.deviceWssUrl] : []),
       ...(currentPublicUrl ? [currentPublicUrl] : []),
-      ...config.deviceAdvertiseHosts.map((host) => resolveDeviceWsUrl({ advertiseHost: host, port: config.port })),
+      ...currentDeviceAdvertiseHosts(config).map((host) => resolveDeviceWsUrl({ advertiseHost: host, port: config.port })),
     ])];
-    const preferred = config.deviceWssUrl ?? currentPublicUrl ?? candidates[0] ?? resolveDeviceWsUrl({ advertiseHost: config.deviceAdvertiseHost, port: config.port });
+    const preferred = config.deviceWssUrl ?? currentPublicUrl ?? candidates[0] ?? resolveDeviceWsUrl({ advertiseHost: currentDeviceAdvertiseHosts(config)[0] ?? '127.0.0.1', port: config.port });
     return success(reply, { ble_service_uuid: config.bleServiceUuid, preferred_device_ws_url: preferred, device_ws_urls: candidates.map((url) => ({ url, preferred: url === preferred, host: new URL(url).hostname })) });
   });
 
@@ -982,7 +998,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const networkMode = body.network_mode === undefined || body.network_mode === 'existing' ? 'existing' : body.network_mode === 'ask' ? 'ask' : (() => { throw new HttpError(400, 'INVALID_NETWORK_MODE', 'network_mode must be existing or ask'); })();
     const locale = body.locale === 'zh-CN' ? 'zh-CN' : 'en';
     let deviceWsUrl: string;
-    try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
+    try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: currentDeviceAdvertiseHosts(config)[0] ?? '127.0.0.1', port: config.port }); }
     catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
 
     const intentId = id('bind'); const launchToken = `vcd_bind_${opaqueToken()}`; const timestamp = now(); const expiresAt = plus(deviceProvisioningCredentialTtlMs);
@@ -1091,6 +1107,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
           { sql: "UPDATE device_credentials SET expires_at=? WHERE id=? AND device_id=? AND status='temporary' AND revoked_at IS NULL", params: [session.expires_at, existing.credential_id, existing.id], expectChanges: 1 },
           { sql: 'UPDATE devices SET display_name=COALESCE(display_name,?),updated_at=? WHERE id=?', params: [defaultDisplayName, timestamp, existing.id], expectChanges: 1 },
         ]);
+        await protectDeviceCredentials();
         return { provisioning_session_id: session.id, continuation_token: continuationToken, device_id: existing.id, display_name: existing.display_name ?? defaultDisplayName, device_token: encodeDeviceToken(rawDeviceToken), wss_url: deviceWsUrl, recovered: true };
       } finally { rawDeviceToken.fill(0); }
     }
@@ -1102,6 +1119,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       { sql: "INSERT INTO devices(id,display_name,manufacturer,sn,model,firmware_version,group_id,claim_status,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'reserved',?,? WHERE EXISTS(SELECT 1 FROM provisioning_sessions WHERE id=? AND device_id=? AND consumed_at=?)", params: [deviceId, defaultDisplayName, manufacturer, sn, optionalString(body, 'model', 64), optionalString(body, 'firmware_version', 64), session.group_id, timestamp, timestamp, session.id, deviceId, timestamp], expectChanges: 1 },
       { sql: "INSERT INTO device_credentials(id,device_id,credential_epoch,token_verifier,token_ciphertext,key_version,status,expires_at,created_at) SELECT ?,?,?,?,?,?,'temporary',?,? WHERE EXISTS(SELECT 1 FROM devices WHERE id=? AND claim_status='reserved')", params: [credentialId, deviceId, 1, deviceTokenVerifier(rawDeviceToken, config.groupTokenPepper), encryptSecret(rawDeviceToken, config.masterKey, `${deviceId}:${credentialId}`), config.masterKeyVersion, session.expires_at, timestamp, deviceId], expectChanges: 1 },
     ]);
+    await protectDeviceCredentials();
     const encodedDeviceToken = encodeDeviceToken(rawDeviceToken);
     return { provisioning_session_id: session.id, continuation_token: continuationToken, device_id: deviceId, display_name: defaultDisplayName, device_token: encodedDeviceToken, wss_url: deviceWsUrl, recovered: false };
     } finally { rawDeviceToken.fill(0); }
@@ -1130,7 +1148,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.post('/api/v1/provisioning-sessions/claim', async (request, reply) => {
     const body = bodyOf(request); const rawGrant = requiredString(body, 'provisioning_token'); const sn = requiredString(body, 'serial_number', 128);
     let deviceWsUrl: string;
-    try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port }); }
+    try { deviceWsUrl = resolveDeviceWsUrl({ requested: optionalString(body, 'device_ws_url', 1000), ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: currentDeviceAdvertiseHosts(config)[0] ?? '127.0.0.1', port: config.port }); }
     catch (error) { throw new HttpError(400, 'INVALID_DEVICE_WS_URL', error instanceof Error ? error.message : 'Device WebSocket URL is invalid'); }
     const session = await db.get<{ id: string; expected_sn: string | null; group_id: string; allowed_origin: string; expires_at: string; status: string; consumed_at: string | null }>("SELECT id,expected_sn,group_id,allowed_origin,expires_at,status,consumed_at FROM provisioning_sessions WHERE public_token_hash=? AND status IN ('pending','failed') AND expires_at>?", [tokenHash(rawGrant), now()]); if (!session || request.headers.origin !== session.allowed_origin || (session.expected_sn && session.expected_sn !== sn)) throw new HttpError(403, 'PROVISIONING_TOKEN_INVALID', 'Provisioning session is invalid');
     const result = await claimProvisioning(session, body, deviceWsUrl, [webProvisioningFence(session.id)]);
@@ -1162,6 +1180,30 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     return success(reply, { status: transition.to });
   });
 
+  app.get('/api/v1/admin/devices', async (request, reply) => {
+    const context = await resolveAccess(request); requireScope(context, 'devices:read');
+    if (context.actorType !== 'user') throw new AccessDeniedError();
+    const query = request.query as Row; const guard = sqlGroupGuard(context);
+    const limit = query.limit === undefined ? 25 : Number(query.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, 'INVALID_LIMIT', 'limit must be between 1 and 100');
+    const search = query.search === undefined ? '' : String(query.search).trim();
+    const groupId = query.group_id === undefined ? '' : String(query.group_id);
+    if (search.length > 128 || groupId.length > 80) throw new HttpError(400, 'INVALID_FILTER', 'Device filter is too long');
+    if (query.online !== undefined && query.online !== 'true' && query.online !== 'false') throw new HttpError(400, 'INVALID_FILTER', 'online must be true or false');
+    let where = `d.deleted_at IS NULL AND d.claim_status='active' AND ${guard.clause}`;
+    const params: unknown[] = [...guard.params];
+    if (search) { const pattern = `%${search.toLowerCase().replace(/[!%_]/g, '!$&')}%`; where += " AND (LOWER(COALESCE(d.display_name,'')) LIKE ? ESCAPE '!' OR LOWER(d.sn) LIKE ? ESCAPE '!')"; params.push(pattern, pattern); }
+    if (groupId) { where += ' AND d.group_id=?'; params.push(groupId); }
+    if (query.online !== undefined) { where += ' AND d.online=?'; params.push(query.online === 'true' ? 1 : 0); }
+    const scope = `admin-devices:${context.actorId}:${createHash('sha256').update(JSON.stringify({ guard, search, groupId, online: query.online ?? null })).digest('hex')}`;
+    const cursor = cursorDecode(query.cursor, scope);
+    const summary = await db.get<{ total: number; online: number }>(`SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN d.online=1 THEN 1 ELSE 0 END),0) AS online FROM devices d WHERE ${where}`, params);
+    const pageParams = [...params]; let pageWhere = where;
+    if (cursor) { pageWhere += ' AND (d.created_at<? OR (d.created_at=? AND d.id<?))'; pageParams.push(cursor.createdAt, cursor.createdAt, cursor.itemId); }
+    const rows = await db.all<Row>(`SELECT d.*,g.name AS group_name FROM devices d LEFT JOIN user_groups g ON g.id=d.group_id WHERE ${pageWhere} ORDER BY d.created_at DESC,d.id DESC LIMIT ?`, [...pageParams, limit + 1]);
+    const items = rows.slice(0, limit); const last = items.at(-1); const total = Number(summary?.total ?? 0); const online = Number(summary?.online ?? 0);
+    return success(reply, { items: items.map((row) => ({ ...mapDevice(row), group_name: row.group_name ?? null })), count: items.length, total_count: total, summary: { online, offline: total - online }, next_cursor: rows.length > limit && last ? cursorEncode(String(last.created_at), String(last.id), scope) : null });
+  });
   app.get('/api/v1/devices', async (request, reply) => { const context = await resolveAccess(request); requireScope(context, 'devices:read'); const guard = sqlGroupGuard(context); return success(reply, (await db.all<Row>(`SELECT d.* FROM devices d WHERE d.deleted_at IS NULL AND d.claim_status='active' AND ${guard.clause} ORDER BY d.created_at DESC,d.id`, guard.params)).map(mapDevice)); });
   app.get('/api/v1/devices/:id', async (request, reply) => { const context = await resolveAccess(request); requireScope(context, 'devices:read'); return success(reply, mapDevice(await requireDevice(context, String((request.params as Row).id)))); });
   app.get('/api/v1/devices/:id/status', async (request, reply) => {
@@ -1247,6 +1289,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const credential = await db.get<Row>('SELECT id,token_ciphertext,key_version FROM device_credentials WHERE device_id=? AND credential_epoch=? AND status=\'active\' AND revoked_at IS NULL', [deviceId, device.credential_epoch]);
     if (!credential) throw new HttpError(409, 'DEVICE_CREDENTIAL_UNAVAILABLE', 'The active device credential cannot be used for BLE maintenance.');
     const key = config.masterKeys.get(Number(credential.key_version)); if (!key) throw new HttpError(503, 'DEVICE_CREDENTIAL_KEY_UNAVAILABLE', 'The credential encryption key is not available.');
+    await protectDeviceCredentials();
     const plaintext = decryptSecret(String(credential.token_ciphertext), key, `${deviceId}:${String(credential.id)}`);
     try {
       reply.header('cache-control', 'private, no-store'); await audit(request, context, 'device.ble_maintenance_started', 'device', deviceId, String(device.group_id), 'Short-lived browser memory handoff');
@@ -1533,10 +1576,23 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.get('/api/v1/admin/storage', async (request, reply) => {
     const context = await resolveAccess(request); requireSystemAdmin(context); return success(reply, await readStorageState());
   });
+  app.get('/api/v1/admin/backups/status', async (request, reply) => {
+    const context = await resolveAccess(request); requireSystemAdmin(context);
+    reply.header('cache-control', 'private, no-store');
+    return success(reply, await recoveryBackups.status());
+  });
+  app.post('/api/v1/admin/backups/create', async (request, reply) => {
+    const context = await resolveAccess(request, true); requireSystemAdmin(context);
+    await protectDeviceCredentials(true);
+    await audit(request, context, 'backup.saved', 'server');
+    reply.header('cache-control', 'private, no-store');
+    return success(reply, await recoveryBackups.status());
+  });
   app.get('/api/v1/admin/backups/export', async (request, reply) => {
     const context = await resolveAccess(request); requireSystemAdmin(context);
     if (config.databaseDriver !== 'sqlite' || config.storageDriver === 's3_direct') throw new HttpError(409, 'BACKUP_EXTERNAL_REQUIRED', 'This deployment requires an operator-managed PostgreSQL or object-storage backup. Follow the backup guide on the server host.');
-    const downloadable = await createDownloadableBackup(config);
+    if (!(db instanceof DatabaseActor)) throw new HttpError(409, 'BACKUP_EXTERNAL_REQUIRED', 'This deployment requires operator-managed backups.');
+    const downloadable = await createDownloadableBackup(config, db);
     await audit(request, context, 'backup.exported', 'server');
     reply.header('content-type', 'application/gzip');
     reply.header('content-disposition', `attachment; filename="${downloadable.filename}"`);
@@ -1669,7 +1725,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       try { storedToken = decryptSecret(credential.token_ciphertext, config.masterKeys.get(credential.key_version) ?? config.masterKey, `${deviceId}:${credential.id}`); }
       catch (error) { rawToken.fill(0); deviceAuthFailed(authKey); request.log.warn({ device_identity: deviceIdentity, device_id: deviceId, credential_id: credential.id, key_version: credential.key_version, failure_reason: 'credential_decrypt_failed', error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, 'device websocket authentication rejected'); socket.close(1008, 'authentication failed'); return; }
       if (storedToken.byteLength !== rawToken.byteLength || !timingSafeEqual(storedToken, rawToken)) { rawToken.fill(0); storedToken.fill(0); deviceAuthFailed(authKey); request.log.debug({ device_identity: deviceIdentity, device_id: deviceId, remote_ip: request.ip, credential_id: credential.id, failure_reason: 'token_ciphertext_mismatch' }, 'device websocket authentication rejected'); socket.close(1008, 'authentication failed'); return; }
-      const deviceWsUrl = resolveDeviceWsUrl({ ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: config.deviceAdvertiseHost, port: config.port });
+      const deviceWsUrl = resolveDeviceWsUrl({ ...(config.deviceWssUrl ? { configured: config.deviceWssUrl } : {}), ...(request.headers.host ? { requestHost: request.headers.host } : {}), advertiseHost: currentDeviceAdvertiseHosts(config)[0] ?? '127.0.0.1', port: config.port });
       rawToken.fill(0); deviceAuthFailures.delete(authKey); const connectionEpoch = await gateway.attach(socket, deviceId, storedToken, deviceHttpBaseUrl(deviceWsUrl)); request.log.info({ device_id: deviceId, connection_epoch: connectionEpoch, upload_origin: deviceHttpBaseUrl(deviceWsUrl) }, 'device websocket authenticated'); metrics.connectionOpened(); socket.on('close', () => { request.log.info({ device_id: deviceId, connection_epoch: connectionEpoch }, 'device websocket closed'); metrics.connectionClosed(); });
     })().catch((error) => { request.log.warn({ device_identity: String(request.headers.deviceid ?? request.headers['x-device-id'] ?? ''), error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, 'device websocket gateway error'); socket.close(1011,'gateway error'); });
   });

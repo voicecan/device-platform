@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildServer } from '../src/app.js';
+import { loadConfig } from '../src/config.js';
+import { migrate } from '../src/migrate.js';
+
+test('admin device pages search all devices, paginate without duplicates and preserve group scope', async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-fleet-'));
+  const config = await loadConfig({ VOICECAN_DATA_DIR: dataDir, VOICECAN_PUBLIC_BASE_URL: 'http://127.0.0.1:8787', VOICECAN_SIMULATOR: 'true', VOICECAN_LOG_LEVEL: 'silent' });
+  migrate(config); const app = await buildServer(config);
+  t.after(async () => { await app.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const setup = await app.inject({ method: 'POST', url: '/api/v1/setup/admin', payload: { setup_token: (await readFile(join(dataDir, 'setup-token'), 'utf8')).trim(), username: 'admin', password: 'fixture correct horse battery staple' } });
+  const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'admin', password: 'fixture correct horse battery staple' } });
+  const headers = { cookie: String(login.headers['set-cookie']).split(';')[0]!, 'x-csrf-token': login.json().data.csrf_token };
+  const groupId = setup.json().data.group_id;
+  for (const sn of ['FLEET-A', 'FLEET-B', 'FLEET-C']) {
+    const response = await app.inject({ method: 'POST', url: '/api/v1/simulator/devices', headers, payload: { manufacturer: 'Voicecan', sn, group_id: groupId } });
+    assert.equal(response.statusCode, 201);
+  }
+  const first = await app.inject({ method: 'GET', url: '/api/v1/admin/devices?limit=2', headers });
+  assert.equal(first.statusCode, 200, first.body);
+  assert.equal(first.json().data.items.length, 2); assert.equal(first.json().data.total_count, 3);
+  assert.equal(first.json().data.summary.online, 3);
+  const cursor = first.json().data.next_cursor;
+  const second = await app.inject({ method: 'GET', url: `/api/v1/admin/devices?limit=2&cursor=${encodeURIComponent(cursor)}`, headers });
+  assert.equal(second.json().data.items.length, 1); assert.equal(second.json().data.next_cursor, null);
+  assert.equal(new Set([...first.json().data.items, ...second.json().data.items].map((d) => d.id)).size, 3);
+  const search = await app.inject({ method: 'GET', url: '/api/v1/admin/devices?search=FLEET-C&limit=2', headers });
+  assert.equal(search.json().data.items[0].sn, 'FLEET-C'); assert.equal(search.json().data.total_count, 1);
+  const offline = await app.inject({ method: 'GET', url: '/api/v1/admin/devices?online=false&limit=2', headers });
+  assert.equal(offline.json().data.total_count, 0);
+  const changedFilter = await app.inject({ method: 'GET', url: `/api/v1/admin/devices?search=FLEET-C&cursor=${encodeURIComponent(cursor)}`, headers });
+  assert.equal(changedFilter.statusCode, 410);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/v1/admin/devices?limit=10001', headers })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/v1/admin/devices?online=maybe', headers })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/v1/admin/devices?search=%25', headers })).json().data.total_count, 0, 'search treats SQL wildcards literally');
+  const user = await app.inject({ method: 'POST', url: '/api/v1/users', headers, payload: { username: 'fleet-other', password: 'fixture another correct horse password', role: 'user' } });
+  const otherGroup = await app.inject({ method: 'POST', url: '/api/v1/user-groups', headers, payload: { name: 'Other fleet', group_admin_user_id: user.json().data.id } });
+  const otherLogin = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'fleet-other', password: 'fixture another correct horse password' } });
+  const otherHeaders = { cookie: String(otherLogin.headers['set-cookie']).split(';')[0]! };
+  const isolated = await app.inject({ method: 'GET', url: `/api/v1/admin/devices?group_id=${groupId}`, headers: otherHeaders });
+  assert.equal(isolated.statusCode, 200); assert.equal(isolated.json().data.total_count, 0);
+  assert.equal(otherGroup.statusCode, 201);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/v1/admin/devices?cursor=${encodeURIComponent(cursor)}`, headers: otherHeaders })).statusCode, 410);
+  const legacy = await app.inject({ method: 'GET', url: '/api/v1/devices', headers });
+  assert.ok(Array.isArray(legacy.json().data), 'existing REST clients retain their original response shape');
+});

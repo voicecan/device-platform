@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { Button, collectionOf, DataTable, Field, FlowHeader, ResourcePicker } from './ui.js';
 import type { Translate } from './ui.js';
+import { McpQuickStart } from './mcp-quick-start.js';
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 type Permission = { code: string; resource: string; action: string; risk: string; description: string };
@@ -29,7 +30,7 @@ function MultiChoicePicker({ legend, hint, options, selected, setSelected, t }: 
 }
 
 function ScopePicker({ catalog, scopes, setScopes, t, allowedScopes }: { catalog: Catalog | undefined; scopes: string[]; setScopes: (scopes: string[]) => void; t: Translate; allowedScopes?: readonly string[] }) {
-  return <fieldset className="scope-picker field-wide"><legend>{t('Permissions')}</legend><p>{t('Permissions are loaded from the server catalog and shared by REST and MCP.')}</p><div>{catalog?.permissions.map((permission) => { const allowed = allowedScopes === undefined || allowedScopes.includes(permission.code); return <label key={permission.code}><input type="checkbox" checked={allowed && scopes.includes(permission.code)} disabled={!allowed} onChange={() => setScopes(scopes.includes(permission.code) ? scopes.filter((scope) => scope !== permission.code) : [...scopes, permission.code])}/><span><code>{permission.code}</code><small>{t(permission.description)} · {t(permission.risk)}{allowed ? '' : ` · ${t('Not enabled for this Application')}`}</small></span></label>; })}</div></fieldset>;
+  return <fieldset className="scope-picker field-wide"><legend>{t('Permissions')}</legend><p>{t('Permissions are loaded from the server catalog and shared by REST and MCP.')}</p><div>{catalog?.permissions.map((permission) => { const allowed = allowedScopes === undefined || allowedScopes.includes(permission.code); return <label key={permission.code}><input type="checkbox" checked={allowed && scopes.includes(permission.code)} disabled={!allowed} onChange={() => setScopes(scopes.includes(permission.code) ? scopes.filter((scope) => scope !== permission.code) : [...scopes, permission.code])}/><span><code>{permission.code}</code><small>{t(permission.description)} · <span className="scope-meta">{t(permission.risk)}</span>{allowed ? null : <> · <span className="scope-meta">{t('Not enabled for this Application')}</span></>}</small></span></label>; })}</div></fieldset>;
 }
 
 function ApplicationSelector({ value, onChange, t }: { value: string; onChange: (value: string) => void; t: Translate }) {
@@ -37,11 +38,26 @@ function ApplicationSelector({ value, onChange, t }: { value: string; onChange: 
 }
 
 export function OpenPlatformWorkspace({ t, run }: { t: Translate; run: Runner }) {
-  const [tab, setTab] = useState<(typeof tabs)[number]>('Overview');
+  const [mode, setMode] = useState<'basic' | 'advanced'>('basic');
+  const [advancedTab, setAdvancedTab] = useState<(typeof tabs)[number]>('Overview');
+  const [createGroupId, setCreateGroupId] = useState('');
+  return <div className="application-workspace">
+    <div className="operation-tabs application-modes" role="tablist" aria-label={t('Application mode')}>
+      <button id="application-basic-tab" role="tab" aria-controls="application-mode-panel" aria-selected={mode === 'basic'} type="button" className={mode === 'basic' ? 'active' : undefined} onClick={() => setMode('basic')}>{t('Connect a tool')}</button>
+      <button id="application-advanced-tab" role="tab" aria-controls="application-mode-panel" aria-selected={mode === 'advanced'} type="button" className={mode === 'advanced' ? 'active' : undefined} onClick={() => { setAdvancedTab('Overview'); setMode('advanced'); }}>{t('Connection management')}</button>
+    </div>
+    <div id="application-mode-panel" role="tabpanel" aria-labelledby={mode === 'basic' ? 'application-basic-tab' : 'application-advanced-tab'}>
+      {mode === 'basic' ? <McpQuickStart t={t} onAdvanced={() => { setAdvancedTab('Overview'); setMode('advanced'); }} onCreateApplication={(groupId) => { setCreateGroupId(groupId); setAdvancedTab('Create application'); setMode('advanced'); }}/> : <AdvancedApplicationWorkspace t={t} run={run} initialTab={advancedTab} initialGroupId={createGroupId}/>}
+    </div>
+  </div>;
+}
+
+function AdvancedApplicationWorkspace({ t, run, initialTab, initialGroupId }: { t: Translate; run: Runner; initialTab: (typeof tabs)[number]; initialGroupId: string }) {
+  const [tab, setTab] = useState<(typeof tabs)[number]>(initialTab);
   const [catalog, setCatalog] = useState<Catalog>();
   const [applicationId, setApplicationId] = useState('');
   const [detail, setDetail] = useState<ApplicationDetail>();
-  const [groupId, setGroupId] = useState('');
+  const [groupId, setGroupId] = useState(initialGroupId);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [environment, setEnvironment] = useState('development');

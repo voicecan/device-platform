@@ -1,3 +1,4 @@
+import { forwardProvisioningEvents } from './provisioning-callbacks.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEVICE_CONNECT_PROTOCOL, mountDeviceConnector, randomConnectValue } from '@voicecan/device-connect-web';
 import type { DeviceConnectInit, DeviceConnectReady, DeviceConnectRequest, DeviceConnectResponse } from '@voicecan/device-connect-web';
@@ -125,23 +126,26 @@ export function EmbeddedDeviceProvisioner({ deviceWsUrl, bleServiceUuid, locale,
   onAlreadyClaimed: (deviceId: string) => void;
   onError: (error: unknown) => void;
 }) {
+  const callbacks = useRef({ onStepChange, onProvisioned, onAlreadyClaimed, onError });
+  callbacks.current = { onStepChange, onProvisioned, onAlreadyClaimed, onError };
   const mountRef = useRef<HTMLDivElement>(null);
   const deviceWsUrlRef = useRef(deviceWsUrl);
   deviceWsUrlRef.current = deviceWsUrl;
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    const events = forwardProvisioningEvents(() => callbacks.current);
     let active = true; let activeGrant = ''; let destroy: (() => void) | undefined; let redirecting = false;
     const mount = mountRef.current;
     if (!mount || !bleServiceUuid) return;
     provisioningDebug('Mounting embedded device connector', { custom_device_ws_url: Boolean(deviceWsUrl) });
-    void mountDeviceConnector({ mount, broker: localBroker(() => activeGrant, () => deviceWsUrlRef.current, (deviceId) => { redirecting = true; onAlreadyClaimed(deviceId); }, () => { activeGrant = ''; }), locale, coreModuleUrl: '/sdk/private/semantic_core.js', compact: true, bleServiceUuid, onProvisioned: () => onProvisioned(), onError: (error) => { if (!redirecting) onError(error); } }).then((connector) => {
+    void mountDeviceConnector({ mount, broker: localBroker(() => activeGrant, () => deviceWsUrlRef.current, (deviceId) => { redirecting = true; events.onAlreadyClaimed(deviceId); }, () => { activeGrant = ''; }), locale, coreModuleUrl: '/sdk/private/semantic_core.js', compact: true, bleServiceUuid, onProvisioned: events.onProvisioned, onError: (error) => { if (!redirecting) events.onError(error); } }).then((connector) => {
       if (!active) { connector.destroy(); return; }
-      const stepListener = (event: Event) => onStepChange(Number((event as CustomEvent).detail));
+      const stepListener = (event: Event) => events.onStepChange(Number((event as CustomEvent).detail));
       connector.element.addEventListener('stepchange', stepListener);
       destroy = () => { connector.element.removeEventListener('stepchange', stepListener); connector.destroy(); };
       registerStart(async (createGrant) => connector.element.startProvisioning(async () => { const created = await createGrant(); activeGrant = created.provisioning_token; return activeGrant; }));
       setLoading(false);
-    }).catch(onError);
+    }).catch(events.onError);
     return () => { active = false; registerStart(undefined); activeGrant = ''; destroy?.(); };
   }, [bleServiceUuid, locale]);
   return <div className="embedded-device-flow" hidden={hidden}><div ref={mountRef}/>{loading ? <div className="loading-panel" role="status"><span className="spinner"/><span>{locale === 'zh-CN' ? '正在加载设备运行时…' : 'Loading device runtime…'}</span></div> : null}</div>;

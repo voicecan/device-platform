@@ -6,23 +6,25 @@ import { api, errorMessage } from './api.js';
 import { EmbeddedDeviceProvisioner, RemoteDeviceProvisioner } from './device-integration.js';
 import type { StartRemoteProvisioning } from './device-integration.js';
 import type { Locale } from './i18n.js';
-import { Button, CredentialBackupWarning, DataTable, DeviceWsCandidatePicker, Field, FlowHeader, Icon, ResourcePicker, Select, Stepper } from './ui.js';
+import { Button, DataTable, Field, FlowHeader, Icon, ResourcePicker, Stepper } from './ui.js';
 import type { DeviceWsCandidate, Translate } from './ui.js';
 import { NativeHandoffPanel } from './native-handoff-panel.js';
+import { BindingPreparation } from './binding-preparation.js';
+import { bindingBrowserRequest } from './binding-browser-session.js';
+import { webBindingStep } from './binding-preparation-state.js';
 import { OpenPlatformWorkspace } from './open-platform-workspace.js';
 
 export type View = 'overview' | 'devices' | 'files' | 'provision' | 'release' | 'groups' | 'users' | 'open-platform' | 'open-platform-overview' | 'permission-catalog' | 'oauth-clients' | 'call-logs' | 'download-grants' | 'security-alerts' | 'events' | 'inspector' | 'storage' | 'audit';
 
 export const labels: Record<View, string> = {
-  overview: 'Overview', devices: 'Devices', files: 'Recording files', provision: 'Bind device', release: 'Transfer device', groups: 'Groups', users: 'Users', 'open-platform': 'Applications', 'open-platform-overview': 'Open platform overview', 'permission-catalog': 'Permission catalog', 'oauth-clients': 'OAuth / MCP clients', 'call-logs': 'API and MCP call logs', 'download-grants': 'Temporary download grants', 'security-alerts': 'Security alerts', events: 'Events', inspector: 'Delivery inspector', storage: 'Storage', audit: 'Audit log',
+  overview: 'Overview', devices: 'Devices', files: 'Recording files', provision: 'Bind device', release: 'Transfer device', groups: 'Groups', users: 'Users', 'open-platform': 'Connect AI tools', 'open-platform-overview': 'Open platform overview', 'permission-catalog': 'Permission catalog', 'oauth-clients': 'OAuth / MCP clients', 'call-logs': 'API and MCP call logs', 'download-grants': 'Temporary download grants', 'security-alerts': 'Security alerts', events: 'Events', inspector: 'Delivery inspector', storage: 'Storage', audit: 'Audit log',
 };
 
 export const navGroups: readonly { label: string; items: readonly View[] }[] = [
-  { label: 'Workspace', items: ['overview'] },
-  { label: 'Devices', items: ['devices', 'files', 'provision', 'release'] },
+  { label: 'Workspace', items: ['overview', 'devices', 'files', 'open-platform'] },
   { label: 'Organization', items: ['groups', 'users'] },
-  { label: 'Open platform', items: ['open-platform-overview', 'open-platform', 'permission-catalog', 'oauth-clients', 'call-logs', 'download-grants', 'security-alerts'] },
-  { label: 'Operations', items: ['events', 'inspector', 'storage', 'audit'] },
+  { label: 'Open platform', items: ['open-platform-overview', 'permission-catalog', 'oauth-clients', 'call-logs', 'download-grants', 'security-alerts'] },
+  { label: 'Operations', items: ['release', 'events', 'inspector', 'storage', 'audit'] },
 ];
 
 const bindingIntentPollMs = 10_000;
@@ -33,7 +35,7 @@ function deviceConnectUrl(): string {
 }
 
 export const resourcePaths: Partial<Record<View, string>> = {
-  devices: '/devices', files: '/files?limit=20', events: '/events?limit=20', audit: '/audit-logs',
+  events: '/events?limit=20', audit: '/audit-logs',
   'open-platform-overview': '/open-platform/overview', 'permission-catalog': '/open-platform/permission-catalog', 'oauth-clients': '/open-platform/oauth-clients', 'call-logs': '/open-platform/call-logs', 'download-grants': '/open-platform/download-grants', 'security-alerts': '/open-platform/security-alerts',
 };
 
@@ -82,11 +84,16 @@ function UsersWorkspace({ t, run }: { t: Translate; run: Runner }) {
   const [reason, setReason] = useState('');
   const [users, setUsers] = useState<unknown>();
   const [listError, setListError] = useState('');
+  const usersLoadSequence = useRef(0);
   const roleOptions = [{ value: 'user', label: t('user') }, { value: 'system_admin', label: t('system admin') }];
-  const refreshUsers = async (): Promise<void> => { try { setUsers(await api('/users')); setListError(''); } catch (cause) { setListError(cause instanceof Error ? cause.message : String(cause)); } };
+  const refreshUsers = async (): Promise<void> => {
+    const sequence = ++usersLoadSequence.current;
+    try { const nextUsers = await api('/users'); if (sequence !== usersLoadSequence.current) return; setUsers(nextUsers); setListError(''); }
+    catch (cause) { if (sequence === usersLoadSequence.current) setListError(cause instanceof Error ? cause.message : String(cause)); }
+  };
   const mutate = async (operation: () => Promise<unknown>): Promise<void> => { const response = await run(operation); if (response !== undefined) await refreshUsers(); };
-  useEffect(() => { void refreshUsers(); }, []);
-  return <div className="operation-layout"><Tabs options={['Create user', 'Update access', 'Reset password']} value={action} onChange={setAction} t={t}/><div className="operation-card"><form className="form-grid" onSubmit={(event) => event.preventDefault()}>
+  useEffect(() => { void refreshUsers(); return () => { ++usersLoadSequence.current; }; }, []);
+  return <div className="operation-layout users-workspace"><Tabs options={['Create user', 'Update access', 'Reset password']} value={action} onChange={setAction} t={t}/><div className="operation-card"><form className="form-grid" onSubmit={(event) => event.preventDefault()}>
     {action === 'Create user' ? <><Field id="user-name" label={t('Username')} value={username} onChange={setUsername} required/><Field id="user-display" label={t('Display name')} value={displayName} onChange={setDisplayName}/><Field id="user-password" label={t('Initial password')} hint={t('Use at least 12 characters.')} value={password} onChange={setPassword} type="password" minLength={12} maxLength={256} required/><Field id="user-role" label={t('Role')} value={role} onChange={setRole} options={roleOptions}/><Actions><Button id="create-user" disabled={!username.trim() || password.length < 12} onClick={() => void mutate(async () => { const response = await api('/users', { method: 'POST', body: JSON.stringify({ username: username.trim(), display_name: displayName.trim(), password, role }) }); setPassword(''); return response; })}>{t('Create user')}</Button></Actions></> : null}
     {action === 'Update access' ? <><ResourcePicker id="user-id" label={t('User')} endpoint="/users" value={userId} onChange={setUserId} t={t} required/><Field id="user-display" label={t('Display name')} value={displayName} onChange={setDisplayName}/><Field id="user-role" label={t('Role')} value={role} onChange={setRole} options={roleOptions}/><Field id="user-disabled" label={t('Disabled')} value={disabled} onChange={setDisabled} options={[{ value: 'false', label: t('false') }, { value: 'true', label: t('true') }]}/><Field id="user-reason" label={t('Change reason')} value={reason} onChange={setReason} wide required/><Actions><Button id="update-user" onClick={() => void mutate(() => api(`/users/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ role, disabled: disabled === 'true', display_name: displayName.trim(), reason: reason.trim() }) }))}>{t('Update role/status')}</Button><Button id="delete-user" kind="danger" onClick={() => { if (globalThis.confirm(t('Delete this user?'))) void mutate(() => api(`/users/${encodeURIComponent(userId)}`, { method: 'DELETE', body: '{}' })); }}>{t('Delete user')}</Button></Actions></> : null}
     {action === 'Reset password' ? <><ResourcePicker id="user-id" label={t('User')} endpoint="/users" value={userId} onChange={setUserId} t={t} required/><Field id="user-password" label={t('New password')} hint={t('Use at least 12 characters.')} value={password} onChange={setPassword} type="password" minLength={12} maxLength={256} wide required/><Actions><Button id="set-user-password" disabled={!userId || password.length < 12} onClick={() => void mutate(async () => { const response = await api(`/users/${encodeURIComponent(userId)}/password`, { method: 'PUT', body: JSON.stringify({ password }) }); setPassword(''); return response; })}>{t('Set password')}</Button></Actions></> : null}
@@ -112,7 +119,6 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
   const choosePath = (path: 'web' | 'app'): void => {
     if (pathLocked) return;
     setBindingPath(path);
-    commitPath(path);
   };
   const [networkMode, setNetworkMode] = useState<'ask' | 'existing'>('ask');
   const [bindingIntent, setBindingIntent] = useState<BindingIntent>();
@@ -121,6 +127,8 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
   const [deviceWsUrl, setDeviceWsUrl] = useState('');
   const [bleServiceUuid, setBleServiceUuid] = useState('');
   const [deviceWsCandidates, setDeviceWsCandidates] = useState<DeviceWsCandidate[]>([]);
+  const [settingsError, setSettingsError] = useState(false);
+  const [settingsAttempt, setSettingsAttempt] = useState(0);
   const [started, setStarted] = useState(false);
   const [connectorReady, setConnectorReady] = useState(false);
   const [deviceStep, setDeviceStep] = useState(0);
@@ -128,7 +136,16 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
   const localBluetooth = supportsLocalWebBluetooth();
   const connectorUrl = deviceConnectUrl();
   const startRemoteConnector = useRef<StartRemoteProvisioning | undefined>(undefined);
-  useEffect(() => { let active = true; void api<{ ble_service_uuid: string; preferred_device_ws_url: string; device_ws_urls: DeviceWsCandidate[] }>('/settings/device-access').then((settings) => { if (active) { setBleServiceUuid(settings.ble_service_uuid); setDeviceWsCandidates(settings.device_ws_urls); setDeviceWsUrl((currentUrl) => currentUrl || settings.preferred_device_ws_url); } }, () => undefined); return () => { active = false; }; }, []);
+  useEffect(() => {
+    let active = true;
+    setSettingsError(false);
+    void api<{ ble_service_uuid: string; preferred_device_ws_url: string; device_ws_urls: DeviceWsCandidate[] }>('/settings/device-access').then((settings) => {
+      if (!active) return;
+      setBleServiceUuid(settings.ble_service_uuid); setDeviceWsCandidates(settings.device_ws_urls);
+      setDeviceWsUrl((currentUrl) => currentUrl || settings.preferred_device_ws_url);
+    }, () => { if (active) setSettingsError(true); });
+    return () => { active = false; };
+  }, [settingsAttempt]);
   useEffect(() => {
     if (!bindingIntentId) return;
     let active = true; let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
@@ -139,7 +156,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
       if (['pending', 'user_action', 'ble_selected', 'claimed', 'configured', 'failed', 'expired'].includes(intent.status)) timer = globalThis.setTimeout(() => void loadIntent(), bindingIntentPollMs);
     };
     const loadIntent = async (): Promise<void> => {
-      try { applyIntent(await api<BindingIntent>(`/binding-intents/${encodeURIComponent(bindingIntentId)}/browser`)); }
+      try { applyIntent(await bindingBrowserRequest<BindingIntent>(api, bindingIntentId, 'browser')); }
       catch (error) { if (active) { reportError(error); timer = globalThis.setTimeout(() => void loadIntent(), bindingIntentPollMs); } }
     };
     const fragment = new URLSearchParams(globalThis.location.hash.slice(1)); const launchToken = fragment.get('launch');
@@ -158,10 +175,8 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
     }, () => undefined);
     return () => { active = false; };
   }, [bindingIntent?.id]);
-  const steps = ['Choose ownership', 'Connect nearby device', 'Configure network', 'Binding complete'];
-  const current = !started ? 0 : deviceStep === 0 ? 1 : deviceStep === 1 || deviceStep === 2 ? 2 : 3;
   const createGrant = async (): Promise<{ expires_at: string; provisioning_token: string }> => {
-    if (bindingIntentId) return api(`/binding-intents/${encodeURIComponent(bindingIntentId)}/grant`, { method: 'POST', body: '{}' });
+    if (bindingIntentId) return bindingBrowserRequest(api, bindingIntentId, 'grant');
     const expectedSn = serial.trim();
     const created = await api<{ id: string; launch_url: string }>('/binding-intents', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, device_ws_url: deviceWsUrl.trim(), ...(!localBluetooth ? { connector_origin: new URL(connectorUrl).origin } : {}), ...(expectedSn ? { expected_sn: expectedSn } : {}), locale }) });
     // Browser binding also needs a durable root before a device Token is issued.
@@ -171,7 +186,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
     globalThis.history.replaceState(globalThis.history.state, '', url); setBindingIntentId(created.id); setBindingIntent(intent);
     return api(`/binding-intents/${encodeURIComponent(created.id)}/grant`, { method: 'POST', body: '{}' });
   };
-  const reportError = (integrationError: unknown): void => { setStarted(false); setDeviceStep(0); const message = integrationError instanceof Error ? integrationError.message : 'Device selection failed unexpectedly.'; void run(() => Promise.reject(new Error(t(message)))); };
+  const reportError = (integrationError: unknown): void => { if (deviceStep >= 1) return; setStarted(false); setDeviceStep(0); const message = integrationError instanceof Error ? integrationError.message : 'Device selection failed unexpectedly.'; void run(() => Promise.reject(new Error(t(message)))); };
   const beginBinding = (): void => {
     if (!groupId || appPath) return;
     commitPath('web');
@@ -189,23 +204,43 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
     } finally { setCreatingNative(false); }
   };
   const intentWaiting = bindingIntent?.status === 'configured';
-  return <div className="flow-layout">
+  const intentExpired = bindingIntent?.status === 'expired';
+  const startNewBinding = (): void => {
+    const url = new URL(globalThis.location.href);
+    url.searchParams.delete('binding_intent'); url.hash = '';
+    globalThis.history.replaceState(globalThis.history.state, '', url);
+    setBindingIntentId(''); setBindingIntent(undefined);
+  };
+  const currentStep = appPath
+    ? intentWaiting ? 3 : bindingIntentId ? nativeExecutor ? 2 : 1 : 0
+    : webBindingStep(started, deviceStep, intentWaiting);
+  return <div className="flow-layout binding-flow">
     <BindingHistory target={headerActions} t={t} currentId={bindingIntentId} disabled={started || creatingNative}/>
-    <Stepper steps={['Choose a binding path', ...(appPath ? ['Choose ownership', 'Approve the phone', 'Configure in app', 'Binding complete'] : steps)]} current={!pathLocked ? 0 : 1 + (intentWaiting ? 2 : appPath && bindingIntentId ? nativeExecutor ? 2 : 1 : current)} t={t}/>
-    {!pathLocked ? <div className="binding-paths" role="group" aria-label={t('Choose a binding path')}>
-      <button type="button" className="binding-path" disabled={pathLocked} onClick={() => choosePath('web')}>
-        <strong>{t('Bind in browser')}</strong><span>{t('Select the device and configure its network in the browser.')}</span>
-      </button>
-      <button type="button" className="binding-path" disabled={pathLocked} onClick={() => choosePath('app')}>
-        <strong>{t('Bind in native app')}</strong><span>{t('Scan the task QR code and configure the device on your phone.')}</span>
-      </button>
-    </div> : <div className="binding-path-summary"><Icon name="check"/><strong>{t(appPath ? 'Bind in native app' : 'Bind in browser')}</strong></div>}
-    {pathLocked && (intentWaiting ? <div className="flow-stage"><div className="loading-panel" role="status"><span className="spinner"/><span>{t('The device configuration is complete. Waiting for the server to confirm it online…')}</span></div></div> : !started ? <div className="flow-stage"><form className="form-grid provision-form" onSubmit={(event) => event.preventDefault()}>{bindingIntent && !appPath ? <div className="impact-note field-wide"><strong>{t('AI-prepared binding')}</strong><p>{t('Configuration is ready. Select the nearby Bluetooth device; the remaining steps run automatically.')}</p></div> : null}<ResourcePicker id="provision-group" label={t('Destination group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required selectFirst disabled={Boolean(bindingIntent)}/><Field id="provision-sn" label={t('Expected serial (optional)')} hint={t('Use the serial printed on the device to reduce nearby-device mistakes.')} value={serial} onChange={setSerial} disabled={Boolean(bindingIntent)}/>{!bindingIntent ? <><DeviceWsCandidatePicker candidates={deviceWsCandidates} value={deviceWsUrl} onChange={setDeviceWsUrl} t={t} canExportBackup={canExportBackup}/><Field id="provision-device-ws-url" label={t('Device WebSocket URL')} hint={t('Use an address reachable from the device network, for example a LAN IP or public domain.')} type="url" value={deviceWsUrl} onChange={setDeviceWsUrl} wide required/></> : <><CredentialBackupWarning t={t} canExport={canExportBackup}/><Field id="provision-device-ws-url" label={t('Device WebSocket URL')} value={deviceWsUrl} onChange={setDeviceWsUrl} wide disabled/></>}{appPath && !bindingIntentId ? <Field id="app-network-mode" label={t('Network setup in app')} hint={t('The device needs its own network connection to reach this platform.')} wide>
-            <Select id="app-network-mode" value={networkMode} ariaLabel={t('Network setup in app')} options={[
-              { value: 'ask', label: t('Configure Wi-Fi in app') },
-              { value: 'existing', label: t('Use the device existing network') },
-            ]} onChange={value => setNetworkMode(value === 'existing' ? 'existing' : 'ask')}/>
-          </Field> : null}<Actions>{appPath ? !bindingIntentId ? <Button id="prepare-native-binding" disabled={creatingNative || !groupId || !deviceWsUrl.trim()} onClick={() => void run(createNativeIntent)}>{t('Continue with app binding')}</Button> : null : <Button id="create-provision" icon="provision" disabled={nativeExecutor || !groupId || !deviceWsUrl.trim() || !connectorReady || !bleServiceUuid} onClick={beginBinding}>{bindingIntent ? t('Select Bluetooth device') : t('Bind in browser')}</Button>}</Actions></form></div> : null)}{appPath && bindingIntent ? <NativeHandoffPanel intentId={bindingIntent.id} bindingStatus={bindingIntent.status} t={t} onExecutorChange={setNativeExecutor}/> : null}{pathLocked && !appPath ? localBluetooth ? <EmbeddedDeviceProvisioner bleServiceUuid={bleServiceUuid} deviceWsUrl={deviceWsUrl.trim()} locale={locale} hidden={!started || intentWaiting} registerStart={(start) => { startConnector.current = start; setConnectorReady(Boolean(start)); }} onStepChange={setDeviceStep} onProvisioned={() => { setDeviceStep(3); if (bindingIntentId) void api<BindingIntent>(`/binding-intents/${encodeURIComponent(bindingIntentId)}/browser`).then((intent) => { setBindingIntent(intent); if (intent.device_id) onNavigateDevice(intent.device_id); }); }} onAlreadyClaimed={onNavigateDevice} onError={reportError}/> : <RemoteDeviceProvisioner bleServiceUuid={bleServiceUuid} deviceWsUrl={deviceWsUrl.trim()} locale={locale} connectorUrl={connectorUrl} hidden={!started || intentWaiting} registerStart={(start) => { startRemoteConnector.current = start; setConnectorReady(Boolean(start)); }} onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice}/> : null}</div>;
+    <Stepper steps={appPath ? ['Prepare connection', 'Approve the phone', 'Configure in app', 'Wait for device online', 'Binding complete'] : ['Connect Bluetooth', 'Connect Wi-Fi']} current={appPath ? currentStep : Math.min(currentStep, 1)} t={t}/>
+    {intentWaiting ? <section className="flow-stage"><div className="loading-panel" role="status"><span className="spinner"/><span>{t('The device configuration is complete. Waiting for the server to confirm it online…')}</span></div></section> : !started && !(appPath && bindingIntentId) ? <BindingPreparation
+      onNavigateDevice={onNavigateDevice} t={t} appPath={appPath} localBluetooth={localBluetooth} pathLocked={pathLocked} locked={Boolean(bindingIntentId)}
+      groupId={groupId} setGroupId={setGroupId} serial={serial} setSerial={setSerial}
+      deviceWsUrl={deviceWsUrl} setDeviceWsUrl={setDeviceWsUrl} candidates={deviceWsCandidates}
+      preparedIntent={Boolean(bindingIntentId)} expired={intentExpired} canExportBackup={canExportBackup}
+      networkMode={networkMode} setNetworkMode={setNetworkMode}
+      ready={!settingsError && Boolean(bleServiceUuid) && (appPath || connectorReady)} busy={creatingNative}
+      settingsError={settingsError} onRetrySettings={() => setSettingsAttempt((current) => current + 1)}
+      onChoosePath={choosePath} onStart={intentExpired ? startNewBinding : appPath ? () => { void run(createNativeIntent); } : beginBinding}
+    /> : null}
+    {appPath && bindingIntent ? <NativeHandoffPanel intentId={bindingIntent.id} bindingStatus={bindingIntent.status} t={t} onExecutorChange={setNativeExecutor}/> : null}
+    {!appPath ? localBluetooth ? <EmbeddedDeviceProvisioner
+      bleServiceUuid={bleServiceUuid} deviceWsUrl={deviceWsUrl.trim()} locale={locale} hidden={!started || intentWaiting}
+      registerStart={(start) => { startConnector.current = start; setConnectorReady(Boolean(start)); }}
+      onStepChange={setDeviceStep} onProvisioned={() => {
+        setDeviceStep(3);
+        if (bindingIntentId) void api<BindingIntent>(`/binding-intents/${encodeURIComponent(bindingIntentId)}/browser`).then((intent) => { setBindingIntent(intent); if (intent.device_id) onNavigateDevice(intent.device_id); });
+      }} onAlreadyClaimed={onNavigateDevice} onError={reportError}
+    /> : <RemoteDeviceProvisioner
+      bleServiceUuid={bleServiceUuid} deviceWsUrl={deviceWsUrl.trim()} locale={locale} connectorUrl={connectorUrl}
+      hidden={!started || intentWaiting} registerStart={(start) => { startRemoteConnector.current = start; setConnectorReady(Boolean(start)); }}
+      onProvisioned={() => setDeviceStep(3)} onAlreadyClaimed={onNavigateDevice}
+    /> : null}
+  </div>;
 }
 
 type StorageState = {
