@@ -6,7 +6,7 @@ Voicecan Device Platform 是一个自托管设备平台，用于连接 Voicecan 
 
 ## 你可以做什么
 
-- **连接设备**：通过浏览器、WebSocket 或附近 Bluetooth 完成配网、认领、状态查看和设备控制。
+- **连接设备**：通过浏览器或 WebSocket 完成配网、认领、状态查看和设备控制。
 - **管理录音**：发现录音、可靠同步文件、恢复中断传输，并保留不可变文件历史。
 - **管理权限**：使用 Group 组织用户和设备，创建有范围的应用凭据，并查看管理审计记录。
 - **构建应用**：通过 REST、TypeScript、Python、MCP、Webhook 或可复用的 Device Connect Web 接入自己的产品。
@@ -117,5 +117,3 @@ npm install @voicecan/contracts @voicecan/server-client @voicecan/connector-runt
 - [安全策略](SECURITY.md)
 - [许可证](LICENSE)
 - [第三方声明](NOTICE)
-
-设备发现按广播 Service UUID 过滤，不依赖蓝牙名称。启动服务时可设置 `VOICECAN_BLE_SERVICE_UUID`，默认值为 `00001a10-0000-1000-8000-00805f9b34fb`；支持 16/32 位短 UUID 和完整 128 位 UUID，修改后重启服务生效。广播 UUID 与 GATT 连接 UUID 分开处理。名称前缀配置页面及写入接口已移除，升级现有数据库前请显式运行 `npm run migrate`。

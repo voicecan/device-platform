@@ -6,7 +6,7 @@ Voicecan Device Platform is a self-hosted platform for connecting Voicecan-compa
 
 ## What you can do
 
-- **Connect devices** — provision, claim, monitor, and control devices through a browser, WebSocket, or nearby Bluetooth connection.
+- **Connect devices** — provision, claim, monitor, and control devices through a browser or WebSocket connection.
 - **Manage recordings** — discover recordings, synchronize files reliably, resume interrupted transfers, and keep immutable file history.
 - **Control access** — organize users and devices into Groups, issue scoped application credentials, and review an audit trail of administrative activity.
 - **Build applications** — use REST, TypeScript, Python, MCP, Webhooks, or the reusable Device Connect Web to connect your own products.
@@ -117,5 +117,3 @@ Install `@voicecan/device-platform` when you are deploying the self-hosted Serve
 - [Security policy](SECURITY.md)
 - [License](LICENSE)
 - [Third-party notices](NOTICE)
-
-Device discovery filters by advertised Service UUID, independently of the Bluetooth name. Set `VOICECAN_BLE_SERVICE_UUID` at server startup (default: `00001a10-0000-1000-8000-00805f9b34fb`). It accepts 16/32-bit short UUIDs and full 128-bit UUIDs; restart the server after changes. The GATT connection UUID remains separate. The name-prefix settings page and write API have been removed; explicitly run `npm run migrate` when upgrading an existing database.
