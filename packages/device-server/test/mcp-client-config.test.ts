@@ -1,13 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clientConfiguration } from '../src/mcp-client-config.js';
+import { clientConfiguration, remoteClientConfiguration } from '../src/mcp-client-config.js';
 test('OpenClaw uses its native mcp.servers schema and preserves dash-prefixed arguments', () => {
  const entry={command:'/node path/node',args:['/path/runner.js','stdio','--credential-ref',"/private/user's credential.token"]};
  const value=clientConfiguration('openclaw',entry);
- assert.deepEqual(JSON.parse(value.configuration).mcp.servers.voicecan_elio,{...entry,transport:'stdio',enabled:true});
+ assert.deepEqual(JSON.parse(value.configuration).mcp.servers.voicecan_elio,{command:entry.command,args:entry.args,enabled:true});
+ assert.equal(JSON.parse(value.configuration).mcp.servers.voicecan_elio.transport, undefined);
  assert.ok(value.install_command?.includes("'--arg=--credential-ref'"));
  assert.ok(value.install_command?.includes("'--command' '/node path/node'"));
  assert.equal(value.verify_command,"'openclaw' 'mcp' 'doctor' 'voicecan_elio' '--probe'");
  assert.equal(clientConfiguration('claude',entry).install_command,null);
  assert.ok(clientConfiguration('codex',entry,'voicecan_elio_recordings').configuration.startsWith('[mcp_servers.voicecan_elio_recordings]'));
+});
+test('remote Codex and OpenClaw use HTTP OAuth with explicit scopes', () => {
+ const scopes=['devices:read','recordings:read','events:read'];
+ const openclaw=remoteClientConfiguration('openclaw','https://device.example.com/mcp',scopes);
+ const saved=JSON.parse(openclaw.configuration).mcp.servers.voicecan;
+ assert.equal(saved.transport,'streamable-http');
+ assert.equal(saved.auth,'oauth');
+ assert.equal(saved.oauth.scope,scopes.join(' '));
+ assert.match(openclaw.install_command??'',/--transport' 'streamable-http'/);
+ assert.doesNotMatch(openclaw.install_command??'',/--command/);
+ const codex=remoteClientConfiguration('codex','https://device.example.com/mcp',scopes,'voicecan_recordings');
+ assert.match(codex.configuration,/^\[mcp_servers\.voicecan_recordings\]/);
+ assert.match(codex.configuration,/scopes = \["devices:read","recordings:read","events:read"\]/);
+ assert.doesNotMatch(codex.configuration,/oauth_resource/);
+ assert.match(codex.login_command??'',/'codex' 'mcp' 'login' 'voicecan_recordings' '--scopes' 'devices:read,recordings:read,events:read'/);
+ assert.equal(codex.install_command,null);
 });

@@ -50,6 +50,6 @@ voicecan-device mcp connect --application <application-id> \
   --client generic --output json
 ```
 
-Credential creation stores the one-time token in an owner-only Secret Reference. Generated MCP configuration calls `voicecan-device mcp run --credential-ref <path>` and therefore contains no plaintext token.
+Credential creation stores the one-time token in an owner-only Secret Reference. Generated MCP configuration calls `voicecan-device mcp run --credential-ref <path>` and therefore contains no plaintext token. `--client openclaw` emits `mcp.servers`; `--client codex` emits TOML. `mcp run` loads the owner-only file locally and does not invoke `npx`.
 
 Local Admin MCP controls the installation. Application MCP is a least-privilege data plane for devices, recordings, commands, and events. Remote MCP uses browser OAuth/PKCE and never accepts the local operator credential.

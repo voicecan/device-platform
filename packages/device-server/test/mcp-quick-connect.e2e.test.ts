@@ -71,8 +71,9 @@ test('quick MCP creates a reusable least-privilege local configuration without e
   assert.deepEqual(audioPlan.scopes, [...plan.scopes, 'recordings:download_link:create', 'recordings:download_link:revoke']);
   assert.equal(audio.body.includes('vcd_app_'), false);
   const openclaw = JSON.parse(audioPlan.configuration).mcp.servers.voicecan_elio_recordings;
-  assert.equal(openclaw.transport, 'stdio');
+  assert.equal(openclaw.transport, undefined);
   assert.equal(openclaw.enabled, true);
+  assert.equal(typeof openclaw.command, 'string');
   assert.ok(audioPlan.install_command.startsWith("'openclaw' 'mcp' 'add'"));
   assert.ok(audioPlan.verify_command.includes("'--probe'"));
   assert.equal(audioPlan.installation, null, 'generated configuration is not a client installation');

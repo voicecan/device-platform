@@ -51,7 +51,7 @@ const zhCN: Readonly<Record<string, string>> = {
   "Run in Terminal": "在电脑终端执行",
   "Check from OpenClaw": "在 OpenClaw 中检查连接",
   "Copy verification command": "复制检查命令",
-  "If your version does not recognize “mcp”, update OpenClaw or use its supported MCP integration. A successful probe lists available tools; it does not transcribe audio.": "如果当前版本不识别 mcp 命令，请更新 OpenClaw 或使用该版本支持的 MCP 接入方式。检查通过后会列出工具，并不会自动转写音频。",
+  "Stop the OpenClaw Gateway before add, login, or doctor --probe. Those commands need an exclusive config lock and fail while the Gateway is running. Start it again after the check. A successful probe lists tools; it does not transcribe audio.": "执行 add、login 或 doctor --probe 前先停止 OpenClaw Gateway，否则会因独占配置锁失败。检查完成后再启动。检查通过只说明工具可列出，不会转写音频。",
   "View configuration JSON / TOML": "查看配置文件内容",
   "Merge this server entry into your existing configuration; do not replace unrelated settings.": "将这个服务器条目合并到现有配置，保留其他设置。",
   "Then try this in your AI tool": "接下来，试着对你的 AI 工具说",

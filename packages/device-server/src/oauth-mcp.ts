@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { API_VERSION, OPEN_PLATFORM_PERMISSIONS } from '@voicecan/contracts';
+import { API_VERSION, OPEN_PLATFORM_PERMISSIONS, OPEN_PLATFORM_PERMISSION_TEMPLATES } from '@voicecan/contracts';
 import { AccessDeniedError, type AccessContext } from '@voicecan/access-control';
 import type { ServerConfig } from './config.js';
 import type { Database } from './database.js';
@@ -86,12 +86,12 @@ async function callTool(service: OpenPlatformService, context: AccessContext, na
   if (name === 'voicecan.devices.list') return service.listDevices(context);
   if (name === 'voicecan.devices.get') return service.getDevice(context, required(args, 'device_id', 100));
   if (name === 'voicecan.devices.get_capabilities') return service.getDeviceCapabilities(context, required(args, 'device_id', 100));
-  if (name === 'voicecan.devices.sync') return service.syncDevice(context, required(args, 'device_id', 100), required(args, 'idempotency_key', 200));
+  if (name === 'voicecan.devices.sync') { required(args, 'reason', 256); return service.syncDevice(context, required(args, 'device_id', 100), required(args, 'idempotency_key', 200)); }
   if (name === 'voicecan.commands.get') return service.getCommand(context, required(args, 'command_id', 100));
   if (name === 'voicecan.recordings.search') return service.listRecordings(context, { ...args, limit: Math.min(Number(args.limit ?? 20), 50) });
   if (name === 'voicecan.recordings.get') return service.getRecording(context, required(args, 'recording_id', 100));
-  if (name === 'voicecan.recordings.create_download_link') return service.createDownloadLink(context, required(args, 'recording_id', 100), { ...(args.ttl_seconds === undefined ? {} : { ttlSeconds: Number(args.ttl_seconds) }), purpose: 'download', idempotencyKey: required(args, 'idempotency_key', 200) });
-  if (name === 'voicecan.recordings.revoke_download_link') return service.revokeDownloadLink(context, required(args, 'grant_id', 120));
+  if (name === 'voicecan.recordings.create_download_link') { required(args, 'reason', 256); return service.createDownloadLink(context, required(args, 'recording_id', 100), { ...(args.ttl_seconds === undefined ? {} : { ttlSeconds: Number(args.ttl_seconds) }), purpose: 'download', idempotencyKey: required(args, 'idempotency_key', 200) }); }
+  if (name === 'voicecan.recordings.revoke_download_link') { required(args, 'reason', 256); return service.revokeDownloadLink(context, required(args, 'grant_id', 120)); }
   if (name === 'voicecan.events.list') return service.listEvents(context, { ...args, limit: Math.min(Number(args.limit ?? 20), 50) });
   throw new OpenPlatformError(404, 'MCP_TOOL_NOT_FOUND', 'Tool not found');
 }
@@ -154,7 +154,7 @@ export function registerOAuthMcpRoutes(dependencies: Dependencies): void {
       const applicationType = body.application_type === undefined ? undefined : dcrString(body, 'application_type', 32);
       if (applicationType !== undefined && !['native', 'web'].includes(applicationType)) throw new DynamicClientRegistrationError(400, 'invalid_client_metadata', 'application_type must be native or web');
       const clientName = dcrString(body, 'client_name', 120) ?? 'Dynamic MCP client';
-      const requestedScope = body.scope === undefined ? protectedMetadata.scopes_supported : scopeList(dcrString(body, 'scope', 1000)!);
+      const requestedScope = body.scope === undefined ? [...OPEN_PLATFORM_PERMISSION_TEMPLATES.metadata_reader] : scopeList(dcrString(body, 'scope', 1000)!);
       const scopes = validScopeSubset(requestedScope, protectedMetadata.scopes_supported);
       const metadata = { redirect_uris: redirects, token_endpoint_auth_method: 'none', grant_types: grantTypes, response_types: responseTypes, client_name: clientName, scope: scopes.join(' '), ...(applicationType ? { application_type: applicationType } : {}) };
       const timestamp = now(); const source = tokenHash(request.ip, config.groupTokenPepper).slice(0, 32); const requestHash = createHash('sha256').update(JSON.stringify(metadata)).digest('hex');

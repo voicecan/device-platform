@@ -18,6 +18,8 @@ import { applyProfileEnvironment, defaultProfileConfig, ensureProfileConfig, get
 import { installService, serviceLogCommand, serviceStatus, startService, stopService, uninstallService } from './service-manager.js';
 import { localAdminRequest } from './local-admin-client.js';
 import { runAdminMcp } from './admin-mcp.js';
+import { clientConfiguration, quickMcpClients, type QuickMcpClient } from './mcp-client-config.js';
+import { runLocalCredentialMcp } from './mcp-local-runner.js';
 
 const usage = `Voicecan Device Platform
 
@@ -319,36 +321,46 @@ async function appCommand(args: string[], config: Awaited<ReturnType<typeof load
   throw new CliError('UNKNOWN_APP_COMMAND', 'Usage: app list|create|credential create', 3);
 }
 
-function mcpClientConfig(config: Awaited<ReturnType<typeof loadConfig>>, profile: string, secretRef: string): Record<string, unknown> {
+function selectedQuickClient(args: string[]): QuickMcpClient {
+  const client = flagValue(args, '--client') ?? 'generic';
+  if (!(quickMcpClients as readonly string[]).includes(client)) throw new CliError('MCP_CLIENT_UNSUPPORTED', 'Supported MCP clients: openclaw, codex, claude, workbuddy, generic', 3);
+  return client as QuickMcpClient;
+}
+
+function mcpHostPlan(profile: string, secretRef: string, client: QuickMcpClient) {
   const command = resolve(profilePaths(profile).serviceDir, process.platform === 'win32' ? 'voicecan-device.cmd' : 'voicecan-device');
-  return { mcpServers: { voicecan: { command, args: ['mcp', 'run', '--profile', profile, '--credential-ref', secretRef], env: { VOICECAN_DEVICE_SERVER_URL: config.publicBaseUrl } } } };
+  const generated = clientConfiguration(client, { command, args: ['mcp', 'run', '--profile', profile, '--credential-ref', secretRef] }, 'voicecan');
+  const warnings = client === 'openclaw' ? ['Stop the OpenClaw Gateway before openclaw mcp add or openclaw mcp doctor --probe. Those commands take an exclusive config lock.'] : [];
+  return { ...generated, client, warnings };
 }
 
 async function mcpCommand(args: string[], config: Awaited<ReturnType<typeof loadConfig>>, profile: string, mode: OutputMode): Promise<void> {
   const operation = args[1] ?? 'print-config';
   if (operation === 'run') {
     const secretRef = flagValue(args, '--credential-ref'); if (!secretRef) throw new CliError('CREDENTIAL_REF_REQUIRED', 'mcp run requires --credential-ref', 3);
-    const token = (await readFile(resolve(secretRef), 'utf8')).trim(); if (!token.startsWith('vcd_app_')) throw new CliError('CREDENTIAL_REF_INVALID', 'Credential reference does not contain an Application token', 4);
-    const child = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['--yes', '@voicecan/device-mcp@0.1.0-preview.0', 'stdio'], { stdio: 'inherit', windowsHide: true, env: { ...process.env, VOICECAN_DEVICE_SERVER_URL: config.publicBaseUrl, VOICECAN_APPLICATION_TOKEN: token } });
-    const exitCode = await new Promise<number>((resolveExit, reject) => { child.once('error', reject); child.once('exit', (code) => resolveExit(code ?? 1)); });
-    if (exitCode !== 0) throw new CliError('MCP_SERVER_EXITED', `MCP server exited with code ${exitCode}`, exitCode);
+    try { await runLocalCredentialMcp(resolve(secretRef), config.publicBaseUrl); }
+    catch { delete process.env.VOICECAN_APPLICATION_TOKEN; throw new CliError('MCP_SERVER_EXITED', 'MCP server could not start. Check the local service and credential file.', 1); }
     return;
   }
   if (operation === 'print-config') {
     const secretRef = flagValue(args, '--credential-ref') ?? '<owner-only-credential-file>';
-    const value = mcpClientConfig(config, profile, secretRef);
-    writeSuccess({ command: 'mcp.print-config', profile, data: value, warnings: secretRef.startsWith('<') ? ['Create an mcp_stdio_token credential first and pass --credential-ref.'] : [], next_actions: [] }, mode, `${JSON.stringify(value, null, 2)}\n`);
+    const client = selectedQuickClient(args);
+    const plan = mcpHostPlan(profile, secretRef, client);
+    const warnings = secretRef.startsWith('<') ? ['Create an mcp_stdio_token credential first and pass --credential-ref.', ...plan.warnings] : plan.warnings;
+    writeSuccess({ command: 'mcp.print-config', profile, data: plan, warnings, next_actions: [] }, mode, `${plan.configuration}\n${plan.install_command ? `${plan.install_command}\n` : ''}`);
     return;
   }
   if (operation === 'connect') {
     const applicationId = flagValue(args, '--application'); if (!applicationId) throw new CliError('APPLICATION_ID_REQUIRED', 'mcp connect requires --application', 3);
-    if (hasFlag(args, '--dry-run')) { writeSuccess({ command: 'mcp.connect', profile, data: { application_id: applicationId, credential_kind: 'mcp_stdio_token', client: flagValue(args, '--client') ?? 'generic', would_store_secret: true }, warnings: [], next_actions: [] }, mode, `Would create an MCP credential for ${applicationId} and return a secret-free client config.`); return; }
+    const client = selectedQuickClient(args);
+    if (hasFlag(args, '--dry-run')) { writeSuccess({ command: 'mcp.connect', profile, data: { application_id: applicationId, credential_kind: 'mcp_stdio_token', client, would_store_secret: true }, warnings: [], next_actions: [] }, mode, `Would create an MCP credential for ${applicationId} and return a secret-free client config.`); return; }
     const requestedScopes = flagValue(args, '--scopes');
     const credential = await localAdminRequest<Record<string, unknown>>(config, `/open-platform/applications/${encodeURIComponent(applicationId)}/credentials`, { method: 'POST', body: JSON.stringify({ kind: 'mcp_stdio_token', name: flagValue(args, '--name') ?? 'Local AI MCP', ...(requestedScopes ? { scopes: commaList(requestedScopes) } : {}), allowed_ip_cidrs: ['127.0.0.1/32', '::1/128'], reason: flagValue(args, '--reason') ?? 'Connected by local Voicecan CLI' }) });
     const token = String(credential.token ?? ''); if (!token.startsWith('vcd_app_')) throw new CliError('CREDENTIAL_RESPONSE_INVALID', 'Server did not return a valid one-time credential', 6);
     const secretDir = resolve(profilePaths(profile).root, 'secrets'); await mkdir(secretDir, { recursive: true, mode: 0o700 }); const secretRef = resolve(secretDir, `${String(credential.id)}.token`); await writeFile(secretRef, `${token}\n`, { mode: 0o600, flag: 'wx' });
-    const value = { application_id: applicationId, credential_id: credential.id, secret_ref: secretRef, client: flagValue(args, '--client') ?? 'generic', config: mcpClientConfig(config, profile, secretRef) };
-    writeSuccess({ command: 'mcp.connect', profile, data: value, warnings: [], next_actions: [{ type: 'user_input', label: 'Approve adding this MCP server to your AI client', requires_user: true }] }, mode, `${JSON.stringify(value.config, null, 2)}\nCredential secret: ${secretRef}\n`);
+    const plan = mcpHostPlan(profile, secretRef, client);
+    const value = { application_id: applicationId, credential_id: credential.id, secret_ref: secretRef, ...plan };
+    writeSuccess({ command: 'mcp.connect', profile, data: value, warnings: plan.warnings, next_actions: [{ type: 'user_input', label: 'Approve adding this MCP server to your AI client', requires_user: true }] }, mode, `${plan.configuration}\n${plan.install_command ? `${plan.install_command}\n` : ''}Credential file: ${secretRef}\n`);
     return;
   }
   throw new CliError('UNKNOWN_MCP_COMMAND', 'Usage: mcp connect|print-config|run', 3);

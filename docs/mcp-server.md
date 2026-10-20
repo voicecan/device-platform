@@ -36,7 +36,7 @@ The recommended CLI flow creates the `mcp_stdio_token`, saves it as an owner-onl
 voicecan-device mcp connect --application <application-id> --client generic --output json
 ```
 
-The resulting Host entry invokes `voicecan-device mcp run --credential-ref <path>`. For an external secret manager, the equivalent direct configuration is:
+`voicecan-device mcp connect --client` accepts `generic`, `codex`, `claude`, `openclaw`, or `workbuddy` and returns that client's configuration. OpenClaw receives `mcp.servers` with `command` and `args`. Codex receives a `[mcp_servers.<name>]` TOML table. The host entry invokes `voicecan-device mcp run --credential-ref <path>`. `mcp run` reads the owner-only file in-process and does not call `npx` or place the token on a command line. For an external secret manager, the equivalent direct configuration is:
 
 ```json
 {
@@ -61,7 +61,7 @@ The canonical resource is `https://device.example.com/mcp`. Discovery endpoints 
 
 Remote MCP supports both administrator-created clients and RFC 7591 Dynamic Client Registration. A Host can register by posting JSON client metadata to the published `registration_endpoint`; only public clients (`token_endpoint_auth_method=none`), Authorization Code, optional Refresh Token, the `code` response type, and HTTPS or loopback HTTP redirect URIs are accepted. Registrations are rate-limited and expire after one hour if authorization is not completed.
 
-Dynamic registration does not grant Application or Device access. On the consent page, the signed-in user selects an accessible Application whose `mcp_remote` channel and permissions cover every requested scope. Approval atomically binds the client to that Application. All clients then require Authorization Code + S256 PKCE, explicit consent, exact registered redirect matching, and `resource=<canonical MCP URL>`. Access tokens are short-lived and audience-bound. Refresh tokens rotate on every use; reuse revokes the entire family and raises a security alert. `vcd_app_` API Tokens are deliberately rejected by `/mcp`.
+Dynamic registration does not grant Application or Device access. A registration that omits `scope` is limited to the metadata reader scopes (`devices:read`, `recordings:read`, `events:read`); it does not register device control or recording download. On the consent page, the signed-in user selects an accessible Application whose `mcp_remote` channel and permissions cover every requested scope. Approval atomically binds the client to that Application. A request that includes a scope the Application lacks is rejected rather than silently reduced. All clients then require Authorization Code + S256 PKCE, explicit consent, exact registered redirect matching, and `resource=<canonical MCP URL>`. Access tokens are short-lived and audience-bound. Refresh tokens rotate on every use; reuse revokes the entire family and raises a security alert. `vcd_app_` API Tokens are deliberately rejected by `/mcp`.
 
 The endpoint is stateless: `POST /mcp` carries one JSON-RPC request per HTTP request, `Origin` is validated when present, and no bearer token passthrough is implemented. It supports the current `2026-07-28` per-request metadata model and the transitional `2025-11-25` initialization model.
 

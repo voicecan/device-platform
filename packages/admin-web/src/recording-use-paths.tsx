@@ -14,14 +14,37 @@ export function RecordingUsePaths({method,onChange,onCreateApplication}:{method:
     {method==='ai'?<p className="hint">MCP 是让 AI 工具读取录音的连接方式。只需配置一次；转写和内容生成在你选择的工具中完成。</p>:null}
   </section>;
 }
-export function RemoteMcpGuide({client,url}:{client:string;url:string}) {
+const quote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+const metadataScopes = ['devices:read', 'recordings:read', 'events:read'];
+const recordingScopes = [...metadataScopes, 'recordings:download_link:create', 'recordings:download_link:revoke'];
+export function RemoteMcpGuide({client,url,access='metadata',onAccess,localBlocked=false}:{client:string;url:string;access?:string;onAccess?:(value:string)=>void;localBlocked?:boolean}) {
   const [notice,setNotice]=useState('');
   let usable=false;
-  try {const parsed=new URL(url);usable=parsed.protocol==='https:'&&!['localhost','127.0.0.1','[::1]'].includes(parsed.hostname);}catch{/* Wait for server metadata. */}
-  return <section className="ai-step ai-remote"><h3>连接云端或另一台电脑上的平台</h3><p>在运行 AI 工具的电脑上添加下面的服务地址，随后登录平台、选择设备分组并确认权限。无需复制这台电脑上的文件或管理员密码。</p>
+  try {const parsed=new URL(url);usable=parsed.protocol==='https:'&&!['localhost','127.0.0.1','[::1]','::1'].includes(parsed.hostname);}catch{/* Wait for server metadata. */}
+  const scopes = access === 'recordings' ? recordingScopes : metadataScopes;
+  const name = access === 'recordings' ? 'voicecan_recordings' : 'voicecan';
+  const scopeText = scopes.join(' ');
+  const openclawAdd = ['openclaw', 'mcp', 'add', name, '--url', url, '--transport', 'streamable-http', '--auth', 'oauth', '--oauth-scope', scopeText].map(quote).join(' ');
+  const openclawLogin = ['openclaw', 'mcp', 'login', name].map(quote).join(' ');
+  const openclawDoctor = ['openclaw', 'mcp', 'doctor', name, '--probe'].map(quote).join(' ');
+  const codexConfig = `[mcp_servers.${name}]\nurl = ${JSON.stringify(url)}\nscopes = ${JSON.stringify(scopes)}\n`;
+  const codexLogin = ['codex', 'mcp', 'login', name, '--scopes', scopes.join(',')].map(quote).join(' ');
+  const copy = (value: string, ok: string) => { void navigator.clipboard.writeText(value).then(() => setNotice(ok), () => setNotice('复制失败，请手动复制。')); };
+  return <section className="ai-step ai-remote"><h3>{localBlocked ? '这台电脑暂时不能生成本机 stdio 配置' : '连接另一台电脑或云端上的 AI 工具'}</h3><p>{localBlocked ? '当前安装没有可用的本机运行器，或公开地址不是回环地址。不要把本机凭据文件或 stdio 命令复制到其他电脑。请改用下面的 HTTPS OAuth 流程。' : '在运行 AI 工具的电脑上添加远程 MCP。不要复制平台电脑上的凭据文件、stdio 命令或管理员密码。'}</p>
+    <div className="ai-access-options"><label><input type="radio" name="remote-ai-access" checked={access!=='recordings'} onChange={()=>onAccess?.('metadata')}/><span><strong>仅查看录音列表</strong><small>请求 devices:read、recordings:read、events:read。</small></span></label><label><input type="radio" name="remote-ai-access" checked={access==='recordings'} onChange={()=>onAccess?.('recordings')}/><span><strong>读取录音内容</strong><small>额外请求临时下载链接的创建和撤销权限。</small></span></label></div>
     <FieldValue value={url||'正在读取服务器地址…'} />
-    {!usable?<div role="status" className="inline-alert"><strong>先让服务器提供可访问的 HTTPS 地址</strong><p>当前地址仅适合本机或尚未配置 HTTPS，不能直接作为云端接入地址。请服务器管理员配置域名、HTTPS 和平台公开地址，再回到本页。开放一个端口不代表已经能安全连接。</p><details><summary>服务器管理员配置说明</summary><p>将 VOICECAN_PUBLIC_BASE_URL 设置为平台实际的 HTTPS 入口，并配置反向代理转发 /mcp、/oauth 和 /.well-known 路径。重启服务后本页会显示新地址。远程电脑还需能访问该地址。</p></details></div>:<><Button kind="secondary" onClick={()=>{void navigator.clipboard.writeText(url).then(()=>setNotice('服务地址已复制。'),()=>setNotice('复制失败，请手动复制地址。'));}}>复制 MCP 服务地址</Button><ol><li>{client==='workbuddy'?'在 WorkBuddy 的设置或插件中打开 MCP 服务器，添加远程服务。':client==='openclaw'?'在 OpenClaw 的 Settings → MCP 中添加服务器。':'在工具的 MCP 设置中添加远程服务器。'}</li><li>填入上方地址，传输方式选择 Streamable HTTP，认证选择 OAuth。</li><li>按提示打开授权页面，登录平台，选择设备分组。要处理音频，请确认授权包含录音下载权限。</li><li>回到工具检查连接与可用工具，再让它列出录音。只有工具实际读取成功，才算接入完成。</li></ol><p className="hint">地址已配置不代表网络已验证；连接状态请以 AI 工具的实际检测为准。若版本不支持远程 OAuth，可升级客户端，或先下载录音使用。</p></>}
-    {['workbuddy','openclaw'].includes(client)?<a href={client==='workbuddy'?'https://www.workbuddy.ai/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/MCP-Guide':'https://docs.openclaw.ai/tools/mcp'} target="_blank" rel="noopener noreferrer">{client==='workbuddy'?'WorkBuddy': 'OpenClaw'} 官方接入说明 ↗</a>:null}<p role="status">{notice}</p>
+    {!usable?<div role="status" className="inline-alert"><strong>先让服务器提供可访问的 HTTPS 地址</strong><p>当前地址仅适合本机或尚未配置 HTTPS，不能直接作为云端接入地址。请服务器管理员配置域名、HTTPS 和平台公开地址，再回到本页。开放一个端口不代表已经能安全连接。</p><details><summary>服务器管理员配置说明</summary><p>将 VOICECAN_PUBLIC_BASE_URL 设置为平台实际的 HTTPS 入口，并配置反向代理转发 /mcp、/oauth 和 /.well-known 路径。重启服务后本页会显示新地址。远程电脑还需能访问该地址。</p></details></div>:<><Button kind="secondary" onClick={()=>copy(url, '服务地址已复制。')}>复制 MCP 服务地址</Button>
+      <ol><li>先在连接管理中准备一个已启用「远程 MCP」通道的应用，权限至少包含：{scopeText}。授权页要选择的是这个应用，不是设备组。</li><li>{client==='openclaw'?'在运行 OpenClaw 的电脑上先停止 Gateway，再执行添加和登录。Gateway 运行时，add、login 和 doctor --probe 会因独占配置锁而失败。':client==='codex'?'把下面的 TOML 合并进 Codex 配置，再执行登录。不要用 codex mcp add --url：它会立刻用服务器公布的全部权限发起 OAuth。也不要再把 oauth_resource 设成同一个 MCP 地址，当前 Codex 会因此重复发送 resource。':'在工具中添加远程服务器，传输方式选择 Streamable HTTP，认证选择 OAuth，并只请求上面列出的权限。'}</li><li>浏览器打开授权页后登录平台，选择具备这些权限的应用并确认。应用若缺少其中任一权限，授权会被拒绝，不会自动缩小范围。</li><li>回到工具检查连接。只有工具实际列出录音，才算接入完成。</li></ol>
+      {client==='openclaw'?<>
+        <h4>在 OpenClaw 终端执行</h4><pre><code>{`${openclawAdd}\n${openclawLogin}\n${openclawDoctor}`}</code></pre><Button kind="secondary" onClick={()=>copy(`${openclawAdd}\n${openclawLogin}\n${openclawDoctor}`, 'OpenClaw 命令已复制。')}>复制 OpenClaw 命令</Button>
+        <p className="hint">检查结束后再启动 Gateway。doctor --probe 只证明工具可列出，不会转写音频。</p>
+      </>:null}
+      {client==='codex'?<>
+        <h4>合并到 Codex 配置</h4><pre><code>{codexConfig}</code></pre><Button kind="secondary" onClick={()=>copy(codexConfig, 'Codex 配置已复制。')}>复制 Codex 配置</Button>
+        <h4>然后登录</h4><pre><code>{codexLogin}</code></pre><Button kind="secondary" onClick={()=>copy(codexLogin, 'Codex 登录命令已复制。')}>复制登录命令</Button>
+      </>:null}
+      <p className="hint">地址已配置不代表网络已验证。要读取音频，请把访问范围改为录音读取，并让应用同时具备 recordings:download_link:create 和 recordings:download_link:revoke。</p></>}
+    {['workbuddy','openclaw'].includes(client)?<a href={client==='workbuddy'?'https://www.workbuddy.ai/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/MCP-Guide':'https://docs.openclaw.ai/cli/mcp/registry'} target="_blank" rel="noopener noreferrer">{client==='workbuddy'?'WorkBuddy': 'OpenClaw'} 官方接入说明 ↗</a>:null}<p role="status">{notice}</p>
   </section>;
 }
 function FieldValue({value}:{value:string}) {return <pre aria-label="MCP 服务地址"><code>{value}</code></pre>;}
