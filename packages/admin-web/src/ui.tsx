@@ -5,7 +5,7 @@ import { api, errorMessage } from './api.js';
 
 export type Translate = (message: string, values?: Readonly<Record<string, string | number>>) => string;
 
-type IconName = 'overview' | 'device' | 'file' | 'group' | 'user' | 'token' | 'webhook' | 'pulse' | 'storage' | 'battery' | 'wifi' | 'microphone' | 'shield' | 'clock' | 'server' | 'audit' | 'code' | 'provision' | 'transfer' | 'menu' | 'close' | 'refresh' | 'arrow' | 'check' | 'copy' | 'logout' | 'globe';
+type IconName = 'overview' | 'device' | 'file' | 'group' | 'user' | 'token' | 'webhook' | 'pulse' | 'storage' | 'battery' | 'wifi' | 'microphone' | 'shield' | 'clock' | 'server' | 'audit' | 'code' | 'provision' | 'transfer' | 'menu' | 'close' | 'refresh' | 'arrow' | 'check' | 'copy' | 'logout' | 'globe' | 'edit';
 
 const iconPaths: Record<IconName, ReactNode> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
@@ -35,6 +35,7 @@ const iconPaths: Record<IconName, ReactNode> = {
   copy: <><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></>,
   logout: <><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M14 8l4 4-4 4M8 12h10"/></>,
   globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></>,
+  edit: <><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="m13.5 6.5 3 3"/></>,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

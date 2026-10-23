@@ -127,11 +127,23 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .connection-strip dd { margin: 4px 0 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .sync-trigger { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
 .sync-trigger small { max-width: 180px; margin: 0; text-align: center; }
-.sync-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
-.sync-metric { border: 1px solid var(--vc-border); border-radius: 14px; padding: 14px 15px; background: #fff; }
+.sync-overview { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 9px; }
+.sync-progress-panel { border: 1px solid var(--vc-border); border-radius: 14px; padding: 14px 15px; background: #fff; }
+.sync-progress-header, .sync-progress-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.sync-progress-header { margin-bottom: 9px; }
+.sync-progress-header span, .sync-progress-label span { color: var(--vc-muted); font-size: 10px; }
+.sync-progress-header strong { font-size: 23px; font-weight: 620; }
+.sync-progress-item { display: grid; gap: 5px; }
+.sync-progress-item + .sync-progress-item { margin-top: 9px; }
+.sync-progress-label strong { font-size: 11px; }
+.sync-progress-track { height: 8px; overflow: hidden; border-radius: 999px; background: var(--vc-border); }
+.sync-progress-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #39a16d, var(--vc-primary)); transition: width .35s ease; }
+.sync-progress-item:last-child .sync-progress-track > span { background: linear-gradient(90deg, #4699e5, #696bd8); }
+.sync-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.sync-metric { display: flex; min-height: 92px; flex-direction: column; justify-content: center; border: 1px solid var(--vc-border); border-radius: 14px; padding: 14px 15px; background: #fff; }
 .sync-metric span, .sync-metric strong { display: block; }
 .sync-metric span { color: var(--vc-muted); font-size: 10px; }
-.sync-metric strong { margin-top: 3px; font-size: 23px; font-weight: 620; }
+.sync-metric strong { margin-top: 3px; font-size: 28px; font-weight: 620; line-height: 1.05; }
 .sync-metric-ready { border-color: #d3e3da; background: #f7fbf8; }
 .sync-metric-syncing { border-color: #e9ddc8; background: #fffaf2; }
 .sync-metric-failed { border-color: #ead4d2; background: #fff8f7; }
@@ -143,6 +155,13 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .recording-sync-card > header { display: flex; align-items: flex-end; justify-content: space-between; padding: 18px 18px 12px; }
 .recording-sync-card h3 { margin: 2px 0 0; font-size: 17px; }
 .recording-sync-card > header > span { color: var(--vc-muted); font-size: 11px; }
+.sync-table { table-layout: fixed; min-width: 760px; }
+.sync-col-status { width: 11%; }
+.sync-col-session { width: 14%; }
+.sync-col-size { width: 10%; }
+.sync-col-timestamp { width: 20%; }
+.sync-col-upload { width: 20%; }
+.sync-col-actions { width: 25%; }
 .sync-table td:nth-child(2) strong, .sync-table td:nth-child(2) small { display: block; }
 .sync-table td:nth-child(2) small { max-width: 190px; margin-top: 3px; overflow: hidden; color: var(--vc-muted); font-size: 9px; text-overflow: ellipsis; }
 .sync-error-cell { min-width: 230px; color: #725148; font-size: 11px; white-space: normal !important; }
@@ -372,7 +391,8 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .grant-code span { color: var(--vc-muted); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .grant-code code { overflow: auto; color: #405d66; font-size: 10px; white-space: nowrap; }
 .handoff-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 20px; }
-.sync-row-actions { display: flex; align-items: center; gap: 8px; }
+.sync-row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sync-row-actions .button { min-height: 30px; padding: 5px 9px; font-size: 10px; }
 .inline-details { position: relative; overflow: visible; }
 .inline-details dl { position: absolute; z-index: 5; right: 0; width: 310px; margin: 6px 0 0; border: 1px solid var(--vc-border); border-radius: 10px; padding: 10px; background: #fff; box-shadow: var(--vc-shadow-soft); }
 .inline-details dt { color: var(--vc-muted); font-size: 8px; }
@@ -598,6 +618,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
   .auth-brand { display: none; }
   .auth-content { min-height: 100vh; }
   .device-workspace-toolbar, .sync-control-card { align-items: stretch; flex-direction: column; }
+  .sync-overview { grid-template-columns: minmax(0, 1fr); }
   .sync-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .device-lower-grid { grid-template-columns: 1fr; }
   .storage-overview-grid, .storage-type-grid { grid-template-columns: 1fr; }
@@ -662,6 +683,69 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .capability-panel > header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .capability-panel > header h2 { margin: 3px 0 0; }
 .capability-panel > header select { min-width: 220px; }
+
+.device-status-live .device-status-grid { align-items: stretch; }
+.device-status-live .device-control-stack { display: flex; height: 100%; flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
+.device-status-live .device-control-stack > header, .device-status-live .device-control-stack > .device-control-actions { flex: 0 0 auto; }
+.device-status-live .device-control-stack > .device-control-actions:last-child { margin-top: auto; }
+.device-status-live .device-control-stack .device-control-actions .button { min-height: 34px; height: 34px; flex: 1 1 110px; padding: 5px 10px; font-size: 11px; }
+.device-status-live .device-control-stack .device-control-actions .select { flex: 1 1 150px; }
+.device-status-live .device-control-stack .device-control-actions .select .select-trigger { min-height: 34px; }
+.device-status-live .device-control-stack .device-auto-shutdown-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.device-status-live .device-control-stack .device-auto-shutdown-actions > * { width: 100%; min-width: 0; }
+.device-status-live .device-status-grid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 9px; }
+.admin-linear .device-status-live .device-status-grid { gap: 12px; }
+@media (max-width: 980px) { .device-status-live .device-status-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) { .device-status-live .device-control-stack .device-auto-shutdown-actions { grid-template-columns: minmax(0, 1fr); } }
+
+.device-vital-battery { --battery-color: var(--vc-muted); }
+.device-vital-battery.is-charging { --battery-color: #2f7fb3; }
+.device-vital-battery.is-full { --battery-color: #3f8f6b; }
+.device-vital-battery.is-low { --battery-color: #b94b48; }
+.device-vital-battery.is-normal { --battery-color: var(--vc-primary); }
+.device-vital-battery .device-vital-heading strong { color: var(--battery-color); }
+.device-vital-battery .device-meter > span { background: var(--battery-color); }
+.device-protocol-status dd small { display: block; margin-top: 3px; color: var(--vc-muted); font-size: 10px; font-weight: 400; }
+.device-status-live .device-wifi-form { margin-top: 2px; }
+
+.device-name-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.device-name-heading h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-button { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border: 1px solid var(--vc-border); border-radius: 8px; background: var(--vc-surface); color: var(--vc-muted); cursor: pointer; }
+.icon-button:hover { border-color: var(--vc-border-strong); background: var(--vc-surface-subtle); color: var(--vc-text); }
+.device-name-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 2px 0 4px; }
+.device-status-summary > header { align-items: center; }
+.device-summary-grid > div > small { color: var(--vc-muted); font-size: 11px; font-weight: 400; }
+.device-name-editor input { width: min(360px, 100%); min-height: 36px; border: 1px solid var(--vc-border-strong); border-radius: 8px; padding: 7px 10px; background: var(--vc-surface); color: var(--vc-text); }
+.device-status-summary { gap: 14px; }
+.device-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.device-summary-grid > div { display: grid; align-content: start; gap: 4px; min-width: 0; border: 1px solid var(--vc-border); border-radius: 10px; padding: 11px 12px; background: var(--vc-surface-subtle); }
+.device-summary-grid dt { display: flex; align-items: center; gap: 5px; color: var(--vc-muted); font-size: 10px; font-weight: 500; }
+.device-summary-grid dd { display: flex; min-width: 0; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 600; }
+.device-summary-grid dd code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.device-summary-grid dd small { color: var(--vc-muted); font-size: 11px; font-weight: 400; }
+.device-summary-grid .device-meter { margin-top: 4px; }
+.device-connection { flex-wrap: wrap; }
+.device-connection small { flex-basis: 100%; }
+.device-connection.is-online { color: var(--vc-success); }
+.device-connection.is-offline { color: var(--vc-danger); }
+.device-summary-battery { --battery-color: var(--vc-muted); }
+.device-summary-battery.is-charging { --battery-color: #2f7fb3; }
+.device-summary-battery.is-full { --battery-color: #3f8f6b; }
+.device-summary-battery.is-low { --battery-color: #b94b48; }
+.device-summary-battery.is-normal { --battery-color: var(--vc-primary); }
+.device-summary-battery strong { color: var(--battery-color); font-size: 20px; line-height: 1; }
+.device-summary-battery .device-meter > span { background: var(--battery-color); }
+.device-summary-wifi { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.device-summary-wifi dd { align-items: center; }
+.device-summary-wifi .button { min-height: 28px; padding: 4px 8px; font-size: 10px; }
+.device-wifi-form { display: grid; gap: 12px; border-top: 1px solid var(--vc-border); padding-top: 14px; }
+.device-wifi-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.device-controls-disclosure { border-top: 1px solid var(--vc-border); padding-top: 10px; }
+.device-controls-disclosure > summary { cursor: pointer; color: var(--vc-muted); font-size: 12px; font-weight: 600; }
+.device-controls-disclosure .device-control-actions { margin-top: 8px; }
+@media (max-width: 1100px) { .device-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .device-summary-grid, .device-wifi-fields { grid-template-columns: minmax(0, 1fr); } }
+
 .device-status-card{display:grid;gap:18px;padding:22px;border:1px solid var(--vc-border);border-radius:20px;background:var(--vc-surface)}
 .device-status-card>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .device-status-card h3{margin:3px 0 0}
@@ -837,6 +921,8 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .admin-linear .firmware-card p, .admin-linear .device-network-card header p { font-size: 12px; line-height: 1.7; }
 .admin-linear .firmware-card h3, .admin-linear .device-status-card h3, .admin-linear .device-network-card h3, .admin-linear .recording-sync-card h3, .admin-linear .sync-control-card h3 { font-size: 16px; font-weight: 600; margin: 4px 0 8px; }
 .admin-linear .device-status-explanation { margin: -8px 0 0; color: var(--vc-muted); font-size: 12px; text-wrap: pretty; }
+.admin-linear .device-summary-grid > div { border-radius: 8px; background: var(--vc-surface-subtle); }
+.admin-linear .device-summary-battery.is-normal { --battery-color: var(--vc-primary); }
 .admin-linear .device-vital, .admin-linear .device-protocol-status, .admin-linear .device-control-stack, .admin-linear .network-live-state, .admin-linear .device-network-grid form, .admin-linear .firmware-repository-card, .admin-linear .firmware-upload-grid, .admin-linear .device-edit-card { border-radius: 8px; background: var(--vc-surface-subtle); }
 .admin-linear .device-vital { box-shadow: none; }
 .admin-linear .device-vital-icon, .admin-linear .network-state-icon { color: var(--vc-muted); background: var(--vc-surface); border-radius: 6px; }
@@ -855,10 +941,14 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 .admin-linear .credential-backup-warning strong { color: var(--vc-danger); }
 .admin-linear .credential-backup-warning small { color: #8c403c; }
 .admin-linear .credential-backup-mark { background: color-mix(in srgb, var(--vc-danger) 35%, var(--vc-border)); color: var(--vc-danger); }
-.admin-linear .sync-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; border: 1px solid var(--vc-border); border-radius: 12px; background: var(--vc-surface); overflow: hidden; }
+.admin-linear .sync-overview { gap: 12px; }
+.admin-linear .sync-progress-panel { border-radius: 12px; background: var(--vc-surface); }
+.admin-linear .sync-progress-track { background: var(--vc-border); }
+.admin-linear .sync-progress-track > span { background: var(--vc-primary); }
+.admin-linear .sync-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border: 1px solid var(--vc-border); border-radius: 12px; background: var(--vc-surface); overflow: hidden; }
 .admin-linear .sync-metric { padding: 16px; border: 0; border-right: 1px solid var(--vc-border); border-radius: 0; background: transparent; box-shadow: none; }
 .admin-linear .sync-metric:last-child { border-right: 0; }
-.admin-linear .sync-metric strong { font-size: 22px; font-weight: 500; color: var(--vc-text); }
+.admin-linear .sync-metric strong { font-size: 28px; font-weight: 500; color: var(--vc-text); }
 .admin-linear .sync-metric span { color: var(--vc-muted); }
 .admin-linear .operation-tabs { border: 0; border-bottom: 1px solid var(--vc-border); border-radius: 0; padding: 0; gap: 16px; background: transparent; }
 .admin-linear .operation-tabs button { position: relative; border-radius: 0; padding: 10px 0; background: transparent; color: var(--vc-muted); font-size: 13px; }
@@ -900,6 +990,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
   .admin-linear .connection-paths > div:last-child { grid-column: 1 / -1; }
   .admin-linear .connection-strip dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-linear .sync-trigger { max-width: none; }
+  .admin-linear .sync-overview { grid-template-columns: minmax(0, 1fr); }
   .admin-linear .sync-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-linear .sync-metric { border-bottom: 1px solid var(--vc-border); }
   .admin-linear .sync-metric:last-child { grid-column: 1 / -1; border-bottom: 0; }
