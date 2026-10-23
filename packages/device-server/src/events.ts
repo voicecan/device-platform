@@ -6,6 +6,7 @@ import { request as httpsRequest } from 'node:https';
 import type { ServerConfig } from './config.js';
 import type { Database } from './database.js';
 import { decryptSecretWithKeyring } from './security.js';
+import { reportScheduledFailure, startGuardedInterval, type ScheduledTask, type ScheduledTaskReporter } from './scheduled-task.js';
 import { API_VERSION } from '@voicecan/contracts';
 
 type DeliveryRow = {
@@ -96,19 +97,29 @@ async function postWebhook(rawUrl: string, allowPrivate: boolean, allowHttp: boo
 }
 
 export class EventDispatcher {
-  #timer?: NodeJS.Timeout;
+  #task: ScheduledTask | undefined;
   #running = false;
   readonly #instanceId = `dispatcher_${randomUUID()}`;
 
-  constructor(private readonly db: Database, private readonly config: ServerConfig) {}
+  constructor(
+    private readonly db: Database,
+    private readonly config: ServerConfig,
+    private readonly onError: ScheduledTaskReporter = reportScheduledFailure,
+  ) {}
 
   start(): void {
-    this.#timer = setInterval(() => void this.drain(), 2_000);
-    this.#timer.unref();
+    if (this.#task) return;
+    this.#task = startGuardedInterval(2_000, () => this.drain(), this.onError);
   }
 
   stop(): void {
-    if (this.#timer) clearInterval(this.#timer);
+    this.#task?.stop();
+    this.#task = undefined;
+  }
+
+  /** Fire-and-forget drain for request handlers; failures are reported, never thrown. */
+  scheduleDrain(): void {
+    void this.drain().catch(this.onError);
   }
 
   async drain(): Promise<void> {

@@ -3,6 +3,7 @@ import type { Database } from './database.js';
 import type { S3ImmutableStorage } from './s3-storage.js';
 import type { FilesystemStorage } from './storage.js';
 import { mapPublicCommand, recordingEventFacts } from './public-contract.js';
+import { reportScheduledFailure, startGuardedInterval, type ScheduledTask, type ScheduledTaskReporter } from './scheduled-task.js';
 
 type Row = Record<string, unknown>;
 type EmitEvent = (deviceRow: Row, type: string, payload: Record<string, unknown>) => Promise<string>;
@@ -18,7 +19,7 @@ export type ReconcileResult = {
 };
 
 export class Reconciler {
-  #timer?: NodeJS.Timeout;
+  #task: ScheduledTask | undefined;
   #running = false;
 
   constructor(
@@ -27,14 +28,15 @@ export class Reconciler {
     private readonly s3: S3ImmutableStorage | null,
     private readonly config: ServerConfig,
     private readonly emitEvent: EmitEvent,
+    private readonly onError: ScheduledTaskReporter = reportScheduledFailure,
   ) {}
 
   start(): void {
-    this.#timer = setInterval(() => void this.run(), this.config.reconcileIntervalMs);
-    this.#timer.unref();
+    if (this.#task) return;
+    this.#task = startGuardedInterval(this.config.reconcileIntervalMs, () => this.run(), this.onError);
   }
 
-  stop(): void { if (this.#timer) clearInterval(this.#timer); }
+  stop(): void { this.#task?.stop(); this.#task = undefined; }
 
   async run(): Promise<ReconcileResult> {
     if (this.#running) return { expiredTickets: 0, expiredS3Attempts: 0, recoveredFiles: 0, partialFilesRemoved: 0, expiredCommands: 0, expiredProvisioning: 0, expiredTransferOutSessions: 0 };
