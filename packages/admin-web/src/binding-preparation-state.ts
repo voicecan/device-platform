@@ -1,4 +1,4 @@
-export const bindingIntentPollMs = 10_000;
+export const bindingIntentPollMs = 2_000;
 export const bindingIntentMaxPollMs = 60_000;
 
 export function selectBindingGroup(groups: readonly { id: string }[], current: string): string {

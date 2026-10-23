@@ -25,10 +25,11 @@ test('device configuration alone never displays completed binding', () => {
 });
 
 test('binding intent polling backs off after a failure and resets on success', () => {
-  assert.equal(nextBindingPollDelay(10_000, false), 10_000);
-  assert.equal(nextBindingPollDelay(10_000, true), 20_000);
-  assert.equal(nextBindingPollDelay(20_000, true), 40_000);
-  assert.equal(nextBindingPollDelay(40_000, true), 60_000);
+  assert.equal(nextBindingPollDelay(2_000, false), 2_000);
+  assert.equal(nextBindingPollDelay(2_000, true), 4_000);
+  assert.equal(nextBindingPollDelay(4_000, true), 8_000);
+  assert.equal(nextBindingPollDelay(8_000, true), 16_000);
+  assert.equal(nextBindingPollDelay(32_000, true), 60_000);
   assert.equal(nextBindingPollDelay(60_000, true), 60_000);
-  assert.equal(nextBindingPollDelay(60_000, false), 10_000);
+  assert.equal(nextBindingPollDelay(60_000, false), 2_000);
 });

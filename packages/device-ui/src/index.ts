@@ -293,6 +293,14 @@ export class VoicecanProvisionerElement extends LitElement {
     this.#removeClientListeners?.();
     this.#abort?.abort(new DOMException('Component disconnected', 'AbortError'));
     this.#stopLiveStatus();
+    // Release the GATT connection only after a completed binding. During the
+    // Wi-Fi step the element may be temporarily detached by a parent render;
+    // closing here would remove the device needed to submit credentials.
+    if (this.step >= 3 || this.serverOnline) {
+      const selectedDevice = this.selectedDevice;
+      this.selectedDevice = undefined;
+      void selectedDevice?.disconnect().catch(() => undefined);
+    }
     this.#grant = '';
     this.#grantProvidedExternally = false;
     this.#password = '';
@@ -362,6 +370,7 @@ export class VoicecanProvisionerElement extends LitElement {
     if (resolveGrant) this.#retryGrant = resolveGrant;
     if (!this.#grant.trim() && !resolveGrant) { this.statusMessage = this.#t('Enter the one-time device binding grant.'); return; }
     this.#stopLiveStatus();
+    this.#skipWifi = false;
     this.deviceId = '';
     this.deviceInfo = undefined;
     this.deviceStatus = undefined;
@@ -397,7 +406,7 @@ export class VoicecanProvisionerElement extends LitElement {
       this.step = 1;
       this.#startLiveStatus();
     } catch (error) {
-      this.statusMessage = [messageOf(error, '').includes('SERVER_ONLINE_TIMEOUT') ? this.#t('The device confirmed Wi-Fi connected, but this server received no device connection within 60 seconds. Keep the computer and service running. Check that the device can reach the server address, and check firewall or guest-network isolation.') : '', messageOf(error, '').includes('WIFI_CONFIGURATION_REJECTED') ? this.#t('The device runtime reported that Wi-Fi settings were rejected. A connection was not confirmed. This error does not identify a wrong password or an incompatible mixed-security network.') : '', this.#t(messageOf(error, 'Device binding failed'))].filter(Boolean).join('\n');
+      this.statusMessage = [messageOf(error, '').includes('SERVER_ONLINE_TIMEOUT') ? this.#t('The device confirmed Wi-Fi connected, but this server received no device connection within 60 seconds. Keep the computer and service running. Check that the device can reach the server address, and check firewall or guest-network isolation. If it still does not connect, long-press the device button for 8 seconds to restart it.') : '', messageOf(error, '').includes('WIFI_CONFIGURATION_REJECTED') ? this.#t('The device runtime reported that Wi-Fi settings were rejected. A connection was not confirmed. This error does not identify a wrong password or an incompatible mixed-security network.') : '', this.#t(messageOf(error, 'Device binding failed'))].filter(Boolean).join('\n');
       this.selectedDevice = undefined;
       this.step = this.compact && this.#ssid ? 1 : 0;
       if (this.step === 1) this.networkError = this.statusMessage;
@@ -451,7 +460,7 @@ export class VoicecanProvisionerElement extends LitElement {
       this.dispatchEvent(new CustomEvent('provisioned', { detail: result, bubbles: true, composed: true }));
     } catch (error) {
       this.#stopLiveStatus();
-      this.statusMessage = [messageOf(error, '').includes('SERVER_ONLINE_TIMEOUT') ? this.#t('The device confirmed Wi-Fi connected, but this server received no device connection within 60 seconds. Keep the computer and service running. Check that the device can reach the server address, and check firewall or guest-network isolation.') : '', messageOf(error, '').includes('WIFI_CONFIGURATION_REJECTED') ? this.#t('The device runtime reported that Wi-Fi settings were rejected. A connection was not confirmed. This error does not identify a wrong password or an incompatible mixed-security network.') : '', this.#t(messageOf(error, 'Device binding failed'))].filter(Boolean).join('\n');
+      this.statusMessage = [messageOf(error, '').includes('SERVER_ONLINE_TIMEOUT') ? this.#t('The device confirmed Wi-Fi connected, but this server received no device connection within 60 seconds. Keep the computer and service running. Check that the device can reach the server address, and check firewall or guest-network isolation. If it still does not connect, long-press the device button for 8 seconds to restart it.') : '', messageOf(error, '').includes('WIFI_CONFIGURATION_REJECTED') ? this.#t('The device runtime reported that Wi-Fi settings were rejected. A connection was not confirmed. This error does not identify a wrong password or an incompatible mixed-security network.') : '', this.#t(messageOf(error, 'Device binding failed'))].filter(Boolean).join('\n');
       this.selectedDevice = undefined;
       this.step = this.compact ? 1 : 0;
       this.networkError = this.statusMessage;

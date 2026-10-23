@@ -111,6 +111,37 @@ test('checking the existing network cannot bypass a disconnected device or uncon
   await assert.rejects(connectDeviceNetwork({ ...connected.input, wifi: undefined, confirmOnline: async () => false, onComplete: () => { completed = true; } }), /SERVER_ONLINE_TIMEOUT/);
   assert.equal(completed, false);
 });
+test('an unmatched Wi-Fi reply continues when the device reports a connected network', async () => {
+  const { input, calls } = fixture([true]);
+  await connectDeviceNetwork({
+    ...input,
+    session: { ...input.session, configureWifi: async () => { calls.push('wifi'); throw new Error('RESPONSE_MISMATCH'); } },
+    confirmOnline: async () => true,
+  });
+  assert.deepEqual(calls, ['wifi', 'read', 'report', 'clear-password', 'server']);
+});
+
+test('an unmatched Wi-Fi reply still fails when the device is not connected', async () => {
+  const { input, calls } = fixture([false]);
+  await assert.rejects(connectDeviceNetwork({
+    ...input,
+    session: { ...input.session, configureWifi: async () => { calls.push('wifi'); throw new Error('RESPONSE_MISMATCH'); } },
+  }), /RESPONSE_MISMATCH/);
+  assert.deepEqual(calls, ['wifi', 'read', 'report']);
+  assert.equal(calls.includes('server'), false);
+  assert.equal(calls.includes('clear-password'), false);
+});
+
+test('an unmatched server reply is settled by the authoritative online check', async () => {
+  const { input, calls } = fixture([true]);
+  await connectDeviceNetwork({
+    ...input,
+    session: { ...input.session, configureServer: async () => { calls.push('server'); throw new Error('RESPONSE_MISMATCH'); } },
+    confirmOnline: async () => true,
+  });
+  assert.deepEqual(calls, ['wifi', 'report', 'clear-password', 'server']);
+});
+
 test('authentication or transport failure is never treated as an existing Wi-Fi connection', async () => {
   const { input, calls } = fixture([true]);
   await assert.rejects(connectDeviceNetwork({ ...input, session: { ...input.session, configureWifi: async () => { throw new Error('AUTHENTICATION_FAILED'); } } }), /AUTHENTICATION_FAILED/);

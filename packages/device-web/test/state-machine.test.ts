@@ -327,10 +327,43 @@ test('persistent service discovery disconnect reports an actionable error', asyn
       assert.ok(error instanceof DeviceSdkError);
       assert.equal(error.code, 'GATT_DISCONNECTED_DURING_SERVICE_DISCOVERY');
       assert.match(error.message, /^The Bluetooth connection ended while discovering the Voicecan service\./);
-      assert.match(error.message, /NetworkError: GATT Server is disconnected/);
+      assert.match(error.message, /recently unbound or re-bound/);
+      assert.match(error.message, /Bluetooth settings/);
       return true;
     });
     assert.equal(connects, 2);
+  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
+});
+
+test('a stale operating-system pairing asks the operator to re-pair', async () => {
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const device = Object.assign(new EventTarget(), { name: 'CAPSO-STALE-BOND' });
+  const server = {
+    connected: false,
+    disconnect: () => { server.connected = false; },
+    connect: async () => { throw new DOMException('GATT operation not permitted: Not paired', 'NetworkError'); },
+    getPrimaryService: async () => { throw new Error('unused'); },
+  };
+  Object.assign(device, { gatt: server });
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { bluetooth: { requestDevice: async () => device } } });
+  try {
+    const factory = new WebBluetoothTransportFactory({
+      serviceUuid: '00001a10-0000-1000-8000-00805f9b34fb',
+      writeCharacteristicUuid: '00002dd1-0000-1000-8000-00805f9b34fb',
+      notifyCharacteristicUuid: '00002dd0-0000-1000-8000-00805f9b34fb',
+      scanToConnectDelayMs: 0,
+      postConnectDelayMs: 0,
+      connectionRetryDelayMs: 0,
+    });
+    await assert.rejects(factory.requestDevice(), (error: unknown) => {
+      assert.ok(error instanceof DeviceSdkError);
+      assert.equal(error.code, 'BLUETOOTH_PAIRING_STALE');
+      assert.match(error.message, /remove or forget the device, pair it again/);
+      return true;
+    });
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
     else Reflect.deleteProperty(globalThis, 'navigator');
@@ -591,6 +624,38 @@ test('transfer-out seals the old credential to the browser and requires non-eras
   assert.equal(completed?.result, 'ack');
   assert.deepEqual(result, { deviceId: 'device-1', recordingsErased: false });
   assert.equal(client.state, 'released');
+});
+
+test('ambiguous Wi-Fi and server provisioning replies are verified against the online device state', async () => {
+  let statusReads = 0; const events: string[] = [];
+  const transport = { deviceName: 'CAPSO-AMBIGUOUS', exchange: async () => new Uint8Array(), close: async () => undefined };
+  const client = new VoicecanDeviceClient({
+    provisioningToken: 'grant',
+    broker: {
+      claim: async () => ({ provisioningSessionId: 'provision_ambiguous', continuationToken: 'continue_ambiguous', deviceId: 'dev_ambiguous', rawToken: new Uint8Array(32), wssUrl: 'wss://device.test/device/v1/ws' }),
+      reportProgress: async () => undefined,
+      waitForOnline: async () => true,
+    },
+    protocol: {
+      compatibilityReport: () => ({ status: 'supported', reasons: [] }),
+      createSession: async () => ({
+        authenticate: async () => undefined,
+        syncTime: async () => undefined,
+        getInfo: async () => ({ manufacturer: 'Voicecan', serialNumber: 'CAPSO-AMBIGUOUS', model: 'CAPSO', firmwareVersion: 'v0.6.8' }),
+        getStatus: async () => { statusReads += 1; return { batteryPercent: 80, recording: false, wifiConfigured: statusReads > 2 }; },
+        configureWifi: async () => { events.push('wifi'); throw new Error('RESPONSE_MISMATCH'); },
+        configureServer: async () => { events.push('server'); throw new Error('RESPONSE_MISMATCH'); },
+        close: async () => undefined,
+      }),
+    },
+    transport: { supported: () => true, requestDevice: async () => transport },
+  });
+  const selected = await client.requestDevice();
+  await selected.connectForProvisioning();
+  const result = await selected.completeProvisioning({ wifi: { ssid: 'fixture', password: '', encryption: 'open' }, ambiguousNetworkGraceMs: 50 });
+  assert.equal(result.serverStatus, 'online');
+  assert.equal(statusReads, 3, 'the ambiguous reply must be verified through a fresh status read');
+  assert.deepEqual(events, ['wifi', 'server']);
 });
 
 test('an idle Bluetooth disconnect immediately notifies the UI and blocks new writes', async () => {

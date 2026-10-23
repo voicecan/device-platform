@@ -1,6 +1,7 @@
 import { loadBrowserPrivateCore } from '@voicecan/device-core/browser';
 import { VoicecanProvisionerElement, registerVoicecanElements } from '@voicecan/device-ui';
-import { VoicecanDeviceClient, WebBluetoothTransportFactory } from '@voicecan/device-web';
+import { VoicecanDeviceClient, WebBluetoothTransportFactory, type BluetoothDeviceHandle, type DeviceTransport } from '@voicecan/device-web';
+export type { BluetoothDeviceHandle } from '@voicecan/device-web';
 import type { ProvisioningBroker, ProvisioningResult } from '@voicecan/device-web';
 import type { DeviceControl, DeviceInfo, DeviceStatus, FirmwareInstallResult, FirmwarePackage, SemanticProtocolSession, WifiConfiguration } from '@voicecan/device-core';
 import type { DeviceConnectLocale } from './protocol.js';
@@ -10,6 +11,8 @@ export type { DeviceControl } from '@voicecan/device-core';
 
 export type BoundDeviceMaintenance = {
   info: DeviceInfo;
+  device: BluetoothDeviceHandle;
+  deviceName?: string;
   status: DeviceStatus;
   refresh(): Promise<DeviceStatus>;
   control(input: DeviceControl): Promise<DeviceStatus>;
@@ -19,15 +22,28 @@ export type BoundDeviceMaintenance = {
   close(): Promise<void>;
 };
 
-export async function connectBoundDevice(input: { rawToken: Uint8Array; expectedSerialNumber: string; coreModuleUrl: string; bleServiceUuid?: string; signal?: AbortSignal; onDisconnected?: () => void; onStage?: (stage: 'load_sdk' | 'select_device' | 'authenticate' | 'read_status') => void }): Promise<BoundDeviceMaintenance> {
+export async function connectBoundDevice(input: { rawToken: Uint8Array; expectedSerialNumber: string; coreModuleUrl: string; bleServiceUuid?: string; signal?: AbortSignal; onDisconnected?: () => void; device?: BluetoothDeviceHandle; deviceId?: string; deviceName?: string; skipTimeSync?: boolean; allowPrompt?: boolean; onStage?: (stage: 'load_sdk' | 'select_device' | 'authenticate' | 'read_status' | 'reconnect') => void }): Promise<BoundDeviceMaintenance> {
   input.onStage?.('load_sdk');
   const protocol = await loadBrowserPrivateCore(() => import(/* @vite-ignore */ input.coreModuleUrl));
-  input.onStage?.('select_device');
-  const transport = await new WebBluetoothTransportFactory({
+  const factory = new WebBluetoothTransportFactory({
     ...(input.onDisconnected ? { onDisconnected: input.onDisconnected } : {}),
     advertisedServiceUuid: input.bleServiceUuid ?? '00001a10-0000-1000-8000-00805f9b34fb',
     serviceUuid: '00001a10-0000-1000-8000-00805f9b34fb', writeCharacteristicUuid: '00002dd1-0000-1000-8000-00805f9b34fb', notifyCharacteristicUuid: '00002dd0-0000-1000-8000-00805f9b34fb',
-  }).requestDevice();
+  });
+  let transport: DeviceTransport;
+  if (input.device) {
+    input.onStage?.('reconnect');
+    transport = await factory.connectDevice(input.device);
+  } else if (input.deviceId || input.deviceName) {
+    input.onStage?.('reconnect');
+    const known = await factory.findDevice({ id: input.deviceId, name: input.deviceName });
+    if (known) transport = await factory.connectDevice(known);
+    else if (input.allowPrompt === false) throw new Error('BLE_DEVICE_NOT_FOUND');
+    else { input.onStage?.('select_device'); transport = await factory.requestDevice(); }
+  } else {
+    input.onStage?.('select_device');
+    transport = await factory.requestDevice();
+  }
   const serverToken = input.rawToken.slice();
   let session: SemanticProtocolSession | undefined;
   try {
@@ -35,12 +51,12 @@ export async function connectBoundDevice(input: { rawToken: Uint8Array; expected
     session = await protocol.createSession(transport); await session.authenticate(input.rawToken, input.signal);
     const info = await session.getInfo(input.signal);
     if (info.serialNumber !== input.expectedSerialNumber) throw new Error(`BLE_DEVICE_MISMATCH: Expected ${input.expectedSerialNumber}, selected ${info.serialNumber}`);
-    await session.syncTime({ unixTimeSeconds: Math.floor(Date.now() / 1_000), timezoneOffsetHours: Math.max(-12, Math.min(14, Math.trunc(-new Date().getTimezoneOffset() / 60))) }, input.signal);
+    if (!input.skipTimeSync) await session.syncTime({ unixTimeSeconds: Math.floor(Date.now() / 1_000), timezoneOffsetHours: Math.max(-12, Math.min(14, Math.trunc(-new Date().getTimezoneOffset() / 60))) }, input.signal);
     input.onStage?.('read_status');
     let status = await session.getStatus(input.signal); const activeSession = session;
     const refresh = async (): Promise<DeviceStatus> => { status = await activeSession.getStatus(); return status; };
     return {
-      info, status, refresh,
+      info, status, device: transport.device!, ...(transport.deviceName ? { deviceName: transport.deviceName } : {}), refresh,
       control: async (control): Promise<DeviceStatus> => {
         if (control.kind === 'auto_shutdown') await activeSession.setAutoShutdown(control.interval);
         else if (control.kind === 'usb' || control.kind === 'privacy' || control.kind === 'earphone_recording') await activeSession.setFeature(control.kind, control.enabled);

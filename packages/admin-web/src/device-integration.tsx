@@ -11,7 +11,7 @@ type ClaimState = { provisioningSessionId: string; continuationToken: string };
 type RemoteClaimState = { continuationToken: string; deviceId: string };
 type ApiClaim = { provisioning_session_id: string; continuation_token: string; device_id: string; device_token: string; wss_url: string; recovered?: boolean };
 
-const provisioningStatusPollMs = 10_000;
+const provisioningStatusPollMs = 1_000;
 
 class DeviceApiError extends Error {
   constructor(readonly code: string, message: string, readonly data?: Readonly<Record<string, unknown>>) {
@@ -88,10 +88,10 @@ function localBroker(getGrant: () => string, getDeviceWsUrl: () => string, onAlr
       let previousStatus = '';
       while (Date.now() < deadline) {
         signal?.throwIfAborted();
-        const state = await devicePost<{ status: string; failure_code?: string }>(`/provisioning-sessions/${encodeURIComponent(claim.provisioningSessionId)}/observe`, { continuation_token: claim.continuationToken });
+        const state = await devicePost<{ status: string; failure_code?: string; online?: boolean }>(`/provisioning-sessions/${encodeURIComponent(claim.provisioningSessionId)}/observe`, { continuation_token: claim.continuationToken });
         if (state.status !== previousStatus) { provisioningDebug('Observed provisioning status', { device_id: deviceId, status: state.status }); previousStatus = state.status; }
-        if (state.status === 'completed') return true;
         if (state.status === 'failed') throw new Error(state.failure_code ?? 'PROVISIONING_FAILED');
+        if (state.status === 'completed' || state.online === true) return true;
         await new Promise<void>((resolve, reject) => {
           const timer = globalThis.setTimeout(resolve, provisioningStatusPollMs);
           signal?.addEventListener('abort', () => { globalThis.clearTimeout(timer); reject(signal.reason); }, { once: true });

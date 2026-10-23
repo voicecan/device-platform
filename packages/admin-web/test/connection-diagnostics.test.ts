@@ -9,6 +9,12 @@ test('diagnostics retain only an approved code, never arbitrary credential-beari
   assert.match(connectionAdvice('WIFI_CONFIGURATION_REJECTED'), /does not identify a wrong password or an incompatible mixed-security network/);
   assert.doesNotMatch(connectionAdvice('WIFI_CONFIGURATION_REJECTED'), /not WPA|not legacy WPA/);
 });
+
+test('stale Bluetooth pairing points the operator back to the system Bluetooth settings', () => {
+  assert.equal(connectionErrorCode(new Error('BLUETOOTH_PAIRING_STALE')), 'BLUETOOTH_PAIRING_STALE');
+  assert.match(connectionAdvice('BLUETOOTH_PAIRING_STALE'), /Bluetooth settings/);
+  assert.match(connectionAdvice('GATT_DISCONNECTED_DURING_SERVICE_DISCOVERY'), /Bluetooth settings/);
+});
 test('progress preserves completed steps as the next step begins', () => {
   const events = advanceConnection(advanceConnection([], 'backup', 1), 'select_device', 2);
   assert.equal(events[0]?.state, 'done'); assert.equal(events[1]?.state, 'running');

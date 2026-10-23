@@ -17,6 +17,11 @@ test('compact binding renders a full connection stage after device selection sta
   assert.match(source, /Connecting to the selected device/);
 });
 
+test('leaving the binding page releases the BLE connection for the detail page', async () => {
+  const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
+  assert.match(source, /void selectedDevice\?\.disconnect\(\)\.catch/);
+});
+
 test('waiting for server confirmation never restarts BLE status reads', async () => {
   const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
   assert.match(source, /state === 'waiting_server'\) \{ this\.#stopLiveStatus\(\); this\.liveStatusError = ''; \}/);

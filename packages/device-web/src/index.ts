@@ -60,6 +60,7 @@ export type TransferOutBroker = {
 const provisioningOnlineTimeoutMs = 180_000;
 const provisioningNetworkTimeoutMs = 180_000;
 const provisioningNetworkPollMs = 2_000;
+const provisioningAmbiguousNetworkGraceMs = 30_000;
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -77,23 +78,27 @@ function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
   return output;
 }
 
-type DeviceTransport = ProtocolTransport & { readonly deviceName?: string | undefined };
+export type DeviceTransport = ProtocolTransport & { readonly deviceName?: string | undefined; readonly device?: BluetoothDeviceHandle | undefined };
 
 type DeviceSelectionState = Extract<ProvisioningState, 'connecting' | 'inspecting'>;
 export type DeviceTransportFactory = { supported(): boolean; requestDevice(onStateChange?: (state: DeviceSelectionState) => void): Promise<DeviceTransport> };
 
 type BluetoothValueEvent = Event & { target: { value?: DataView } | null };
 type BluetoothUuid = string | number;
-type BluetoothCharacteristic = EventTarget & {
+export type BluetoothCharacteristic = EventTarget & {
   startNotifications(): Promise<BluetoothCharacteristic>;
   stopNotifications?(): Promise<BluetoothCharacteristic>;
   writeValueWithoutResponse(value: BufferSource): Promise<void>;
 };
-type BluetoothService = { getCharacteristic(uuid: BluetoothUuid): Promise<BluetoothCharacteristic> };
-type BluetoothGattServer = { connected?: boolean; connect(): Promise<BluetoothGattServer>; disconnect(): void; getPrimaryService(uuid: BluetoothUuid): Promise<BluetoothService> };
-type BluetoothDeviceLike = EventTarget & { gatt?: BluetoothGattServer; id?: string; name?: string };
-type BluetoothApi = { requestDevice(options: { filters: Array<{ services: BluetoothUuid[] }>; optionalServices: BluetoothUuid[] }): Promise<BluetoothDeviceLike> };
+export type BluetoothService = { getCharacteristic(uuid: BluetoothUuid): Promise<BluetoothCharacteristic> };
+export type BluetoothGattServer = { connected?: boolean; connect(): Promise<BluetoothGattServer>; disconnect(): void; getPrimaryService(uuid: BluetoothUuid): Promise<BluetoothService> };
+export type BluetoothDeviceHandle = EventTarget & { gatt?: BluetoothGattServer; id?: string; name?: string };
+type BluetoothDeviceLike = BluetoothDeviceHandle;
+type BluetoothApi = { requestDevice(options: { filters: Array<{ services: BluetoothUuid[] }>; optionalServices: BluetoothUuid[] }): Promise<BluetoothDeviceLike>; getDevices?(): Promise<BluetoothDeviceLike[]> };
 type GattInitializationPhase = 'connecting' | 'stabilizing_connection' | 'discovering_service' | 'discovering_characteristics' | 'starting_notifications' | 'ready';
+
+const stalePairingMessage = 'The device may have been unbound or re-bound, but this computer still holds the old Bluetooth pairing key. Open your computer Bluetooth settings, remove or forget the device, pair it again, then retry. Keep the device awake and in binding mode. If pairing still fails, long-press the device button for 8 seconds to restart the device.';
+const serviceDiscoveryDisconnectedMessage = 'The Bluetooth connection ended while discovering the Voicecan service. If the device was recently unbound or re-bound, remove or forget it in your computer Bluetooth settings and pair it again. Keep the device awake and in binding mode, close other apps using it, then retry. If pairing still fails, long-press the device button for 8 seconds to restart the device.';
 
 function bluetoothErrorMessage(message: string, cause: unknown): string {
   let detail: string;
@@ -146,6 +151,21 @@ function underlyingBluetoothError(error: unknown): Error | undefined {
   return current instanceof Error ? current : undefined;
 }
 
+/** A lost or out-of-order reply does not prove the write failed. */
+function ambiguousDeviceReply(error: unknown): boolean {
+  if (['RESPONSE_MISMATCH', 'TIMEOUT', 'GATT_OPERATION_TIMEOUT'].includes(sdkFailureCode(error, ''))) return true;
+  return /RESPONSE_INCOMPLETE|COMMAND_TIMEOUT/.test(error instanceof Error ? error.message : String(error));
+}
+
+/** A stale OS bond often surfaces as an authentication/encryption or immediate disconnect error. */
+function staleBluetoothPairing(error: unknown): boolean {
+  const cause = underlyingBluetoothError(error);
+  if (!cause) return false;
+  const text = `${cause.name} ${cause.message}`;
+  if (/security policy blocked bluetooth access/i.test(text)) return false;
+  return /(?:not paired|pairing|bond|insufficient (?:authentication|encryption|security)|authentication failed|not authorized|access denied|encryption|ltk|key missing)/i.test(text);
+}
+
 function connectionDropped(error: unknown): boolean {
   const cause = underlyingBluetoothError(error);
   return Boolean(cause && cause.name === 'NetworkError' && /(?:gatt server is disconnected|disconnected|not connected|reconnect first)/i.test(cause.message));
@@ -177,7 +197,7 @@ class WebBluetoothTransport implements ProtocolTransport {
     this.onDisconnected?.();
   };
   readonly deviceName: string | undefined;
-  constructor(private readonly device: BluetoothDeviceLike, private readonly writer: BluetoothCharacteristic, private readonly reader: BluetoothCharacteristic, private readonly timeoutMs: number, private readonly onDisconnected?: () => void) {
+  constructor(readonly device: BluetoothDeviceLike, private readonly writer: BluetoothCharacteristic, private readonly reader: BluetoothCharacteristic, private readonly timeoutMs: number, private readonly onDisconnected?: () => void) {
     this.deviceName = device.name?.trim() || undefined;
     reader.addEventListener('characteristicvaluechanged', this.#notificationListener);
     device.addEventListener('gattserverdisconnected', this.#disconnectListener);
@@ -259,6 +279,45 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
     this.#requestInProgress = true;
     try { return await this.#requestDevice(onStateChange); } finally { this.#requestInProgress = false; }
   }
+  async getDevices(): Promise<BluetoothDeviceHandle[]> {
+    const bluetooth = (navigator as Navigator & { bluetooth?: BluetoothApi }).bluetooth;
+    if (!bluetooth?.getDevices) return [];
+    try { return await bluetooth.getDevices(); } catch { return []; }
+  }
+
+  async findDevice(input: { id?: string | undefined; name?: string | undefined }): Promise<BluetoothDeviceHandle | undefined> {
+    const devices = await this.getDevices();
+    if (input.id) {
+      const byId = devices.find((device) => device.id === input.id);
+      if (byId) return byId;
+    }
+    if (input.name) {
+      const expected = input.name.trim().toLocaleLowerCase();
+      return devices.find((device) => (device.name ?? '').trim().toLocaleLowerCase() === expected);
+    }
+    return undefined;
+  }
+
+  async connectDevice(device: BluetoothDeviceHandle, onStateChange?: (state: DeviceSelectionState) => void): Promise<DeviceTransport> {
+    if (!device.gatt) throw new DeviceSdkError('GATT_UNAVAILABLE', 'The previously selected Bluetooth device no longer exposes a GATT server');
+    onStateChange?.('connecting');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try { return await this.#initializeGatt(device, onStateChange); }
+      catch (error) {
+        const retryReason = connectionAlreadyInProgress(error) ? 'connection_contention' : error instanceof DeviceSdkError && error.code === 'GATT_NOTIFICATION_SETUP_TIMEOUT' ? 'notification_timeout' : connectionDropped(error) || (error instanceof DeviceSdkError && error.code.startsWith('GATT_DISCONNECTED_')) ? 'gatt_disconnected' : undefined;
+        deviceDebug('GATT reconnect failed', { attempt: attempt + 1, code: error instanceof DeviceSdkError ? error.code : 'UNKNOWN', retry_reason: retryReason ?? 'not_retryable', gatt_connected: device.gatt?.connected ?? 'unknown', ...bluetoothErrorDetails(error) });
+        disconnectBluetoothDevice(device);
+        if (attempt === 0 && retryReason) {
+          const connectionRetryDelayMs = this.options.connectionRetryDelayMs ?? 1_000;
+          if (connectionRetryDelayMs > 0) await new Promise<void>((resolve) => globalThis.setTimeout(resolve, connectionRetryDelayMs));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new DeviceSdkError('GATT_CONNECTION_FAILED', 'Bluetooth reconnection failed after retrying.');
+  }
+
   async #requestDevice(onStateChange?: (state: DeviceSelectionState) => void): Promise<DeviceTransport> {
     const bluetooth = (navigator as Navigator & { bluetooth?: BluetoothApi }).bluetooth;
     if (!bluetooth) throw new DeviceSdkError('WEB_BLUETOOTH_UNSUPPORTED', 'Web Bluetooth is unavailable');
@@ -310,7 +369,8 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
     try {
       deviceDebug('Connecting to GATT server', { device_name: device.name ?? 'unknown', device_id: device.id ?? 'unavailable', connected_before: device.gatt?.connected ?? 'unknown' });
       try { server = await device.gatt?.connect(); } catch (cause) {
-        deviceDebug('GATT connect call failed', { elapsed_ms: Date.now() - startedAt, ...bluetoothErrorDetails(cause) });
+        deviceDebug('GATT connect call failed', { elapsed_ms: Date.now() - startedAt, stale_pairing: staleBluetoothPairing(cause), ...bluetoothErrorDetails(cause) });
+        if (staleBluetoothPairing(cause)) throw new DeviceSdkError('BLUETOOTH_PAIRING_STALE', stalePairingMessage, { cause });
         throw new DeviceSdkError('GATT_CONNECTION_FAILED', bluetoothErrorMessage('Bluetooth connection failed. Keep the device nearby and in binding mode, then try again.', cause), { cause });
       }
       if (!server) throw new DeviceSdkError('GATT_UNAVAILABLE', 'Selected device has no GATT server');
@@ -322,7 +382,7 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
       if (postConnectDelayMs > 0) await new Promise<void>((resolve) => globalThis.setTimeout(resolve, postConnectDelayMs));
       deviceDebug('GATT connection stabilization completed', { delay_ms: postConnectDelayMs, elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown' });
       if (disconnectedDuringInitialization || gattServerDisconnected(server)) {
-        throw new DeviceSdkError('GATT_DISCONNECTED_DURING_SERVICE_DISCOVERY', 'The Bluetooth connection ended while discovering the Voicecan service. Keep the device awake, in binding mode, and close other apps using it before retrying.');
+        throw new DeviceSdkError('GATT_DISCONNECTED_DURING_SERVICE_DISCOVERY', serviceDiscoveryDisconnectedMessage);
       }
 
       phase = 'discovering_service';
@@ -331,8 +391,9 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
       let service: BluetoothService;
       try { service = await server.getPrimaryService(this.options.serviceUuid); } catch (cause) {
         const disconnected = disconnectedDuringInitialization || gattServerDisconnected(server) || connectionDropped(cause);
-        deviceDebug('Voicecan GATT service discovery failed', { disconnected, elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown', ...bluetoothErrorDetails(cause) });
-        if (disconnected) throw new DeviceSdkError('GATT_DISCONNECTED_DURING_SERVICE_DISCOVERY', bluetoothErrorMessage('The Bluetooth connection ended while discovering the Voicecan service. Keep the device awake, in binding mode, and close other apps using it before retrying.', cause), { cause });
+        deviceDebug('Voicecan GATT service discovery failed', { disconnected, stale_pairing: staleBluetoothPairing(cause), elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown', ...bluetoothErrorDetails(cause) });
+        if (staleBluetoothPairing(cause)) throw new DeviceSdkError('BLUETOOTH_PAIRING_STALE', stalePairingMessage, { cause });
+        if (disconnected) throw new DeviceSdkError('GATT_DISCONNECTED_DURING_SERVICE_DISCOVERY', serviceDiscoveryDisconnectedMessage, { cause });
         const browserError = underlyingBluetoothError(cause);
         if (browserError?.name === 'NotFoundError') throw new DeviceSdkError('GATT_SERVICE_UNAVAILABLE', bluetoothErrorMessage('The selected device does not expose the required Voicecan BLE service. Confirm the device model and firmware, then try again.', cause), { cause });
         throw new DeviceSdkError('GATT_SERVICE_DISCOVERY_FAILED', bluetoothErrorMessage('The browser could not inspect the Voicecan BLE service. Reconnect the device and try again.', cause), { cause });
@@ -347,7 +408,8 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
         reader = await service.getCharacteristic(this.options.notifyCharacteristicUuid);
       } catch (cause) {
         const disconnected = disconnectedDuringInitialization || gattServerDisconnected(server) || connectionDropped(cause);
-        deviceDebug('Voicecan GATT characteristic discovery failed', { disconnected, elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown', ...bluetoothErrorDetails(cause) });
+        deviceDebug('Voicecan GATT characteristic discovery failed', { disconnected, stale_pairing: staleBluetoothPairing(cause), elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown', ...bluetoothErrorDetails(cause) });
+        if (staleBluetoothPairing(cause)) throw new DeviceSdkError('BLUETOOTH_PAIRING_STALE', stalePairingMessage, { cause });
         if (disconnected) throw new DeviceSdkError('GATT_DISCONNECTED_DURING_CHARACTERISTIC_DISCOVERY', bluetoothErrorMessage('The Bluetooth connection ended while reading Voicecan service details. Keep the device awake and retry the binding flow.', cause), { cause });
         throw new DeviceSdkError('GATT_CHARACTERISTIC_UNAVAILABLE', bluetoothErrorMessage('The selected device does not expose the required Voicecan BLE characteristics. Confirm the firmware version and try again.', cause), { cause });
       }
@@ -366,6 +428,7 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
         const disconnected = disconnectedDuringInitialization || gattServerDisconnected(server) || connectionDropped(cause);
         deviceDebug('BLE notification setup failed', { disconnected, timed_out: cause instanceof DeviceSdkError && cause.code === 'GATT_NOTIFICATION_SETUP_TIMEOUT', elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown', ...bluetoothErrorDetails(cause) });
         if (cause instanceof DeviceSdkError && cause.code === 'GATT_NOTIFICATION_SETUP_TIMEOUT') throw cause;
+        if (staleBluetoothPairing(cause)) throw new DeviceSdkError('BLUETOOTH_PAIRING_STALE', stalePairingMessage, { cause });
         if (disconnected) throw new DeviceSdkError('GATT_DISCONNECTED_DURING_NOTIFICATION_SETUP', bluetoothErrorMessage('The Bluetooth connection ended while enabling device notifications. Keep the device nearby and retry the binding flow.', cause), { cause });
         throw new DeviceSdkError('GATT_NOTIFICATIONS_FAILED', bluetoothErrorMessage('Bluetooth notifications could not be enabled on the selected device.', cause), { cause });
       } finally {
@@ -441,23 +504,58 @@ class SelectedDevice {
     }
   }
 
-  async completeProvisioning(input: { wifi?: WifiConfiguration; signal?: AbortSignal; networkTimeoutMs?: number } = {}): Promise<ProvisioningResult> {
+  async completeProvisioning(input: { wifi?: WifiConfiguration; signal?: AbortSignal; networkTimeoutMs?: number; ambiguousNetworkGraceMs?: number } = {}): Promise<ProvisioningResult> {
     try {
       if (!this.#session || !this.#info || !this.#compatibility || !this.#claim) throw new DeviceSdkError('PROVISIONING_CONNECTION_REQUIRED', 'Connect to the nearby device before configuring its network');
       const wifi = input.wifi;
+      let wifiConfirmed = false;
       if (wifi) {
         this.owner.setState('configuring_network');
-        await this.#runCommand(() => this.#session!.configureWifi(wifi, input.signal));
-        deviceDebug('Device Wi-Fi configuration acknowledged');
+        deviceDebug('Sending device Wi-Fi configuration', { encryption: wifi.encryption, has_password: wifi.password.length > 0 });
+        try {
+          await this.#runCommand(() => this.#session!.configureWifi(wifi, input.signal));
+          deviceDebug('Device Wi-Fi configuration acknowledged');
+        } catch (cause) {
+          if (!ambiguousDeviceReply(cause)) throw cause;
+          // The write may have succeeded before its reply was lost. Give the
+          // device a bounded grace period to report the new network instead of
+          // failing on the first, possibly stale, status read.
+          const deadline = Date.now() + (input.ambiguousNetworkGraceMs ?? provisioningAmbiguousNetworkGraceMs);
+          while (true) {
+            try {
+              const status = await this.getStatus(input.signal);
+              if (status.wifiConfigured) { wifiConfirmed = true; break; }
+            } catch (statusCause) {
+              if (input.signal?.aborted) throw statusCause;
+              deviceDebug('Device status read after ambiguous Wi-Fi reply failed', {
+                error: statusCause instanceof Error ? statusCause.message : String(statusCause),
+              });
+            }
+            if (Date.now() >= deadline) break;
+            await delay(Math.min(provisioningNetworkPollMs, Math.max(0, deadline - Date.now())), input.signal);
+          }
+          if (!wifiConfirmed) throw cause;
+          deviceDebug('Device Wi-Fi configuration reply was ambiguous but the device reports a connected network', {
+            error: cause instanceof Error ? cause.message : String(cause),
+          });
+        }
       } else {
         deviceDebug('Device Wi-Fi configuration skipped; retaining the existing network');
       }
       this.owner.setState('waiting_network');
-      await this.#waitForNetwork(input.networkTimeoutMs ?? provisioningNetworkTimeoutMs, input.signal);
+      if (!wifiConfirmed) await this.#waitForNetwork(input.networkTimeoutMs ?? provisioningNetworkTimeoutMs, input.signal);
       this.owner.setState('configuring_server');
       const serverConfiguration = { wssUrl: this.#claim.wssUrl, token: this.#claim.rawToken };
-      await this.#runCommand(() => this.#session!.configureServer(serverConfiguration, input.signal));
-      deviceDebug('Device server configuration acknowledged', { device_ws_url: this.#claim.wssUrl });
+      try {
+        await this.#runCommand(() => this.#session!.configureServer(serverConfiguration, input.signal));
+        deviceDebug('Device server configuration acknowledged', { device_ws_url: this.#claim.wssUrl });
+      } catch (cause) {
+        if (!ambiguousDeviceReply(cause)) throw cause;
+        deviceDebug('Device server configuration reply was ambiguous; waiting for the authoritative online state', {
+          device_ws_url: this.#claim.wssUrl,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
       await this.owner.broker.reportProgress({ provisioningSessionId: this.#claim.provisioningSessionId, continuationToken: this.#claim.continuationToken, stage: 'configured' });
       this.owner.setState('waiting_server');
       deviceDebug('Waiting for server online confirmation', { device_id: this.#claim.deviceId, timeout_ms: provisioningOnlineTimeoutMs });

@@ -230,7 +230,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
   return <div className="flow-layout binding-flow">
     <BindingHistory target={headerActions} t={t} currentId={bindingIntentId} disabled={started || creatingNative}/>
     <Stepper steps={appPath ? ['Prepare connection', 'Approve the phone', 'Configure in app', 'Wait for device online', 'Binding complete'] : ['Connect Bluetooth', 'Connect Wi-Fi']} current={appPath ? currentStep : Math.min(currentStep, 1)} t={t}/>
-    {intentWaiting ? <section className="flow-stage"><div className="loading-panel" role="status"><span className="spinner"/><span>{t('The device configuration is complete. Waiting for the server to confirm it online…')}</span></div></section> : !started && !(appPath && bindingIntentId) ? <BindingPreparation
+    {intentWaiting ? <section className="flow-stage"><div className="loading-panel" role="status"><span className="spinner"/><span>{t('The device configuration is complete. Waiting for the server to confirm it online. If it stays here, long-press the device button for 8 seconds to restart the device.')}</span></div></section> : !started && !(appPath && bindingIntentId) ? <BindingPreparation
       onNavigateDevice={onNavigateDevice} t={t} appPath={appPath} localBluetooth={localBluetooth} pathLocked={pathLocked} locked={Boolean(bindingIntentId)}
       groupId={groupId} setGroupId={setGroupId} serial={serial} setSerial={setSerial}
       deviceWsUrl={deviceWsUrl} setDeviceWsUrl={setDeviceWsUrl} candidates={deviceWsCandidates}

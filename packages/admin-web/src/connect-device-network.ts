@@ -3,6 +3,13 @@ import type { ConnectionStage } from './connection-diagnostics.js';
 type WifiSettings = { ssid: string; password: string; encryption: 'open' | 'wpa2' | 'wpa3' };
 type NetworkStatus = { wifiConfigured: boolean };
 
+/** A lost or stale reply does not prove the write failed; verify the device state instead. */
+function isAmbiguousDeviceReply(cause: unknown): boolean {
+  if (['RESPONSE_MISMATCH', 'TIMEOUT', 'GATT_OPERATION_TIMEOUT'].includes(connectionErrorCode(cause))) return true;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /RESPONSE_INCOMPLETE|COMMAND_TIMEOUT/.test(message);
+}
+
 /** Keep server configuration after a positive network reading, using the current binding. */
 export async function connectDeviceNetwork<T extends NetworkStatus>(input: {
   session: { configureWifi(settings: WifiSettings): Promise<T>; refresh(): Promise<T>; configureServer(url: string): Promise<void> };
@@ -23,16 +30,25 @@ export async function connectDeviceNetwork<T extends NetworkStatus>(input: {
     input.onStage?.('configure_wifi');
     try { status = await input.session.configureWifi(input.wifi); }
     catch (cause) {
-      if (connectionErrorCode(cause) !== 'WIFI_CONFIGURATION_REJECTED') throw cause;
-      // A rejected write says nothing about an already configured network.
-      // Never silently claim that the requested settings were accepted.
+      const code = connectionErrorCode(cause);
+      const ambiguous = isAmbiguousDeviceReply(cause);
+      if (code !== 'WIFI_CONFIGURATION_REJECTED' && !ambiguous) throw cause;
+      // A rejected or unmatched reply says nothing about the actual network
+      // state, especially when the device connected Wi-Fi before the reply was
+      // lost. Read the device and continue only after a positive observation.
       const observed = await input.session.refresh();
-      await input.onStatus(observed);
-      if (observed.wifiConfigured) {
+      if (!observed.wifiConfigured) {
+        await input.onStatus(observed);
+        throw cause;
+      }
+      if (code === 'WIFI_CONFIGURATION_REJECTED') {
+        await input.onStatus(observed);
         input.onStage?.('wifi_connected');
+        // Keep the explicit warning: we cannot claim the requested credentials
+        // were accepted merely because another network is connected.
         throw new Error('WIFI_SETTINGS_REJECTED_NETWORK_CONNECTED');
       }
-      throw cause;
+      status = observed;
     }
   } else {
     input.onStage?.('check_wifi');
@@ -49,7 +65,12 @@ export async function connectDeviceNetwork<T extends NetworkStatus>(input: {
   input.onStage?.('wifi_connected');
   input.onWifiConnected?.();
   input.onStage?.('configure_server');
-  await input.session.configureServer(url.toString());
+  try { await input.session.configureServer(url.toString()); }
+  catch (cause) {
+    if (!isAmbiguousDeviceReply(cause) || !input.confirmOnline) throw cause;
+    // The server address may already have been accepted before the reply was
+    // lost. Let the online check below decide whether setup actually succeeded.
+  }
   if (input.confirmOnline) {
     input.onStage?.('wait_server');
     for (let attempt = 0; attempt < 30; attempt += 1) {
