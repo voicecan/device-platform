@@ -26,7 +26,8 @@ type ActiveTransfer = { fileId: string; sessionId: number; attribute: number; ex
 
 const fileListPageSize = 120;
 const inventoryTimeoutDefaultMs = 30_000;
-const statusQueryTimeoutDefaultMs = 10_000;
+const statusQueryTimeoutDefaultMs = 35_000;
+const statusRefreshIntervalDefaultMs = 5 * 60_000;
 const transferTimeoutFloorMs = 2 * 60_000;
 const transferTimeoutCeilingMs = 45 * 60_000;
 const transferMinimumBytesPerSecond = 16 * 1_024;
@@ -72,12 +73,14 @@ class DeviceActor {
   #confirmed = false;
   #bindTimer: ReturnType<typeof setTimeout>;
   #inventory: InventoryState | null = null;
+  #inventoryWork: Promise<void> = Promise.resolve();
   #inventoryTimer: ReturnType<typeof setTimeout> | null = null;
   #pendingInventories: Array<string | null> = [];
   #transferQueue: FileDescriptor[] = [];
   #queuedTransferKeys = new Set<string>();
   #activeTransfer: ActiveTransfer | null = null;
   #transferTimer: ReturnType<typeof setTimeout> | null = null;
+  #heartbeatAckSequence = 0;
   #statusTimer: ReturnType<typeof setInterval> | null = null;
   #statusQueryTimer: ReturnType<typeof setTimeout> | null = null;
   #statusQueue: Array<{ eventKind: StatusEventKind; request: Uint8Array }> = [];
@@ -126,7 +129,13 @@ class DeviceActor {
       this.socket.pause();
       this.debug('device gateway inbound flow paused', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, queued: this.#queued, queued_bytes: this.#queuedBytes }, 'warn');
     }
-    this.#tail = this.#tail.then(() => this.#process(frame)).catch(() => this.socket.close(1002, 'invalid device frame')).finally(() => {
+    this.#tail = this.#tail.then(() => this.#process(frame)).catch((error: unknown) => {
+      this.debug('device gateway frame rejected', {
+        device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'warn');
+      this.socket.close(1002, 'invalid device frame');
+    }).finally(() => {
       this.#queued -= 1;
       this.#queuedBytes -= frame.byteLength;
       if (this.#inboundPaused && !this.#closed && this.#queuedBytes <= inboundQueueLowWatermarkBytes) {
@@ -179,7 +188,7 @@ class DeviceActor {
     if (this.#closed || this.#activeOta || this.#controlQueue.some((candidate) => candidate.commandId === commandId) || this.#activeControl?.commandId === commandId) return false;
     this.#controlQueue.push({ commandId, input });
     this.#statusQueue = [];
-    void this.#startNextControl();
+    this.#background(this.#startNextControl());
     return true;
   }
 
@@ -191,9 +200,19 @@ class DeviceActor {
     if (changed.changes !== 1) return false;
     this.#activeOta = { commandId, firmware };
     this.socket.send(this.core.requestOta({ version: firmware.version, size: firmware.size, crc16: firmware.crc16, ...(firmware.force === undefined ? {} : { force: firmware.force }) }));
-    this.#otaTimer = setTimeout(() => { void this.#finishOta(false, 'DEVICE_OTA_TIMEOUT'); }, 15 * 60_000); this.#otaTimer.unref();
+    this.#otaTimer = setTimeout(() => { this.#background(this.#finishOta(false, 'DEVICE_OTA_TIMEOUT')); }, 15 * 60_000); this.#otaTimer.unref();
     this.debug('device OTA requested', { device_id: this.deviceId, command_id: commandId, version: firmware.version, firmware_size: firmware.size, firmware_crc16: firmware.crc16, connection_epoch: this.connectionEpoch });
     return true;
+  }
+
+  #background(task: Promise<unknown>): void {
+    // Timer-triggered work must never surface as an unhandled rejection: on
+    // Node 24 that would terminate the process (for example when a watchdog
+    // fires while the database worker is shutting down).
+    void task.catch((error: unknown) => this.debug('device gateway background task failed', {
+      device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+      error: error instanceof Error ? error.message : String(error),
+    }, 'warn'));
   }
 
   #startNextInventory(): void {
@@ -212,7 +231,7 @@ class DeviceActor {
 
   #armInventoryTimeout(inventory: InventoryState): void {
     if (this.#inventoryTimer) clearTimeout(this.#inventoryTimer);
-    this.#inventoryTimer = setTimeout(() => { void this.#expireInventory(inventory); }, this.inventoryTimeoutMs);
+    this.#inventoryTimer = setTimeout(() => { this.#background(this.#expireInventory(inventory)); }, this.inventoryTimeoutMs);
     this.#inventoryTimer.unref();
   }
 
@@ -241,7 +260,7 @@ class DeviceActor {
     const next = this.#statusQueue.shift(); if (!next) return;
     this.#activeStatusQuery = next.eventKind;
     this.socket.send(next.request);
-    this.#statusQueryTimer = setTimeout(() => { void this.#expireStatusQuery(next.eventKind); }, this.statusQueryTimeoutMs);
+    this.#statusQueryTimer = setTimeout(() => { this.#background(this.#expireStatusQuery(next.eventKind)); }, this.statusQueryTimeoutMs);
     this.#statusQueryTimer.unref();
     this.debug('device status query requested', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, event_kind: next.eventKind, timeout_ms: this.statusQueryTimeoutMs });
   }
@@ -263,8 +282,21 @@ class DeviceActor {
 
   async #process(frame: Uint8Array): Promise<void> {
     const result = this.core.process(frame);
-    this.debug('device gateway event decoded', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, event_kind: result.event.kind, response_bytes: result.response?.byteLength ?? 0 });
+    this.debug('device gateway event decoded', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, event_kind: result.event.kind, queued: this.#queued, queued_bytes: this.#queuedBytes, response_bytes: result.response?.byteLength ?? 0 });
     if (!this.#confirmed && result.event.kind !== 'bind_confirmed' && result.event.kind !== 'heartbeat') throw new Error('DEVICE_BIND_REQUIRED');
+    if (result.event.kind === 'heartbeat') {
+      // The device measures RTT and records a miss if the ACK does not arrive
+      // before its next 30s heartbeat. Acknowledge before persistence so a slow
+      // DB write or another queued frame cannot delay the response.
+      if (result.response) {
+        this.#heartbeatAckSequence += 1;
+        this.socket.send(result.response);
+        this.debug('device heartbeat acknowledged', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, heartbeat_ack_sequence: this.#heartbeatAckSequence, queued: this.#queued, queued_bytes: this.#queuedBytes, response_bytes: result.response.byteLength }, 'info');
+      }
+      try { await this.#persist(result.event); }
+      catch (error) { this.debug('device heartbeat persistence failed', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, error: error instanceof Error ? error.message : String(error) }, 'warn'); }
+      return;
+    }
     await this.#persist(result.event);
     await this.#completeStatusQuery(result.event.kind);
     if (result.response) this.socket.send(result.response);
@@ -299,11 +331,25 @@ class DeviceActor {
       this.socket.send(timeRequest);
       this.debug('device time synchronization requested', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, unix_time_seconds: unixTimeSeconds, timezone_offset_hours: timezoneOffsetHours, request_bytes: timeRequest.byteLength });
       const resumedSync = await this.#resumeQueuedCommands();
-      if (!resumedSync) this.requestInventory(null);
-      // Status is deliberately low priority. Starting the timer only after the
-      // inventory lane is claimed prevents older firmware from starving the
-      // file-list request behind a burst of device-management queries.
-      this.#statusTimer = setInterval(() => { this.requestStatus(); }, 60_000);
+      if (!resumedSync) {
+        // A full inventory can make firmware block its network task long enough
+        // to miss heartbeats. Only request it when the device has no known
+        // history or has unfinished work; new recordings arrive through the
+        // `new_file` notification, and manual sync remains available.
+        // Failed files are retried explicitly. Including them here makes every
+        // reconnect run a full inventory and retry the same failed transfer.
+        const known = await this.db.get<{ total: number; incomplete: number }>(
+          "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN status IN ('pending','syncing') THEN 1 ELSE 0 END),0) AS incomplete FROM recording_files WHERE device_id=? AND deletion_status='active'",
+          [this.deviceId],
+        );
+        if (Number(known?.total ?? 0) === 0 || Number(known?.incomplete ?? 0) > 0) this.requestInventory(null);
+      }
+      // Status is deliberately low priority. The device can take tens of
+      // seconds to answer a status query, and polling it aggressively competes
+      // with heartbeat ACK processing. Keep the refresh infrequent and let the
+      // timeout cover a slow device response; the admin can still request a
+      // manual refresh.
+      this.#statusTimer = setInterval(() => { this.requestStatus(); }, statusRefreshIntervalDefaultMs);
       this.#statusTimer.unref();
       return;
     }
@@ -328,7 +374,7 @@ class DeviceActor {
     if (event.kind === 'device_status') {
       const now = timestamp(); const status = event.status;
       await this.db.run(`INSERT INTO device_status(device_id,source,record_state,record_mode,microphone_mode,microphone_gain_db,usb_state,wifi_state,wifi_mode,relay_state,privacy_mode,earphone_recording,status_updated_at,updated_at)
-        VALUES(?,'ws',?,?,?,?,?,?,?,?,?,?,?, ?,?) ON CONFLICT(device_id) DO UPDATE SET source='ws',record_state=excluded.record_state,record_mode=excluded.record_mode,microphone_mode=excluded.microphone_mode,microphone_gain_db=excluded.microphone_gain_db,usb_state=excluded.usb_state,wifi_state=excluded.wifi_state,wifi_mode=excluded.wifi_mode,relay_state=excluded.relay_state,privacy_mode=excluded.privacy_mode,earphone_recording=excluded.earphone_recording,status_updated_at=excluded.status_updated_at,updated_at=excluded.updated_at`,
+        VALUES(?,'ws',?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET source='ws',record_state=excluded.record_state,record_mode=excluded.record_mode,microphone_mode=excluded.microphone_mode,microphone_gain_db=excluded.microphone_gain_db,usb_state=excluded.usb_state,wifi_state=excluded.wifi_state,wifi_mode=excluded.wifi_mode,relay_state=excluded.relay_state,privacy_mode=excluded.privacy_mode,earphone_recording=excluded.earphone_recording,status_updated_at=excluded.status_updated_at,updated_at=excluded.updated_at`,
       [this.deviceId, status.recordState, status.recordMode, status.microphoneMode, status.microphoneGainDb, status.usbState, status.wifiState, status.wifiMode, status.relayState, Number(status.privacyMode), Number(status.earphoneRecording), now, now]);
       return;
     }
@@ -339,7 +385,7 @@ class DeviceActor {
     }
     if (event.kind === 'device_battery') {
       const now = timestamp(); const battery = event.battery;
-      await this.db.run(`INSERT INTO device_status(device_id,source,battery_state,battery_state_code,battery_percent,battery_temperature_c,battery_voltage_mv,work_time_seconds,accumulated_work_time_seconds,battery_updated_at,updated_at) VALUES(?,'ws',?,?,?,?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET source='ws',battery_state=excluded.battery_state,battery_state_code=excluded.battery_state_code,battery_percent=excluded.battery_percent,battery_temperature_c=excluded.battery_temperature_c,battery_voltage_mv=excluded.battery_voltage_mv,work_time_seconds=excluded.work_time_seconds,accumulated_work_time_seconds=excluded.accumulated_work_time_seconds,battery_updated_at=excluded.battery_updated_at,updated_at=excluded.updated_at`, [this.deviceId, battery.state, battery.stateCode, battery.percent, battery.temperatureC, battery.voltageMillivolts, battery.workTimeSeconds, battery.accumulatedWorkTimeSeconds, now, now]);
+      await this.db.run(`INSERT INTO device_status(device_id,source,battery_state,battery_state_code,battery_percent,battery_temperature_c,battery_voltage_mv,work_time_seconds,accumulated_work_time_seconds,battery_updated_at,updated_at) VALUES(?,'ws',?,?,?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET source='ws',battery_state=excluded.battery_state,battery_state_code=excluded.battery_state_code,battery_percent=excluded.battery_percent,battery_temperature_c=excluded.battery_temperature_c,battery_voltage_mv=excluded.battery_voltage_mv,work_time_seconds=excluded.work_time_seconds,accumulated_work_time_seconds=excluded.accumulated_work_time_seconds,battery_updated_at=excluded.battery_updated_at,updated_at=excluded.updated_at`, [this.deviceId, battery.state, battery.stateCode, battery.percent, battery.temperatureC, battery.voltageMillivolts, battery.workTimeSeconds, battery.accumulatedWorkTimeSeconds, now, now]);
       return;
     }
     if (event.kind === 'device_command_result') {
@@ -430,7 +476,7 @@ class DeviceActor {
     const inventory = this.#inventory;
     if (!inventory || event.requestStart !== inventory.requestStart || event.batchOffset !== inventory.nextOffset) throw new Error('FILE_LIST_SEQUENCE');
     if (this.#inventoryTimer) clearTimeout(this.#inventoryTimer); this.#inventoryTimer = null;
-    this.debug('device file inventory page received', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, command_id: inventory.commandId, request_start: event.requestStart, batch_offset: event.batchOffset, total_count: event.totalCount, page_files: event.files.length }, 'info');
+    this.debug('device file inventory page received', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, command_id: inventory.commandId, request_start: event.requestStart, batch_offset: event.batchOffset, total_count: event.totalCount, page_files: event.files.length, first_entry: event.files[0] ? `${event.files[0].sessionId}:${event.files[0].attribute}` : null, last_entry: event.files.at(-1) ? `${event.files.at(-1)!.sessionId}:${event.files.at(-1)!.attribute}` : null }, 'info');
     if (inventory.commandId && inventory.nextOffset === 0 && inventory.requestStart === 0) {
       const startedAt = timestamp();
       await this.db.run("UPDATE commands SET status='running',started_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='dispatched' AND connection_epoch=?", [startedAt, startedAt, inventory.commandId, this.connectionEpoch]);
@@ -438,22 +484,48 @@ class DeviceActor {
     if (inventory.total === null) inventory.total = event.totalCount;
     const pageEntryTarget = fileListPageEntryTarget(event.totalCount);
     if (inventory.total !== event.totalCount || inventory.nextOffset + event.files.length > pageEntryTarget) throw new Error('FILE_LIST_INTEGRITY');
-    let previous = inventory.files.at(-1)?.sessionId ?? inventory.requestStart - 1;
-    for (const file of event.files) {
-      if (file.sessionId < inventory.requestStart || file.sessionId <= previous) throw new Error('FILE_LIST_ORDER');
-      previous = file.sessionId;
+    // Firmware does not guarantee a globally ordered list: one recording session
+    // can expose several attributes (normal / BT call / BT media) with the same
+    // session id, and some builds return newest-first. Normalize the page instead
+    // of dropping an otherwise healthy connection with FILE_LIST_ORDER.
+    const ordered = [...event.files].sort((left, right) => left.sessionId - right.sessionId || left.attribute - right.attribute);
+    if (ordered.some((file) => file.sessionId < inventory.requestStart)) throw new Error('FILE_LIST_ORDER');
+    const seen = new Set(inventory.files.map((file) => `${file.sessionId}:${file.attribute}:${file.size}`));
+    let repeated = 0;
+    for (const file of ordered) {
+      const key = `${file.sessionId}:${file.attribute}:${file.size}`;
+      if (seen.has(key)) { repeated += 1; continue; }
+      seen.add(key); inventory.files.push(file);
     }
-    inventory.files.push(...event.files); inventory.nextOffset += event.files.length;
+    inventory.nextOffset += event.files.length;
+    if (repeated > 0) this.debug('device file inventory repeated entries', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, repeated, total_count: event.totalCount }, 'warn');
     if (inventory.nextOffset < pageEntryTarget) { this.#armInventoryTimeout(inventory); return; }
-    const page = inventory.files;
-    for (const file of page) await this.#discoverAndPlan(file);
+    const page = [...inventory.files].sort((left, right) => left.sessionId - right.sessionId || left.attribute - right.attribute);
+    // File discovery and upload planning can take long enough to delay the next
+    // heartbeat ACK. Keep the inbound frame lane free: parse/ACK on #tail, then
+    // process this page on a separate serialized queue.
+    this.#inventoryWork = this.#inventoryWork
+      .then(() => this.#processInventoryPage(inventory, page, event.totalCount))
+      .catch((error: unknown) => {
+        this.debug('device inventory processing failed', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, error: error instanceof Error ? error.message : String(error) }, 'warn');
+        if (this.#inventory === inventory) this.#inventory = null;
+        this.#startNextInventory();
+        void this.#startNextTransfer();
+      });
+  }
+
+  async #processInventoryPage(inventory: InventoryState, page: FileDescriptor[], totalCount: number): Promise<void> {
+    if (this.#closed) return;
+    for (const file of page) { if (this.#closed) return; await this.#discoverAndPlan(file); }
     const last = page.at(-1);
-    if (event.totalCount >= fileListPageSize && last && last.sessionId < 0xffff_ffff) {
+    if (totalCount >= fileListPageSize && last && last.sessionId < 0xffff_ffff) {
+      if (this.#inventory !== inventory) return;
       inventory.requestStart = last.sessionId + 1; inventory.total = null; inventory.nextOffset = 0; inventory.files = [];
       this.#sendInventoryPage();
       return;
     }
-    const commandId = inventory.commandId; this.#inventory = null;
+    const commandId = inventory.commandId;
+    if (this.#inventory === inventory) this.#inventory = null;
     if (commandId) {
       const completedAt = timestamp();
       const changed = await this.db.run("UPDATE commands SET status='succeeded',result_code='SYNC_COMPLETED',completed_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status IN ('dispatched','running') AND connection_epoch=?", [completedAt, completedAt, commandId, this.connectionEpoch]);
@@ -531,7 +603,7 @@ class DeviceActor {
     if (this.#transferTimer) clearTimeout(this.#transferTimer);
     const estimatedMs = Math.ceil(active.expectedSize / transferMinimumBytesPerSecond * 1_000) + 60_000;
     const timeoutMs = this.transferTimeoutMs ?? Math.min(transferTimeoutCeilingMs, Math.max(transferTimeoutFloorMs, estimatedMs));
-    this.#transferTimer = setTimeout(() => { void this.#expireActiveTransfer(active.fileId); }, timeoutMs);
+    this.#transferTimer = setTimeout(() => { this.#background(this.#expireActiveTransfer(active.fileId)); }, timeoutMs);
     this.#transferTimer.unref();
     this.debug('device file transfer watchdog armed', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, file_id: active.fileId, expected_size: active.expectedSize, timeout_ms: timeoutMs });
   }
@@ -576,7 +648,7 @@ class DeviceActor {
     if (changed.changes !== 1) { await this.#startNextControl(); return; }
     this.#activeControl = next;
     this.socket.send(this.core.requestDeviceControl(next.input));
-    this.#controlTimer = setTimeout(() => { void this.#expireActiveControl(next.commandId); }, 30_000); this.#controlTimer.unref();
+    this.#controlTimer = setTimeout(() => { this.#background(this.#expireActiveControl(next.commandId)); }, 30_000); this.#controlTimer.unref();
     this.debug('device control requested', { device_id: this.deviceId, command_id: next.commandId, kind: next.input.kind, connection_epoch: this.connectionEpoch });
   }
 
@@ -655,7 +727,10 @@ export class DeviceGateway {
           const device = await this.db.get<Row>('SELECT * FROM devices WHERE id=?', [deviceId]);
           if (device) await this.emitEvent(device, 'device.offline', { device_id: deviceId, connection_epoch: epoch.connection_epoch });
         }
-      })();
+      })().catch((error: unknown) => this.debug('device disconnect cleanup failed', {
+        device_id: deviceId, connection_epoch: epoch.connection_epoch,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'warn'));
     });
     await this.db.run("UPDATE commands SET status='failed',error_code='DEVICE_DISCONNECTED_DURING_OTA',completed_at=?,resource_version=resource_version+1,updated_at=? WHERE device_id=? AND kind='device.ota' AND status IN ('dispatched','running') AND (connection_epoch IS NULL OR connection_epoch<>?)", [now, now, deviceId, epoch.connection_epoch]);
     await this.db.run("UPDATE commands SET status='queued',connection_epoch=NULL,dispatched_at=NULL,started_at=NULL,resource_version=resource_version+1,updated_at=? WHERE device_id=? AND kind<>'device.ota' AND status IN ('dispatched','running') AND (connection_epoch IS NULL OR connection_epoch<>?) AND deadline_at>?", [now, deviceId, epoch.connection_epoch, now]);

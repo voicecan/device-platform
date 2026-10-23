@@ -179,6 +179,255 @@ test('gateway advances after one requested page when legacy firmware reports all
   ]);
 });
 
+test('gateway accepts duplicate and descending session entries from firmware file lists', async () => {
+  const inserted: Array<{ sessionId: number; attribute: number }> = [];
+  const database = {
+    get: async (sql: string) => {
+      if (sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1')) return { connection_epoch: 7 };
+      if (sql.startsWith('SELECT * FROM devices WHERE id=? AND connection_epoch=?')) return { id: 'device-1', group_id: 'group-1', ownership_epoch: 1, connection_epoch: 7, credential_epoch: 1, claim_status: 'active', firmware_version: 'v0.5.2' };
+      if (sql.startsWith('SELECT * FROM recording_files WHERE device_id=?')) return null;
+      if (sql.startsWith('SELECT * FROM recording_files WHERE id=?')) return { id: 'file-x', device_id: 'device-1', session_id: 100, attribute: 0, expected_size: 12, group_id: 'group-1', ownership_epoch: 1, status: 'pending', resource_version: 1 };
+      return null;
+    },
+    all: async () => [],
+    run: async (sql: string, params: unknown[] = []) => {
+      if (sql.startsWith('INSERT INTO recording_files')) inserted.push({ sessionId: Number(params[3]), attribute: Number(params[4]) });
+      return { changes: 1 };
+    },
+    batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
+    [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
+    [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 4, batchOffset: 0, files: [
+      { sessionId: 100, attribute: 1, size: 12 },
+      { sessionId: 100, attribute: 0, size: 12 },
+      { sessionId: 99, attribute: 0, size: 11 },
+      { sessionId: 100, attribute: 0, size: 12 },
+    ] } }],
+  ]);
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22), process: (frame) => events.get(frame[0]!)!,
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket();
+  await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10));
+  socket.emit('message', Uint8Array.of(11));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(socket.closes.some((entry) => entry.reason === 'invalid device frame'), false, 'a recoverable list ordering must not close the connection');
+  assert.deepEqual(inserted, [
+    { sessionId: 99, attribute: 0 },
+    { sessionId: 100, attribute: 0 },
+    { sessionId: 100, attribute: 1 },
+  ]);
+  socket.close();
+});
+
+test('gateway skips the full inventory when every known recording is synced', async () => {
+  let fileListRequests = 0;
+  const database = {
+    get: async (sql: string) => {
+      if (sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1')) return { connection_epoch: 7 };
+      if (sql.startsWith('SELECT * FROM devices WHERE id=? AND connection_epoch=?')) return { id: 'device-1', group_id: 'group-1', ownership_epoch: 1, connection_epoch: 7, credential_epoch: 1, claim_status: 'active', firmware_version: 'v0.5.2' };
+      if (sql.startsWith('SELECT COUNT(*) AS total')) return { total: 12, incomplete: 0 };
+      return null;
+    },
+    all: async () => [],
+    run: async () => ({ changes: 1 }),
+    batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => { fileListRequests += 1; return Uint8Array.of(2); }, requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22),
+    process: () => ({ event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }),
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket();
+  await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(fileListRequests, 0, 'a fully synced device must not be forced through a blocking file inventory on every reconnect');
+  assert.equal(socket.closes.length, 0);
+  socket.close();
+});
+
+test('gateway acknowledges every heartbeat request', async () => {
+  const database = {
+    get: async (sql: string) => sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1')
+      ? { connection_epoch: 7 }
+      : sql.startsWith('SELECT * FROM devices WHERE id=? AND connection_epoch=?')
+        ? { id: 'device-1', group_id: 'group-1', ownership_epoch: 1, connection_epoch: 7, credential_epoch: 1, claim_status: 'active', firmware_version: 'v0.5.2' }
+        : null,
+    all: async () => [],
+    run: async () => ({ changes: 1 }),
+    batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22),
+    process: (frame) => frame[0] === 10
+      ? { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }
+      : { event: { kind: 'heartbeat', charging: false, batteryPercent: 50 }, response: Uint8Array.of(0) },
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket();
+  await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10));
+  await new Promise((resolve) => setImmediate(resolve));
+  socket.emit('message', Uint8Array.of(11));
+  socket.emit('message', Uint8Array.of(12));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const heartbeatAcks = socket.sent.filter((frame) => frame.byteLength === 1 && frame[0] === 0);
+  assert.equal(heartbeatAcks.length, 2, 'every heartbeat request must be acknowledged');
+  socket.close();
+});
+
+test('gateway keeps heartbeat ACKs ahead of slow inventory processing', async () => {
+  let releaseInsert!: () => void;
+  const insertGate = new Promise<void>((resolve) => { releaseInsert = resolve; });
+  const database = {
+    get: async (sql: string) => {
+      if (sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1')) return { connection_epoch: 7 };
+      if (sql.startsWith('SELECT * FROM devices WHERE id=? AND connection_epoch=?')) return { id: 'device-1', group_id: 'group-1', ownership_epoch: 1, connection_epoch: 7, credential_epoch: 1, claim_status: 'active', firmware_version: 'v0.5.2' };
+      if (sql.startsWith('SELECT * FROM recording_files WHERE device_id=?')) return null;
+      if (sql.startsWith('SELECT * FROM recording_files WHERE id=?')) return { id: 'file-x', device_id: 'device-1', session_id: 100, attribute: 0, expected_size: 12, group_id: 'group-1', ownership_epoch: 1, status: 'pending', resource_version: 1 };
+      return null;
+    },
+    all: async () => [],
+    run: async (sql: string) => {
+      if (sql.startsWith('INSERT INTO recording_files')) await insertGate;
+      return { changes: 1 };
+    },
+    batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
+    [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
+    [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 1, batchOffset: 0, files: [{ sessionId: 100, attribute: 0, size: 12 }] } }],
+    [12, { event: { kind: 'heartbeat', charging: false, batteryPercent: 50 }, response: Uint8Array.of(0) }],
+  ]);
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22), process: (frame) => events.get(frame[0]!)!,
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket();
+  await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10));
+  await new Promise((resolve) => setImmediate(resolve));
+  socket.emit('message', Uint8Array.of(11));
+  socket.emit('message', Uint8Array.of(12));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const heartbeatAcks = socket.sent.filter((frame) => frame.byteLength === 1 && frame[0] === 0);
+  assert.equal(heartbeatAcks.length, 1, 'a slow inventory page must not delay the heartbeat ACK');
+  releaseInsert();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  socket.close();
+});
+
+test('gateway persists device status with matching SQL parameters', async () => {
+  let checked = false;
+  const database = {
+    get: async (sql: string) => sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1')
+      ? { connection_epoch: 7 }
+      : sql.startsWith('SELECT * FROM devices WHERE id=? AND connection_epoch=?')
+        ? { id: 'device-1', group_id: 'group-1', ownership_epoch: 1, connection_epoch: 7, credential_epoch: 1, claim_status: 'active', firmware_version: 'v0.5.2' }
+        : null,
+    all: async () => [],
+    run: async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('INSERT INTO device_status(device_id,source,record_state')) {
+        const values = sql.slice(sql.indexOf('VALUES('), sql.indexOf('ON CONFLICT'));
+        assert.equal((values.match(/\?/g) ?? []).length, params.length, 'device status SQL placeholders must match its parameters');
+        checked = true;
+      }
+      return { changes: 1 };
+    },
+    batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22),
+    process: (frame) => frame[0] === 10
+      ? { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }
+      : { event: { kind: 'device_status', status: { recordState: 1, recordMode: 0, microphoneMode: 0, microphoneGainDb: 0, usbState: 0, wifiState: 1, wifiMode: 0, relayState: 0, privacyMode: false, earphoneRecording: false } } },
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket();
+  await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10));
+  await new Promise((resolve) => setImmediate(resolve));
+  socket.emit('message', Uint8Array.of(11));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(checked, true, 'the device status frame must be persisted');
+  assert.equal(socket.closes.some((entry) => entry.reason === 'invalid device frame'), false);
+  socket.close();
+});
+
+test('gateway persists every device status variant with matching SQL parameters', async () => {
+  let checked = 0;
+  const database = {
+    get: async (sql: string) => sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1')
+      ? { connection_epoch: 7 }
+      : sql.startsWith('SELECT * FROM devices WHERE id=? AND connection_epoch=?')
+        ? { id: 'device-1', group_id: 'group-1', ownership_epoch: 1, connection_epoch: 7, credential_epoch: 1, claim_status: 'active', firmware_version: 'v0.5.2' }
+        : sql.startsWith('SELECT COUNT(*) AS total')
+          ? { total: 12, incomplete: 0 }
+          : null,
+    all: async () => [],
+    run: async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('INSERT INTO device_status')) {
+        const values = sql.slice(sql.indexOf('VALUES('), sql.indexOf('ON CONFLICT'));
+        assert.equal((values.match(/\?/g) ?? []).length, params.length, sql.slice(0, 80));
+        checked += 1;
+      }
+      return { changes: 1 };
+    },
+    batch: async (statements: Array<{ sql: string; params?: unknown[] }> = []) => {
+      for (const statement of statements) {
+        if (statement.sql.includes('INSERT INTO device_status')) {
+          const values = statement.sql.slice(statement.sql.indexOf('VALUES('), statement.sql.indexOf('ON CONFLICT'));
+          assert.equal((values.match(/\?/g) ?? []).length, (statement.params ?? []).length, statement.sql.slice(0, 80));
+          checked += 1;
+        }
+      }
+      return [{ changes: 1 }, { changes: 1 }, { changes: 1 }];
+    },
+  } as unknown as Database;
+  const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
+    [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
+    [11, { event: { kind: 'device_info', model: 'CAPSO', serialNumber: 'SN-1', hardwareVersion: 'B100', firmwareVersion: 'v0.6.8' } }],
+    [12, { event: { kind: 'device_status', status: { recordState: 1, recordMode: 0, microphoneMode: 0, microphoneGainDb: 0, usbState: 0, wifiState: 1, wifiMode: 0, relayState: 0, privacyMode: false, earphoneRecording: false } } }],
+    [13, { event: { kind: 'device_storage', storage: { totalKilobytes: 1_000, freeKilobytes: 500, recordingHours: 1 } } }],
+    [14, { event: { kind: 'device_battery', battery: { state: 'normal', stateCode: 0, percent: 100, temperatureC: 30, voltageMillivolts: 4_300, workTimeSeconds: 10, accumulatedWorkTimeSeconds: 20 } } }],
+  ]);
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22), process: (frame) => events.get(frame[0]!)!,
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket();
+  await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10));
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const frame of [11, 12, 13, 14]) socket.emit('message', Uint8Array.of(frame));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(checked, 4, 'info, status, storage and battery inserts must all match their parameters');
+  assert.equal(socket.closes.some((entry) => entry.reason === 'invalid device frame'), false);
+  socket.close();
+});
+
 test('gateway gives file discovery priority and serializes status queries', async () => {
   const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
     [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
