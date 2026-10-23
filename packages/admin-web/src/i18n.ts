@@ -874,6 +874,7 @@ const zhCN: Readonly<Record<string, string>> = {
   'Bluetooth notifications could not be enabled on the selected device.': '无法启用所选设备的蓝牙通知，请重新进入配对模式后重试。',
   'The Bluetooth connection ended while enabling device notifications. Keep the device nearby and retry the binding flow.': '启用设备蓝牙通知时连接已断开。请让设备保持在附近并重新执行绑定流程。',
   'Device selection failed unexpectedly.': '选择蓝牙设备时发生异常，请重试。',
+  'The device connector is not ready yet. Wait a moment and try again.': '设备连接器尚未就绪，请稍候片刻再试。',
   'Device WebSocket URL': '设备 WebSocket 地址',
   'Checking connection result': '正在检查连接结果',
   'Device connected': '设备连接成功',

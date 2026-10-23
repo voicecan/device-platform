@@ -11,7 +11,7 @@ import type { DeviceWsCandidate, Translate } from './ui.js';
 import { NativeHandoffPanel } from './native-handoff-panel.js';
 import { BindingPreparation } from './binding-preparation.js';
 import { bindingBrowserRequest } from './binding-browser-session.js';
-import { webBindingStep } from './binding-preparation-state.js';
+import { bindingIntentPollMs, nextBindingPollDelay, webBindingStep } from './binding-preparation-state.js';
 import { OpenPlatformWorkspace } from './open-platform-workspace.js';
 
 export type View = 'overview' | 'devices' | 'files' | 'provision' | 'release' | 'groups' | 'users' | 'open-platform' | 'open-platform-overview' | 'permission-catalog' | 'oauth-clients' | 'call-logs' | 'download-grants' | 'security-alerts' | 'events' | 'inspector' | 'storage' | 'audit';
@@ -26,8 +26,6 @@ export const navGroups: readonly { label: string; items: readonly View[] }[] = [
   { label: 'Open platform', items: ['open-platform-overview', 'permission-catalog', 'oauth-clients', 'call-logs', 'download-grants', 'security-alerts'] },
   { label: 'Operations', items: ['release', 'events', 'inspector', 'storage', 'audit'] },
 ];
-
-const bindingIntentPollMs = 10_000;
 
 function deviceConnectUrl(): string {
   const configured = document.querySelector<HTMLMetaElement>('meta[name="voicecan-connect-url"]')?.content.trim();
@@ -89,7 +87,7 @@ function UsersWorkspace({ t, run }: { t: Translate; run: Runner }) {
   const refreshUsers = async (): Promise<void> => {
     const sequence = ++usersLoadSequence.current;
     try { const nextUsers = await api('/users'); if (sequence !== usersLoadSequence.current) return; setUsers(nextUsers); setListError(''); }
-    catch (cause) { if (sequence === usersLoadSequence.current) setListError(cause instanceof Error ? cause.message : String(cause)); }
+    catch (cause) { if (sequence === usersLoadSequence.current) setListError(errorMessage(cause)); }
   };
   const mutate = async (operation: () => Promise<unknown>): Promise<void> => { const response = await run(operation); if (response !== undefined) await refreshUsers(); };
   useEffect(() => { void refreshUsers(); return () => { ++usersLoadSequence.current; }; }, []);
@@ -132,6 +130,10 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
   const [started, setStarted] = useState(false);
   const [connectorReady, setConnectorReady] = useState(false);
   const [deviceStep, setDeviceStep] = useState(0);
+  // Effect-scoped polling callbacks capture the render they were created in, so
+  // read the live step through a ref instead of the stale closure value.
+  const deviceStepRef = useRef(deviceStep);
+  useEffect(() => { deviceStepRef.current = deviceStep; }, [deviceStep]);
   const startConnector = useRef<((createGrant: () => Promise<{ provisioning_token: string; expires_at: string }>) => Promise<void>) | undefined>(undefined);
   const localBluetooth = supportsLocalWebBluetooth();
   const connectorUrl = deviceConnectUrl();
@@ -148,16 +150,20 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
   }, [settingsAttempt]);
   useEffect(() => {
     if (!bindingIntentId) return;
-    let active = true; let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    let active = true; let timer: ReturnType<typeof globalThis.setTimeout> | undefined; let delay = bindingIntentPollMs;
+    const schedule = (failed: boolean): void => {
+      delay = nextBindingPollDelay(delay, failed);
+      timer = globalThis.setTimeout(() => void loadIntent(), delay);
+    };
     const applyIntent = (intent: BindingIntent): void => {
       if (!active) return;
       setBindingIntent(intent); setBleServiceUuid(intent.ble_service_uuid); setGroupId(intent.group_id); setSerial(intent.expected_sn ?? ''); setDeviceWsUrl(intent.device_ws_url);
       if (intent.status === 'completed' && intent.device_id) { onNavigateDevice(intent.device_id); return; }
-      if (['pending', 'user_action', 'ble_selected', 'claimed', 'configured', 'failed', 'expired'].includes(intent.status)) timer = globalThis.setTimeout(() => void loadIntent(), bindingIntentPollMs);
+      if (['pending', 'user_action', 'ble_selected', 'claimed', 'configured', 'failed', 'expired'].includes(intent.status)) schedule(false);
     };
     const loadIntent = async (): Promise<void> => {
       try { applyIntent(await bindingBrowserRequest<BindingIntent>(api, bindingIntentId, 'browser')); }
-      catch (error) { if (active) { reportError(error); timer = globalThis.setTimeout(() => void loadIntent(), bindingIntentPollMs); } }
+      catch (error) { if (active) { reportError(error); schedule(true); } }
     };
     const fragment = new URLSearchParams(globalThis.location.hash.slice(1)); const launchToken = fragment.get('launch');
     if (launchToken) {
@@ -186,21 +192,28 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
     globalThis.history.replaceState(globalThis.history.state, '', url); setBindingIntentId(created.id); setBindingIntent(intent);
     return api(`/binding-intents/${encodeURIComponent(created.id)}/grant`, { method: 'POST', body: '{}' });
   };
-  const reportError = (integrationError: unknown): void => { if (deviceStep >= 1) return; setStarted(false); setDeviceStep(0); const message = integrationError instanceof Error ? integrationError.message : 'Device selection failed unexpectedly.'; void run(() => Promise.reject(new Error(t(message)))); };
+  const reportError = (integrationError: unknown): void => { if (deviceStepRef.current >= 1) return; setStarted(false); setDeviceStep(0); const message = integrationError instanceof Error ? integrationError.message : 'Device selection failed unexpectedly.'; void run(() => Promise.reject(new Error(t(message)))); };
+  const connectorUnavailable = (): void => {
+    setStarted(false);
+    void run(() => Promise.reject(new Error(t('The device connector is not ready yet. Wait a moment and try again.'))));
+  };
   const beginBinding = (): void => {
     if (!groupId || appPath) return;
     commitPath('web');
     setStarted(true); setDeviceStep(0);
-    if (localBluetooth) { const start = startConnector.current; if (!start) { setStarted(false); return; } void run(async () => { await start(createGrant); return true; }); return; }
-    const start = startRemoteConnector.current; if (!start) { setStarted(false); return; }
+    if (localBluetooth) { const start = startConnector.current; if (!start) { connectorUnavailable(); return; } void run(async () => { await start(createGrant); return true; }); return; }
+    const start = startRemoteConnector.current; if (!start) { connectorUnavailable(); return; }
     void run(async () => { await start(createGrant); return true; }).then((opened) => { if (!opened) setStarted(false); });
   };
   const createNativeIntent = async (): Promise<void> => {
     if (!appPath || bindingIntentId || creatingNative) return;
-    commitPath('app'); setCreatingNative(true);
+    setCreatingNative(true);
     try {
-    const result = await api<{ launch_url: string }>('/binding-intents', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, device_ws_url: deviceWsUrl.trim(), ...(serial.trim() ? { expected_sn: serial.trim() } : {}), network_mode: networkMode, locale }) });
-    const url = new URL(result.launch_url); url.searchParams.set('binding_path', 'app'); globalThis.history.replaceState(globalThis.history.state, '', url); setBindingIntentId(url.searchParams.get('binding_intent') ?? '');
+      const result = await api<{ launch_url: string }>('/binding-intents', { method: 'POST', body: JSON.stringify({ group_id: groupId, allowed_origin: location.origin, device_ws_url: deviceWsUrl.trim(), ...(serial.trim() ? { expected_sn: serial.trim() } : {}), network_mode: networkMode, locale }) });
+      // Lock the app path only after the intent exists; a failed request must
+      // leave the user free to switch back to browser binding.
+      commitPath('app');
+      const url = new URL(result.launch_url); url.searchParams.set('binding_path', 'app'); globalThis.history.replaceState(globalThis.history.state, '', url); setBindingIntentId(url.searchParams.get('binding_intent') ?? '');
     } finally { setCreatingNative(false); }
   };
   const intentWaiting = bindingIntent?.status === 'configured';
@@ -340,7 +353,7 @@ function ReleaseWorkspace({ t, run }: { t: Translate; run: Runner }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [grant, setGrant] = useState<{ expires_at: string; transfer_token: string }>();
   const steps = ['Select device', 'Review impact', 'Create transfer grant', 'Nearby confirmation'];
-  return <div className="flow-layout"><FlowHeader eyebrow={t('Controlled transfer')} title={t('Release a device')} description={t('Transfer control without erasing recordings or exposing the existing device credential.')} icon="transfer"/><Stepper steps={steps} current={grant ? 3 : acknowledged ? 2 : deviceId ? 1 : 0} t={t}/><div className="flow-stage">{!grant ? <form className="form-grid" onSubmit={(event) => event.preventDefault()}><ResourcePicker id="release-device" label={t('Device')} endpoint="/devices" value={deviceId} onChange={setDeviceId} t={t} required/><Field id="release-reason" label={t('Transfer reason')} value={reason} onChange={setReason} wide required/><label className="acknowledgement field-wide"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}/><span><strong>{t('I understand the impact')}</strong><small>{t('Recordings remain stored. Existing successful webhook deliveries cannot be recalled.')}</small></span></label><Actions><Button id="create-release" kind="danger" disabled={!deviceId || !reason.trim() || !acknowledged} onClick={() => void run(async () => { const response = await api<{ expires_at: string; transfer_token: string }>(`/devices/${encodeURIComponent(deviceId)}/transfer-out-sessions`, { method: 'POST', body: JSON.stringify({ allowed_origin: location.origin, reason: reason.trim() }) }); setGrant(response); return response; })}>{t('Create 5-minute release grant')}</Button></Actions></form> : <div className="grant-handoff compact"><div className="device-visual release"><span className="device-body"><i/><b/></span><span className="connection-ring"/></div><div><span className="status-pill status-warning">{t('Physical confirmation required')}</span><h3>{t('Continue near the selected device')}</h3><p>{t('Copy the one-time grant and complete the BLE acknowledgment on the device page before {expires}.', { expires: new Date(grant.expires_at).toLocaleString() })}</p><div className="grant-code"><span>{t('One-time grant')}</span><code>{grant.transfer_token}</code></div><div className="handoff-actions"><Button icon="copy" onClick={() => void navigator.clipboard.writeText(grant.transfer_token)}>{t('Copy transfer grant')}</Button><Button kind="secondary" onClick={() => window.open('/device', '_blank', 'noopener,noreferrer')}>{t('Open device flow')}</Button></div></div></div>}</div></div>;
+  return <div className="flow-layout"><FlowHeader eyebrow={t('Controlled transfer')} title={t('Release a device')} description={t('Transfer control without erasing recordings or exposing the existing device credential.')} icon="transfer"/><Stepper steps={steps} current={grant ? 3 : acknowledged ? 2 : deviceId ? 1 : 0} t={t}/><div className="flow-stage">{!grant ? <form className="form-grid" onSubmit={(event) => event.preventDefault()}><ResourcePicker id="release-device" label={t('Device')} endpoint="/devices" value={deviceId} onChange={setDeviceId} t={t} required/><Field id="release-reason" label={t('Transfer reason')} value={reason} onChange={setReason} wide required/><label className="acknowledgement field-wide"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}/><span><strong>{t('I understand the impact')}</strong><small>{t('Recordings remain stored. Existing successful webhook deliveries cannot be recalled.')}</small></span></label><Actions><Button id="create-release" kind="danger" disabled={!deviceId || !reason.trim() || !acknowledged} onClick={() => void run(async () => { const response = await api<{ expires_at: string; transfer_token: string }>(`/devices/${encodeURIComponent(deviceId)}/transfer-out-sessions`, { method: 'POST', body: JSON.stringify({ allowed_origin: location.origin, reason: reason.trim() }) }); setGrant(response); return response; })}>{t('Create 5-minute release grant')}</Button></Actions></form> : <div className="grant-handoff compact"><div className="device-visual release"><span className="device-body"><i/><b/></span><span className="connection-ring"/></div><div><span className="status-pill status-warning">{t('Physical confirmation required')}</span><h3>{t('Continue near the selected device')}</h3><p>{t('Copy the one-time grant and complete the BLE acknowledgment on the device page before {expires}.', { expires: new Date(grant.expires_at).toLocaleString() })}</p><div className="grant-code"><span>{t('One-time grant')}</span><code>{grant.transfer_token}</code></div><div className="handoff-actions"><Button icon="copy" onClick={() => void run(async () => { await navigator.clipboard.writeText(grant.transfer_token); return true; })}>{t('Copy transfer grant')}</Button><Button kind="secondary" onClick={() => window.open('/device', '_blank', 'noopener,noreferrer')}>{t('Open device flow')}</Button></div></div></div>}</div></div>;
 }
 
 function InspectorWorkspace({ t, run }: { t: Translate; run: Runner }) {

@@ -6,6 +6,7 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   const app = await readFile(new URL('../../admin-web/src/App.tsx', import.meta.url), 'utf8');
   const workspaces = await readFile(new URL('../../admin-web/src/workspaces.tsx', import.meta.url), 'utf8');
   const bindingPreparation = await readFile(new URL('../../admin-web/src/binding-preparation.tsx', import.meta.url), 'utf8');
+  const bindingPreparationState = await readFile(new URL('../../admin-web/src/binding-preparation-state.ts', import.meta.url), 'utf8');
   const openPlatform = await readFile(new URL('../../admin-web/src/open-platform-workspace.tsx', import.meta.url), 'utf8');
   const deviceIntegration = await readFile(new URL('../../admin-web/src/device-integration.tsx', import.meta.url), 'utf8');
   const deviceManagement = await readFile(new URL('../../admin-web/src/device-management.tsx', import.meta.url), 'utf8');
@@ -66,7 +67,8 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(deviceIntegration, /observeOnline/);
   assert.match(deviceIntegration, /const provisioningStatusPollMs = 10_000/);
   assert.match(connectPage, /const provisioningStatusPollMs = 10_000/);
-  assert.match(workspaces, /const bindingIntentPollMs = 10_000/);
+  assert.match(bindingPreparationState, /export const bindingIntentPollMs = 10_000/);
+  assert.match(workspaces, /bindingIntentPollMs, nextBindingPollDelay, webBindingStep/);
   assert.match(workspaces, /void run\(async \(\) => \{ await start\(createGrant\); return true; \}\)/);
   assert.match(deviceIntegration, /DEVICE_ALREADY_CLAIMED/);
   assert.match(deviceIntegration, /onAlreadyClaimed/);

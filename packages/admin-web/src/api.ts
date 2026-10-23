@@ -1,18 +1,32 @@
 import { ApiError } from './api-error.js';
+import { parseApiEnvelope } from './api-response.js';
 
-let csrfToken = sessionStorage.getItem('voicecan_csrf') ?? '';
+// Storage access throws in some hardened/embedded browsers; a lost cache only
+// costs one refresh round-trip, so it must never break the module import.
+function readStoredToken(): string {
+  try { return globalThis.sessionStorage?.getItem('voicecan_csrf') ?? ''; }
+  catch { return ''; }
+}
 
-type Envelope<T> = { success: boolean; code: string; message: string; data: T };
+function writeStoredToken(value: string): void {
+  try {
+    if (value) globalThis.sessionStorage?.setItem('voicecan_csrf', value);
+    else globalThis.sessionStorage?.removeItem('voicecan_csrf');
+  } catch { /* the in-memory token still works for this page */ }
+}
+
+let csrfToken = readStoredToken();
 
 export function setCsrfToken(value: string): void {
   csrfToken = value;
-  if (value) sessionStorage.setItem('voicecan_csrf', value);
-  else sessionStorage.removeItem('voicecan_csrf');
+  writeStoredToken(value);
 }
 
 function csrfCookie(): string {
-  const entry = document.cookie.split('; ').find((value) => value.startsWith('vc_csrf='));
-  return entry ? decodeURIComponent(entry.slice('vc_csrf='.length)) : '';
+  try {
+    const entry = document.cookie.split('; ').find((value) => value.startsWith('vc_csrf='));
+    return entry ? decodeURIComponent(entry.slice('vc_csrf='.length)) : '';
+  } catch { return ''; }
 }
 
 async function request<T>(path: string, options: RequestInit, allowCsrfRefresh: boolean): Promise<T> {
@@ -26,7 +40,7 @@ async function request<T>(path: string, options: RequestInit, allowCsrfRefresh: 
       ...options.headers,
     },
   });
-  const payload = await response.json() as Envelope<T>;
+  const payload = parseApiEnvelope<T>(response.status, await response.text());
   if (allowCsrfRefresh && response.status === 403 && payload.code === 'CSRF_FAILED') {
     const refreshed = await request<{ csrf_token: string }>('/auth/csrf', {}, false);
     setCsrfToken(refreshed.csrf_token);
@@ -45,9 +59,13 @@ export async function apiBinary(path: string): Promise<Response> {
   if (response.ok) return response;
   let message = `HTTP ${response.status}`;
   try {
-    const payload = await response.json() as Partial<Envelope<unknown>>;
-    message = `${payload.code ?? 'REQUEST_FAILED'}: ${payload.message ?? message}`;
-  } catch { /* Preserve the HTTP fallback for a non-JSON proxy response. */ }
+    const payload = parseApiEnvelope<unknown>(response.status, await response.text());
+    message = `${payload.code || 'REQUEST_FAILED'}: ${payload.message || message}`;
+  } catch (error) {
+    // Preserve the HTTP fallback for a non-JSON proxy response, but keep a
+    // server-provided code/message when there is one.
+    if (error instanceof ApiError && !['INVALID_RESPONSE', 'EMPTY_RESPONSE'].includes(error.code)) message = `${error.code}: ${error.message}`;
+  }
   throw new Error(message);
 }
 
@@ -55,12 +73,12 @@ export async function apiBinaryUpload<T>(path: string, content: Blob, allowCsrfR
   const cookieToken = csrfCookie();
   if (cookieToken && cookieToken !== csrfToken) setCsrfToken(cookieToken);
   const response = await fetch(`/api/v1${path}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}) }, body: content });
-  const payload = await response.json() as Envelope<T>;
+  const payload = parseApiEnvelope<T>(response.status, await response.text());
   if (allowCsrfRefresh && response.status === 403 && payload.code === 'CSRF_FAILED') {
     const refreshed = await request<{ csrf_token: string }>('/auth/csrf', {}, false); setCsrfToken(refreshed.csrf_token);
     return apiBinaryUpload<T>(path, content, false);
   }
-  if (!response.ok || !payload.success) throw new Error(`${payload.code}: ${payload.message}`);
+  if (!response.ok || !payload.success) throw new ApiError(response.status, payload.code, payload.message);
   return payload.data;
 }
 

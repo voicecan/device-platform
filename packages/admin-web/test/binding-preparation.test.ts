@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { selectBindingGroup, webBindingStep } from '../src/binding-preparation-state.js';
+import { selectBindingGroup, nextBindingPollDelay, webBindingStep } from '../src/binding-preparation-state.js';
 
 test('a single ownership group is selected without a separate setup step', () => {
   assert.equal(selectBindingGroup([{ id: 'personal' }], ''), 'personal');
@@ -22,4 +22,13 @@ test('device configuration alone never displays completed binding', () => {
   assert.equal(webBindingStep(true, 2, false), 2);
   assert.equal(webBindingStep(true, 3, true), 2);
   assert.equal(webBindingStep(true, 3, false), 3);
+});
+
+test('binding intent polling backs off after a failure and resets on success', () => {
+  assert.equal(nextBindingPollDelay(10_000, false), 10_000);
+  assert.equal(nextBindingPollDelay(10_000, true), 20_000);
+  assert.equal(nextBindingPollDelay(20_000, true), 40_000);
+  assert.equal(nextBindingPollDelay(40_000, true), 60_000);
+  assert.equal(nextBindingPollDelay(60_000, true), 60_000);
+  assert.equal(nextBindingPollDelay(60_000, false), 10_000);
 });
