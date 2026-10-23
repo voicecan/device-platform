@@ -29,7 +29,11 @@ An interrupted direct transfer follows the same relay fallback. If the Server pr
 
 - `POST /api/v1/recordings/{id}/retry` resets one `failed` recording and requests a fresh inventory. A non-empty `reason` is required.
 - `POST /api/v1/devices/{id}/recording-sync/reset` accepts `mode: "failed"` or `mode: "failed_and_stale"`, invalidates unfinished upload attempts, removes only relay partial data, returns affected counts, and requests a fresh inventory.
-- `GET /api/v1/devices/{id}/recording-sync` returns connection state, aggregate synchronization health, recent recordings, failure codes and the latest semantic sync command.
+- `GET /api/v1/devices/{id}/recording-sync` returns connection state, aggregate synchronization health, the active transfer's byte progress and speed, queued pending/syncing bytes, the current round's completed/queued file counts, recordings newest first, failure codes and the latest semantic sync command.
+- `GET /api/v1/devices/{id}/recording-progress` is the lightweight polling surface for the Admin workspace. It returns only the connection snapshot, aggregate counts, round counters and the active transfer bytes/speed. The workspace polls it every 250 ms while visible, refreshes the full recording list every 2 seconds (or immediately when file counts change), and pauses both when the page is hidden.
+- The first bind, every rebind, and the first scan after upgrading an existing deployment perform a full device inventory. Later reconnects request only session IDs above the highest known session ID.
+- A rebind reconciles files already synchronized under the same physical device's released binding. Matching synced rows are moved to the new device identity instead of being downloaded again, which also avoids firmware failures for files it no longer retains.
+- After a scan completes, incomplete files are queued newest first. A `new_file` notification inserts the new file at the front of the queue. The overall round counter uses completed files divided by the files queued at scan start; new files increase the round total and are reflected immediately.
 
 Neither retry nor reset deletes synchronized recording objects or asks the Device to erase source recordings. `failed_and_stale` only includes a `syncing` item when it has not changed for 20 minutes or the Device is offline.
 

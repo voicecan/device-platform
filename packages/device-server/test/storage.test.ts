@@ -13,6 +13,7 @@ test('filesystem storage verifies size and never overwrites a final object', asy
   const content = Buffer.from('recording');
   const stored = await storage.receive('file_abcdef12-3456-7890-abcd-ef1234567890', Readable.from(content), content.length);
   assert.deepEqual(await readFile(storage.resolveLocator(stored.locator)), content);
+  assert.equal(storage.transferProgress('file_abcdef12-3456-7890-abcd-ef1234567890')?.bytes, content.length);
   await assert.rejects(storage.receive('file_abcdef12-3456-7890-abcd-ef1234567890', Readable.from(Buffer.from('overwrite')), 9), /IMMUTABLE_OBJECT_EXISTS/);
   assert.deepEqual(await readFile(storage.resolveLocator(stored.locator)), content);
 });
@@ -23,8 +24,10 @@ test('server relay enforces exact offsets and resumes a partial immutable upload
   const storage = new FilesystemStorage(directory); const fileId = 'file_12345678-3456-7890-abcd-ef1234567890';
   assert.equal(await storage.appendRelay(fileId, 0, Buffer.from('record'), 9), null);
   assert.equal(await storage.relayOffset(fileId), 6);
+  assert.equal(storage.transferProgress(fileId)?.bytes, 6);
   await assert.rejects(storage.appendRelay(fileId, 5, Buffer.from('ing'), 9), /RELAY_OFFSET_MISMATCH/);
   const stored = await storage.appendRelay(fileId, 6, Buffer.from('ing'), 9);
   assert.equal(stored?.size, 9);
   assert.deepEqual(await readFile(storage.resolveLocator(stored!.locator)), Buffer.from('recording'));
+  assert.equal(storage.transferProgress(fileId)?.bytes, 9);
 });

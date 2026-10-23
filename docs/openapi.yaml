@@ -850,12 +850,18 @@ paths:
       security: [{ sessionCookie: [] }, { groupToken: [] }]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
       responses: { '202': { description: Queued }, '409': { description: Idempotency conflict } }
+  /devices/{id}/recording-progress:
+    get:
+      summary: Read lightweight active-transfer and sync-round progress
+      security: [{ applicationToken: [devices:read, recordings:read] }, { sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Active transfer bytes/speed, round counters and aggregate file counts }, '404': { description: Missing or unauthorized } }
   /devices/{id}/recording-sync:
     get:
       summary: Read Device connection state and recording synchronization health
       security: [{ applicationToken: [devices:read, recordings:read] }, { sessionCookie: [] }]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
-      responses: { '200': { description: Connection, aggregate status, recent recordings and latest sync command }, '404': { description: Missing or unauthorized } }
+      responses: { '200': { description: Connection, aggregate status, active transfer and sync-round progress, recordings newest first and latest sync command }, '404': { description: Missing or unauthorized } }
   /devices/{id}/recording-sync/reset:
     post:
       summary: Non-destructively reset failed or stale recording synchronization and request a fresh inventory

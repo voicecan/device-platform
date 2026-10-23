@@ -545,6 +545,40 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     }
     return prepared.eventId;
   };
+  const roundCompletionStatement = (deviceId: string, at: string): SqlStatement => ({
+    sql: "UPDATE devices SET sync_round_completed=CASE WHEN sync_round_completed<sync_round_total THEN sync_round_completed+1 ELSE sync_round_total END,updated_at=? WHERE id=?",
+    params: [at, deviceId],
+  });
+  const syncSummarySql = `SELECT COUNT(*) AS total,
+    SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+    SUM(CASE WHEN status='syncing' THEN 1 ELSE 0 END) AS syncing,
+    SUM(CASE WHEN status='synced' THEN 1 ELSE 0 END) AS synced,
+    SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
+    SUM(CASE WHEN status='identity_conflict' THEN 1 ELSE 0 END) AS identity_conflict,
+    COALESCE(SUM(expected_size),0) AS discovered_bytes,
+    COALESCE(SUM(CASE WHEN status='synced' THEN actual_size ELSE 0 END),0) AS synced_bytes,
+    COALESCE(SUM(CASE WHEN status IN ('pending','syncing') THEN expected_size ELSE 0 END),0) AS queued_bytes,
+    MIN(CASE WHEN status IN ('pending','syncing') THEN updated_at END) AS oldest_incomplete_at,
+    MAX(synced_at) AS last_synced_at
+    FROM recording_files WHERE device_id=? AND deletion_status='active'`;
+  const readSyncSummary = (deviceId: string): Promise<Row | null> => db.get<Row>(syncSummarySql, [deviceId]);
+  const readSyncingFile = (deviceId: string): Promise<Row | null> => db.get<Row>("SELECT * FROM recording_files WHERE device_id=? AND deletion_status='active' AND status='syncing' ORDER BY updated_at DESC,id DESC LIMIT 1", [deviceId]);
+  const readActiveTransfer = async (syncing: Row | null | undefined): Promise<Record<string, unknown> | null> => {
+    if (!syncing) return null;
+    const progress = storage.transferProgress(String(syncing.id));
+    const transferred = progress?.bytes ?? (String(syncing.transport ?? '') === 'server_relay' ? await storage.relayOffset(String(syncing.id)) : null);
+    const startedAt = progress?.startedAt ?? String(syncing.updated_at);
+    const startedAtMs = Date.parse(startedAt);
+    const elapsedSeconds = Number.isFinite(startedAtMs) ? Math.max(1, (Date.now() - startedAtMs) / 1_000) : null;
+    return {
+      file_id: String(syncing.id), expected_size: Number(syncing.expected_size), transferred_bytes: transferred,
+      started_at: startedAt, bytes_per_second: transferred !== null && elapsedSeconds !== null ? transferred / elapsedSeconds : null,
+      transport: syncing.transport ?? null,
+    };
+  };
+  const syncSummary = (summary: Row | null | undefined, device: Row): Record<string, unknown> => ({
+    total: Number(summary?.total ?? 0), pending: Number(summary?.pending ?? 0), syncing: Number(summary?.syncing ?? 0), synced: Number(summary?.synced ?? 0), failed: Number(summary?.failed ?? 0), identity_conflict: Number(summary?.identity_conflict ?? 0), discovered_bytes: Number(summary?.discovered_bytes ?? 0), synced_bytes: Number(summary?.synced_bytes ?? 0), queued_bytes: Number(summary?.queued_bytes ?? 0), round_total: Number(device.sync_round_total ?? 0), round_completed: Number(device.sync_round_completed ?? 0), round_started_at: device.sync_round_started_at ?? null, oldest_incomplete_at: summary?.oldest_incomplete_at ?? null, last_synced_at: summary?.last_synced_at ?? null,
+  });
   const planGatewayUpload = async (device: Row, file: Row, uploadBaseUrl: string): Promise<{ fileId: string; uploadUrl: string; offset?: number } | null> => {
     const fileId = String(file.id); const expectedSize = Number(file.expected_size);
     const emitSyncStarted = async (transport: string, attemptId?: string): Promise<void> => {
@@ -595,6 +629,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const results = await db.batch([
       { sql: "UPDATE recording_files SET status='synced',actual_size=?,sha256=?,storage_locator=?,error_code=NULL,synced_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing' AND EXISTS(SELECT 1 FROM devices d WHERE d.id=recording_files.device_id AND d.ownership_epoch=? AND d.group_id=?)", params: [committed.size, committed.sha256, committed.locator, committedAt, committedAt, file.id, file.ownership_epoch, file.group_id], expectChanges: 1 },
       { sql: 'UPDATE s3_upload_attempts SET completed_at=?,final_locator=? WHERE id=? AND completed_at IS NULL AND failed_at IS NULL', params: [committedAt, committed.locator, attempt.id], expectChanges: 1 },
+      roundCompletionStatement(String(file.device_id), committedAt),
       ...prepared.statements,
     ]);
     if (results[0]?.changes !== 1 || results[1]?.changes !== 1) throw new Error('S3_ATTEMPT_RACE');
@@ -614,6 +649,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const completedAt = now(); const completedFile = { ...file, actual_size: stored.size, sha256: stored.sha256, synced_at: completedAt, resource_version: Number(file.resource_version ?? 1) + 1 }; const prepared = await prepareEvent(file, 'file.synced', { file_id: file.id, device_id: file.device_id, session_id: file.session_id, attribute: file.attribute, file_size: stored.size, sha256: stored.sha256, ...recordingEventFacts(completedFile) });
     await db.batch([
       { sql: "UPDATE recording_files SET status='synced',actual_size=?,sha256=?,storage_locator=?,error_code=NULL,synced_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing' AND transport='server_relay' AND EXISTS(SELECT 1 FROM devices d WHERE d.id=recording_files.device_id AND d.ownership_epoch=? AND d.group_id=?)", params: [stored.size, stored.sha256, stored.locator, completedAt, completedAt, file.id, file.ownership_epoch, file.group_id], expectChanges: 1 },
+      roundCompletionStatement(String(file.device_id), completedAt),
       ...prepared.statements,
     ]);
     dispatcher.scheduleDrain();
@@ -1080,14 +1116,47 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const manufacturer = requiredString(body, 'manufacturer', 64); const sn = requiredString(body, 'serial_number', 128); const scannedBluetoothName = optionalString(body, 'bluetooth_name', 248);
     const bindingIntent = await db.get<{ display_name: string | null }>('SELECT display_name FROM binding_intents WHERE provisioning_session_id=?', [session.id]);
     const defaultDisplayName = bindingIntent?.display_name ?? (scannedBluetoothName ? scannedBluetoothName.slice(0, 80) : null);
-    const existing = await db.get<{ id: string; display_name: string | null; group_id: string; claim_status: string; credential_id: string | null; token_ciphertext: string | null; key_version: number | null }>(`SELECT d.id,d.display_name,d.group_id,d.claim_status,c.id AS credential_id,c.token_ciphertext,c.key_version
+    const existing = await db.get<{ id: string; display_name: string | null; group_id: string; claim_status: string; credential_id: string | null; token_ciphertext: string | null; key_version: number | null; online: number; last_seen_at: string | null; credential_epoch: number; connection_epoch: number }>(`SELECT d.id,d.display_name,d.group_id,d.claim_status,d.online,d.last_seen_at,d.credential_epoch,d.connection_epoch,c.id AS credential_id,c.token_ciphertext,c.key_version
       FROM devices d LEFT JOIN device_credentials c ON c.device_id=d.id AND c.status='temporary' AND c.revoked_at IS NULL
       WHERE d.manufacturer=? AND d.sn=? AND d.deleted_at IS NULL ORDER BY c.credential_epoch DESC LIMIT 1`, [manufacturer, sn]);
     if (existing) {
       if (existing.group_id !== session.group_id) throw new HttpError(409, 'DEVICE_ALREADY_CLAIMED', 'Device is already claimed');
       if (existing.claim_status !== 'reserved') {
-        if (!existing.display_name && defaultDisplayName) await db.batch([...fence, { sql: 'UPDATE devices SET display_name=?,updated_at=? WHERE id=? AND display_name IS NULL', params: [defaultDisplayName, now(), existing.id] }]);
-        throw new HttpError(409, 'DEVICE_ALREADY_CLAIMED', 'Device is already claimed', { device_id: existing.id });
+        const lastSeen = existing.last_seen_at ? Date.parse(existing.last_seen_at) : 0;
+        const recentlyOnline = Boolean(existing.online) && Number.isFinite(lastSeen) && Date.now() - lastSeen < 35_000;
+        if (recentlyOnline) {
+          if (!existing.display_name && defaultDisplayName) await db.batch([...fence, { sql: 'UPDATE devices SET display_name=?,updated_at=? WHERE id=? AND display_name IS NULL', params: [defaultDisplayName, now(), existing.id] }]);
+          throw new HttpError(409, 'DEVICE_ALREADY_CLAIMED', 'Device is already claimed', { device_id: existing.id });
+        }
+        // The device is physically in the BLE binding flow but the previous
+        // unbind never reached this server. Reuse the same device identity and
+        // recordings, rotate its temporary credential, and return a fresh claim
+        // so the device receives the new binding token.
+        const continuationToken = `vcd_continue_${opaqueToken()}`; const timestamp = now();
+        const rawDeviceToken = randomBytes(32);
+        try {
+          const credential = await db.get<{ id: string; credential_epoch: number }>('SELECT id,credential_epoch FROM device_credentials WHERE device_id=? ORDER BY credential_epoch DESC LIMIT 1', [existing.id]);
+          const credentialId = credential?.id ?? id('credential');
+          const credentialEpoch = Number(credential?.credential_epoch ?? existing.credential_epoch ?? 1);
+          const statements: SqlStatement[] = [
+            ...fence,
+            { sql: "UPDATE devices SET claim_status='reserved',online=0,connection_epoch=connection_epoch+1,display_name=COALESCE(display_name,?),updated_at=? WHERE id=? AND claim_status<>'reserved'", params: [defaultDisplayName, timestamp, existing.id], expectChanges: 1 },
+            { sql: 'UPDATE device_credentials SET revoked_at=? WHERE device_id=? AND id<>? AND revoked_at IS NULL', params: [timestamp, existing.id, credentialId] },
+          ];
+          if (credential) {
+            statements.push({ sql: "UPDATE device_credentials SET status='temporary',expires_at=?,revoked_at=NULL,token_verifier=?,token_ciphertext=?,key_version=? WHERE id=? AND device_id=?", params: [session.expires_at, deviceTokenVerifier(rawDeviceToken, config.groupTokenPepper), encryptSecret(rawDeviceToken, config.masterKey, `${existing.id}:${credentialId}`), config.masterKeyVersion, credentialId, existing.id], expectChanges: 1 });
+          } else {
+            statements.push({ sql: "INSERT INTO device_credentials(id,device_id,credential_epoch,token_verifier,token_ciphertext,key_version,status,expires_at,created_at) VALUES(?,?,?,?,?,?,'temporary',?,?)", params: [credentialId, existing.id, credentialEpoch, deviceTokenVerifier(rawDeviceToken, config.groupTokenPepper), encryptSecret(rawDeviceToken, config.masterKey, `${existing.id}:${credentialId}`), config.masterKeyVersion, session.expires_at, timestamp], expectChanges: 1 });
+          }
+          statements.push(
+            { sql: "UPDATE provisioning_sessions SET status='failed',failed_at=?,failure_code='SUPERSEDED_BY_REBIND',updated_at=? WHERE device_id=? AND id<>? AND status IN ('reserved','ble_authenticated','configured','online')", params: [timestamp, timestamp, existing.id, session.id] },
+            { sql: "UPDATE provisioning_sessions SET status='reserved',consumed_at=COALESCE(consumed_at,?),device_id=?,continuation_token_hash=?,failed_at=NULL,failure_code=NULL,completed_at=NULL,updated_at=? WHERE id=? AND status IN ('pending','failed') AND expires_at>?", params: [timestamp, existing.id, tokenHash(continuationToken), timestamp, session.id, timestamp], expectChanges: 1 },
+          );
+          await db.batch(statements);
+          await protectDeviceCredentials();
+          app.log.info({ device_id: existing.id, manufacturer, sn, previous_online: Boolean(existing.online) }, 'stale offline device rebound with a fresh credential');
+          return { provisioning_session_id: session.id, continuation_token: continuationToken, device_id: existing.id, display_name: existing.display_name ?? defaultDisplayName, device_token: encodeDeviceToken(rawDeviceToken), wss_url: deviceWsUrl, recovered: false, rebound: true };
+        } finally { rawDeviceToken.fill(0); }
       }
       if (!existing.credential_id || !existing.token_ciphertext || existing.key_version === null) throw new HttpError(409, 'DEVICE_RECOVERY_UNAVAILABLE', 'The reserved device has no recoverable credential and must be reset before provisioning');
       const continuationToken = `vcd_continue_${opaqueToken()}`; const timestamp = now();
@@ -1213,8 +1282,18 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.get('/api/v1/devices/:id', async (request, reply) => { const context = await resolveAccess(request); requireScope(context, 'devices:read'); return success(reply, mapDevice(await requireDevice(context, String((request.params as Row).id)))); });
   app.get('/api/v1/devices/:id/status', async (request, reply) => {
     const context = await resolveAccess(request); requireScope(context, 'devices:read'); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId);
-    const status = await db.get<Row>('SELECT * FROM device_status WHERE device_id=?', [deviceId]);
-    return success(reply, { device: mapDevice(device), status: mapDeviceStatus(status, deviceId), refresh_available: Boolean(device.online), polling_interval_seconds: 60 });
+    const [status, lastAutoShutdown] = await Promise.all([
+      db.get<Row>('SELECT * FROM device_status WHERE device_id=?', [deviceId]),
+      db.get<{ payload_json: string; completed_at: string | null }>("SELECT payload_json,completed_at FROM commands WHERE device_id=? AND kind='device.auto_shutdown' AND status='succeeded' ORDER BY completed_at DESC,id DESC LIMIT 1", [deviceId]),
+    ]);
+    let autoShutdown: { interval: string; updated_at: string | null } | null = null;
+    if (lastAutoShutdown) {
+      try {
+        const payload = JSON.parse(lastAutoShutdown.payload_json) as { interval?: unknown };
+        if (['never', '15min', '30min', '1h', '5h'].includes(String(payload.interval))) autoShutdown = { interval: String(payload.interval), updated_at: lastAutoShutdown.completed_at };
+      } catch { /* ignore malformed historical command payloads */ }
+    }
+    return success(reply, { device: mapDevice(device), status: mapDeviceStatus(status, deviceId), auto_shutdown: autoShutdown, refresh_available: Boolean(device.online), polling_interval_seconds: 60 });
   });
   app.post('/api/v1/devices/:id/status/refresh', async (request, reply) => {
     const context = await resolveAccess(request, true); if (context.actorType !== 'user') throw new AccessDeniedError(); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId); requireGroupAdmin(context, String(device.group_id));
@@ -1316,7 +1395,10 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       typeof battery.state === 'string' ? battery.state.slice(0, 32) : null, optionalInteger(battery.stateCode, 0, 255, 'battery.stateCode'), optionalInteger(battery.percent ?? status.batteryPercent, 0, 100, 'battery.percent'), optionalInteger(battery.temperatureC, -128, 255, 'battery.temperatureC'), optionalInteger(battery.voltageMillivolts, 0, 65_535, 'battery.voltageMillivolts'), optionalInteger(battery.workTimeSeconds, 0, Number.MAX_SAFE_INTEGER, 'battery.workTimeSeconds'), optionalInteger(battery.accumulatedWorkTimeSeconds, 0, Number.MAX_SAFE_INTEGER, 'battery.accumulatedWorkTimeSeconds'), timestamp, timestamp, timestamp, timestamp,
     ];
     await db.run(`INSERT INTO device_status(device_id,source,record_state,record_mode,microphone_mode,microphone_gain_db,usb_state,wifi_state,wifi_mode,relay_state,privacy_mode,earphone_recording,storage_total_kb,storage_free_kb,recording_hours,battery_state,battery_state_code,battery_percent,battery_temperature_c,battery_voltage_mv,work_time_seconds,accumulated_work_time_seconds,status_updated_at,storage_updated_at,battery_updated_at,updated_at) VALUES(?,'ble',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET source='ble',record_state=excluded.record_state,record_mode=excluded.record_mode,microphone_mode=excluded.microphone_mode,microphone_gain_db=excluded.microphone_gain_db,usb_state=excluded.usb_state,wifi_state=excluded.wifi_state,wifi_mode=excluded.wifi_mode,relay_state=excluded.relay_state,privacy_mode=excluded.privacy_mode,earphone_recording=excluded.earphone_recording,storage_total_kb=excluded.storage_total_kb,storage_free_kb=excluded.storage_free_kb,recording_hours=excluded.recording_hours,battery_state=excluded.battery_state,battery_state_code=excluded.battery_state_code,battery_percent=excluded.battery_percent,battery_temperature_c=excluded.battery_temperature_c,battery_voltage_mv=excluded.battery_voltage_mv,work_time_seconds=excluded.work_time_seconds,accumulated_work_time_seconds=excluded.accumulated_work_time_seconds,status_updated_at=excluded.status_updated_at,storage_updated_at=excluded.storage_updated_at,battery_updated_at=excluded.battery_updated_at,updated_at=excluded.updated_at`, values);
-    if (info) await db.run('UPDATE devices SET manufacturer=?,model=?,hardware_version=?,firmware_version=?,updated_at=? WHERE id=? AND deleted_at IS NULL', [requiredString(info, 'manufacturer', 64), requiredString(info, 'model', 64), requiredString(info, 'hardwareVersion', 64), requiredString(info, 'firmwareVersion', 64), timestamp, deviceId]);
+    if (info) await db.batch([
+      { sql: 'UPDATE devices SET manufacturer=?,model=?,hardware_version=?,firmware_version=?,updated_at=? WHERE id=? AND deleted_at IS NULL', params: [requiredString(info, 'manufacturer', 64), requiredString(info, 'model', 64), requiredString(info, 'hardwareVersion', 64), requiredString(info, 'firmwareVersion', 64), timestamp, deviceId] },
+      { sql: `INSERT INTO device_status(device_id,source,info_updated_at,updated_at) VALUES(?,'ble',?,?) ON CONFLICT(device_id) DO UPDATE SET info_updated_at=excluded.info_updated_at,updated_at=excluded.updated_at`, params: [deviceId, timestamp, timestamp] },
+    ]);
     await audit(request, context, 'device.ble_status_reported', 'device', deviceId, String(device.group_id));
     return success(reply, { device_id: deviceId, source: 'ble', updated_at: timestamp });
   });
@@ -1411,26 +1493,28 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.get('/api/v1/devices/:id/recording-sync', async (request, reply) => {
     const context = await resolveAccess(request); requireScope(context, 'devices:read'); requireScope(context, 'recordings:read');
     const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId);
-    const [summary, files, command] = await Promise.all([
-      db.get<Row>(`SELECT COUNT(*) AS total,
-        SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
-        SUM(CASE WHEN status='syncing' THEN 1 ELSE 0 END) AS syncing,
-        SUM(CASE WHEN status='synced' THEN 1 ELSE 0 END) AS synced,
-        SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
-        SUM(CASE WHEN status='identity_conflict' THEN 1 ELSE 0 END) AS identity_conflict,
-        COALESCE(SUM(expected_size),0) AS discovered_bytes,
-        COALESCE(SUM(CASE WHEN status='synced' THEN actual_size ELSE 0 END),0) AS synced_bytes,
-        MIN(CASE WHEN status IN ('pending','syncing') THEN updated_at END) AS oldest_incomplete_at,
-        MAX(synced_at) AS last_synced_at
-        FROM recording_files WHERE device_id=? AND deletion_status='active'`, [deviceId]),
-      db.all<Row>("SELECT * FROM recording_files WHERE device_id=? AND deletion_status='active' ORDER BY created_at DESC,id DESC LIMIT 100", [deviceId]),
-      db.get<Row>('SELECT * FROM commands WHERE device_id=? AND kind=\'sync\' ORDER BY created_at DESC,id DESC LIMIT 1', [deviceId]),
+    const [summary, files, command, syncing] = await Promise.all([
+      readSyncSummary(deviceId),
+      db.all<Row>("SELECT * FROM recording_files WHERE device_id=? AND deletion_status='active' ORDER BY session_id DESC,attribute DESC,revision ASC LIMIT 500", [deviceId]),
+      db.get<Row>("SELECT * FROM commands WHERE device_id=? AND kind='sync' ORDER BY created_at DESC,id DESC LIMIT 1", [deviceId]),
+      readSyncingFile(deviceId),
     ]);
     return success(reply, {
       device: { ...mapDevice(device), connection_epoch: Number(device.connection_epoch ?? 0), claim_status: String(device.claim_status), connection_status: Boolean(device.online) ? 'online' : 'offline' },
-      summary: { total: Number(summary?.total ?? 0), pending: Number(summary?.pending ?? 0), syncing: Number(summary?.syncing ?? 0), synced: Number(summary?.synced ?? 0), failed: Number(summary?.failed ?? 0), identity_conflict: Number(summary?.identity_conflict ?? 0), discovered_bytes: Number(summary?.discovered_bytes ?? 0), synced_bytes: Number(summary?.synced_bytes ?? 0), oldest_incomplete_at: summary?.oldest_incomplete_at ?? null, last_synced_at: summary?.last_synced_at ?? null },
-      files: files.map(mapFile), latest_command: command ? mapPublicCommand(command) : null,
+      summary: syncSummary(summary, device),
+      files: files.map(mapFile), active_transfer: await readActiveTransfer(syncing), latest_command: command ? mapPublicCommand(command) : null,
       reset_policy: { deletes_recordings: false, default_scope: 'failed', stale_after_seconds: 1_200 },
+    });
+  });
+  app.get('/api/v1/devices/:id/recording-progress', async (request, reply) => {
+    const context = await resolveAccess(request); requireScope(context, 'devices:read'); requireScope(context, 'recordings:read');
+    const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId);
+    const [summary, syncing] = await Promise.all([readSyncSummary(deviceId), readSyncingFile(deviceId)]);
+    reply.header('cache-control', 'no-store');
+    return success(reply, {
+      device: { id: String(device.id), online: Boolean(device.online), connection_epoch: Number(device.connection_epoch ?? 0), claim_status: String(device.claim_status ?? 'active'), last_seen_at: device.last_seen_at ? String(device.last_seen_at) : null },
+      summary: syncSummary(summary, device),
+      active_transfer: await readActiveTransfer(syncing),
     });
   });
   app.post('/api/v1/recordings/:id/retry', async (request, reply) => {
@@ -1694,6 +1778,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       const committed = await db.batch([
         { sql: "UPDATE recording_files SET status='synced',actual_size=?,sha256=?,storage_locator=?,error_code=NULL,synced_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM upload_tickets WHERE id=? AND consumed_at IS NULL AND failed_at IS NULL) AND EXISTS(SELECT 1 FROM devices d WHERE d.id=recording_files.device_id AND d.ownership_epoch=? AND d.group_id=?)", params: [stored.size, stored.sha256, stored.locator, timestamp, timestamp, ticket.file_id, ticket.id, file.ownership_epoch, file.group_id], expectChanges: 1 },
         { sql: 'UPDATE upload_tickets SET consumed_at=? WHERE id=? AND consumed_at IS NULL AND failed_at IS NULL', params: [timestamp, ticket.id], expectChanges: 1 },
+        roundCompletionStatement(String(file.device_id), timestamp),
         ...prepared.statements,
       ]);
       if (committed[1]?.changes !== 1) throw new Error('UPLOAD_TICKET_RACE');

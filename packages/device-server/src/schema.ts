@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 export const schemaSql = `
 PRAGMA journal_mode = WAL;
@@ -362,6 +362,10 @@ CREATE TABLE IF NOT EXISTS devices (
   last_seen_at TEXT,
   capability_version TEXT,
   capability_changed_at TEXT,
+  sync_round_total INTEGER NOT NULL DEFAULT 0,
+  sync_round_completed INTEGER NOT NULL DEFAULT 0,
+  sync_round_started_at TEXT,
+  initial_scan_completed_at TEXT,
   deleted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,

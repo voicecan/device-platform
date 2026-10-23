@@ -7,12 +7,20 @@ import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 export type StoredFile = { locator: string; size: number; sha256: string };
+export type TransferProgress = { bytes: number; expectedSize: number; startedAt: string; updatedAt: string };
 type RelayWriter = { handle: FileHandle; offset: number; expectedSize: number; partialPath: string; idleTimer: ReturnType<typeof setTimeout> | null };
+type ProgressState = { bytes: number; expectedSize: number; startedAt: number; updatedAt: number };
 const relayWriterIdleMs = 60_000;
 
 export class FilesystemStorage {
   readonly #relayWriters = new Map<string, RelayWriter>();
+  readonly #progress = new Map<string, ProgressState>();
   constructor(private readonly root: string) {}
+
+  transferProgress(fileId: string): TransferProgress | null {
+    const value = this.#progress.get(fileId);
+    return value ? { bytes: value.bytes, expectedSize: value.expectedSize, startedAt: new Date(value.startedAt).toISOString(), updatedAt: new Date(value.updatedAt).toISOString() } : null;
+  }
 
   locator(fileId: string): string {
     if (!/^file_[a-zA-Z0-9-]+$/.test(fileId)) throw new Error('INVALID_FILE_ID');
@@ -33,13 +41,19 @@ export class FilesystemStorage {
     await mkdir(dirname(finalPath), { recursive: true, mode: 0o700 });
     let size = 0;
     const hash = createHash('sha256');
+    const startedAt = Date.now();
+    const progress: ProgressState = { bytes: 0, expectedSize, startedAt, updatedAt: startedAt };
+    this.#progress.set(fileId, progress);
     const meter = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
         size += chunk.length;
+        progress.bytes = size;
+        progress.updatedAt = Date.now();
         if (size > expectedSize) callback(new Error('UPLOAD_TOO_LARGE'));
         else { hash.update(chunk); callback(null, chunk); }
       },
     });
+    let completed = false;
     try {
       await pipeline(body, meter, createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 }));
       if (size !== expectedSize) throw new Error('UPLOAD_SIZE_MISMATCH');
@@ -54,10 +68,14 @@ export class FilesystemStorage {
           await rename(temporaryPath, finalPath);
         } else throw error;
       }
+      completed = true;
       return { locator, size, sha256: hash.digest('hex') };
     } catch (error) {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
       throw error;
+    } finally {
+      if (completed) this.#retireProgress(fileId, progress);
+      else this.#progress.delete(fileId);
     }
   }
 
@@ -72,6 +90,7 @@ export class FilesystemStorage {
   }
 
   async resetRelay(fileId: string): Promise<void> {
+    this.#progress.delete(fileId);
     const active = this.#relayWriters.get(fileId);
     if (active) {
       this.#relayWriters.delete(fileId);
@@ -100,6 +119,7 @@ export class FilesystemStorage {
       }
       writer = { handle, offset: current, expectedSize, partialPath, idleTimer: null };
       this.#relayWriters.set(fileId, writer);
+      this.#progress.set(fileId, { bytes: current, expectedSize, startedAt: Date.now(), updatedAt: Date.now() });
     }
     if (writer.expectedSize !== expectedSize) throw new Error('RELAY_SIZE_CHANGED');
     if (writer.offset !== offset) throw new Error('RELAY_OFFSET_MISMATCH');
@@ -112,14 +132,19 @@ export class FilesystemStorage {
         written += result.bytesWritten;
       }
       writer.offset += written;
+      const progress = this.#progress.get(fileId);
+      if (progress) { progress.bytes = writer.offset; progress.updatedAt = Date.now(); }
     } catch (error) {
       this.#relayWriters.delete(fileId);
+      this.#progress.delete(fileId);
       if (writer.idleTimer) clearTimeout(writer.idleTimer);
       await writer.handle.close().catch(() => undefined);
       throw error;
     }
     if (writer.offset < expectedSize) { this.#armRelayWriterIdle(fileId, writer); return null; }
     this.#relayWriters.delete(fileId);
+    const completed = this.#progress.get(fileId);
+    if (completed) this.#retireProgress(fileId, completed);
     if (writer.idleTimer) clearTimeout(writer.idleTimer);
     await writer.handle.sync(); await writer.handle.close();
     const hash = createHash('sha256'); for await (const chunk of createReadStream(partialPath)) hash.update(chunk);
@@ -130,11 +155,19 @@ export class FilesystemStorage {
     return { locator, size: expectedSize, sha256: hash.digest('hex') };
   }
 
+  #retireProgress(fileId: string, progress: ProgressState): void {
+    const timer = setTimeout(() => {
+      if (this.#progress.get(fileId) === progress) this.#progress.delete(fileId);
+    }, 15_000);
+    timer.unref();
+  }
+
   #armRelayWriterIdle(fileId: string, writer: RelayWriter): void {
     if (writer.idleTimer) clearTimeout(writer.idleTimer);
     writer.idleTimer = setTimeout(() => {
       if (this.#relayWriters.get(fileId) !== writer) return;
       this.#relayWriters.delete(fileId);
+      this.#progress.delete(fileId);
       void writer.handle.close().catch(() => undefined);
     }, relayWriterIdleMs);
     writer.idleTimer.unref();

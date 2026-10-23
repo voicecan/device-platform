@@ -25,6 +25,10 @@ export function migrate(config: ServerConfig): void {
     addColumn('devices', 'claim_status', "TEXT NOT NULL DEFAULT 'active' CHECK (claim_status IN ('reserved','active'))");
     addColumn('devices', 'capability_version', 'TEXT');
     addColumn('devices', 'capability_changed_at', 'TEXT');
+    addColumn('devices', 'sync_round_total', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('devices', 'sync_round_completed', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn('devices', 'sync_round_started_at', 'TEXT');
+    addColumn('devices', 'initial_scan_completed_at', 'TEXT');
     addColumn('device_credentials', 'status', "TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('temporary','active'))");
     addColumn('device_credentials', 'expires_at', 'TEXT');
     addColumn('commands', 'connection_epoch', 'INTEGER');

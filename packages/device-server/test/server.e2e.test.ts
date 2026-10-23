@@ -317,6 +317,14 @@ test('independent server setup, immutable upload, group isolation and device tra
   assert.equal(syncWorkspace.statusCode, 200, syncWorkspace.body);
   assert.equal(syncWorkspace.json().data.device.connection_status, 'online');
   assert.equal(syncWorkspace.json().data.reset_policy.deletes_recordings, false);
+  const workspaceSessions = syncWorkspace.json().data.files.map((file: { session_id: number }) => file.session_id);
+  assert.deepEqual(workspaceSessions, [...workspaceSessions].sort((left, right) => right - left), 'recordings are returned newest first');
+  assert.ok('active_transfer' in syncWorkspace.json().data, 'active transfer progress is always represented');
+  assert.equal(typeof syncWorkspace.json().data.summary.queued_bytes, 'number', 'queued bytes cover pending and syncing files');
+  const progressWorkspace = await app.inject({ method: 'GET', url: `/api/v1/devices/${deviceId}/recording-progress`, headers: adminHeaders });
+  assert.equal(progressWorkspace.statusCode, 200, progressWorkspace.body);
+  assert.equal(progressWorkspace.json().data.summary.total, syncWorkspace.json().data.summary.total);
+  assert.ok('active_transfer' in progressWorkspace.json().data, 'lightweight progress represents active transfer state');
 
   const preview = await app.inject({ method: 'POST', url: `/api/v1/devices/${deviceId}/transfer-preview`, headers: adminHeaders, payload: { target_group_id: groupB } });
   assert.equal(preview.statusCode, 200, preview.body);
