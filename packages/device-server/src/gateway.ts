@@ -8,7 +8,8 @@ type GatewaySocket = {
   close(code?: number, reason?: string): void;
   pause(): void;
   resume(): void;
-  send(data: Uint8Array): void;
+  send(data: Uint8Array, callback?: (error?: Error) => void): void;
+  readonly bufferedAmount?: number;
   on(event: 'message', listener: (data: unknown) => void): void;
   on(event: 'close', listener: () => void): void;
 };
@@ -17,24 +18,42 @@ type UploadPlan = { fileId: string; uploadUrl: string; offset?: number };
 type PlanUpload = (device: Row, file: Row, deviceHttpBaseUrl: string) => Promise<UploadPlan | null>;
 type CompleteUpload = (fileId: string, reportedSize: number) => Promise<void>;
 type AppendRelay = (fileId: string, offset: number, content: Uint8Array, reportedSize: number) => Promise<void>;
+type RecordTransferProgress = (fileId: string, transferred: number, expectedSize: number) => void;
 type DebugLog = (event: string, details: Record<string, unknown>, level?: 'debug' | 'info' | 'warn') => void;
 export type GatewayOtaPackage = { version: string; size: number; crc16: number; content: Uint8Array; force?: boolean };
 type StatusEventKind = 'device_info' | 'device_status' | 'device_storage' | 'device_battery';
-type GatewayTimingOptions = { inventoryTimeoutMs?: number; statusQueryTimeoutMs?: number; transferTimeoutMs?: number; livenessTimeoutMs?: number; transferPriorityGraceMs?: number };
+type GatewayTimingOptions = { inventoryTimeoutMs?: number; statusQueryTimeoutMs?: number; transferTimeoutMs?: number; livenessTimeoutMs?: number; transferPriorityGraceMs?: number; transferBusyRetryMs?: number; transferResumeGraceMs?: number };
 type InventoryRequest = { commandId: string | null; startSessionId: number };
 type InventoryState = { commandId: string | null; requestStart: number; total: number | null; nextOffset: number; files: FileDescriptor[]; transferFiles: FileDescriptor[] };
-type ActiveTransfer = { fileId: string; sessionId: number; attribute: number; expectedSize: number };
+type ActiveTransfer = { fileId: string; sessionId: number; attribute: number; expectedSize: number; requestedAt: number; offset: number; uploadUrl: string; busyRetries: number };
 
 const fileListPageSize = 120;
-const inventoryTimeoutDefaultMs = 30_000;
+// The Device services an inventory request on its ~30s housekeeping tick, so a
+// 30s deadline races the response and discards a page that arrives a few
+// hundred milliseconds late. Leave a full tick plus transport margin.
+const inventoryTimeoutDefaultMs = 60_000;
 const statusQueryTimeoutDefaultMs = 35_000;
 const statusRefreshIntervalDefaultMs = 5 * 60_000;
 // The device sends an application heartbeat every 30s. Allow a small margin for
 // scheduling and network jitter, then treat the connection as offline even if
 // the half-open TCP socket has not produced a close event yet.
 const deviceLivenessTimeoutDefaultMs = 32_000;
-const transferGapMs = 500;
+// The Device's Wi-Fi PM2 and BT PAN sniff awake window is 500 ms. Keep the
+// next request inside that window so the link does not return to sleep and
+// buffer the command until the next 30 s heartbeat. This gap is server-side
+// pacing only; it does not change the Device's transfer duration.
+const transferGapMs = 200;
 const transferPriorityGraceDefaultMs = 3_000;
+// 0x05 means the Device still has a transfer in progress and rejected the new
+// command. It is transient backpressure, not a failed recording. Retry the same
+// file instead of advancing the queue (which would fail every remaining file).
+const deviceTransferBusyResult = 0x05;
+const transferBusyRetryDefaultMs = 30_000;
+const transferBusyRetryLimit = 4;
+// After a reconnect that interrupted an in-flight upload, let the Device finish
+// its HTTP body before asking for the next file. Without this grace the first
+// request races the old upload and returns 0x05 repeatedly.
+const transferResumeGraceDefaultMs = 30_000;
 const transferTimeoutFloorMs = 2 * 60_000;
 const transferTimeoutCeilingMs = 45 * 60_000;
 const transferMinimumBytesPerSecond = 16 * 1_024;
@@ -91,12 +110,15 @@ class DeviceActor {
   #transferTimer: ReturnType<typeof setTimeout> | null = null;
   #transferGapTimer: ReturnType<typeof setTimeout> | null = null;
   #nextTransferNotBefore = 0;
+  #lastTransferFinishedAt: number | null = null;
+  #busyRetryTimer: ReturnType<typeof setTimeout> | null = null;
   #heartbeatAckSequence = 0;
   #statusTimer: ReturnType<typeof setInterval> | null = null;
   #statusQueryTimer: ReturnType<typeof setTimeout> | null = null;
   #statusQueue: Array<{ eventKind: StatusEventKind; request: Uint8Array }> = [];
   #deviceInfoCached = false;
   #activeStatusQuery: StatusEventKind | null = null;
+  #activeStatusRequest: Uint8Array | null = null;
   #controlTimer: ReturnType<typeof setTimeout> | null = null;
   #controlQueue: Array<{ commandId: string; input: DeviceControl }> = [];
   #activeControl: { commandId: string; input: DeviceControl } | null = null;
@@ -117,6 +139,7 @@ class DeviceActor {
     private readonly planUpload: PlanUpload,
     private readonly completeUpload: CompleteUpload,
     private readonly appendRelay: AppendRelay,
+    private readonly recordTransferProgress: RecordTransferProgress,
     private readonly maxFileBytes: number,
     private readonly debug: DebugLog,
     private readonly deviceHttpBaseUrl: string,
@@ -125,8 +148,11 @@ class DeviceActor {
     private readonly transferTimeoutMs: number | undefined,
     private readonly livenessTimeoutMs: number,
     private readonly transferPriorityGraceMs: number,
+    private readonly transferBusyRetryMs: number,
+    private readonly resumeTransferNotBefore: number,
     rawToken: Buffer,
   ) {
+    this.#nextTransferNotBefore = resumeTransferNotBefore;
     try { const request = this.core.createBindRequest(rawToken); this.socket.send(request); this.debug('device bind request sent', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, bytes: request.byteLength }); } finally { rawToken.fill(0); }
     this.#bindTimer = setTimeout(() => {
       if (!this.#confirmed) this.socket.close(1008, 'device bind confirmation timeout');
@@ -172,6 +198,7 @@ class DeviceActor {
     if (frame.byteLength > 2_048) { this.socket.close(1009, 'frame too large'); return; }
     if (this.#queuedBytes + frame.byteLength > inboundQueueHardLimitBytes) { this.socket.close(1013, 'device queue overloaded'); return; }
     this.debug('device gateway frame received', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, bytes: frame.byteLength, queued: this.#queued, queued_bytes: this.#queuedBytes });
+    const enqueuedAt = Date.now();
     this.#queued += 1;
     this.#queuedBytes += frame.byteLength;
     if (!this.#inboundPaused && this.#queuedBytes >= inboundQueueHighWatermarkBytes) {
@@ -179,10 +206,20 @@ class DeviceActor {
       this.socket.pause();
       this.debug('device gateway inbound flow paused', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, queued: this.#queued, queued_bytes: this.#queuedBytes }, 'warn');
     }
-    this.#tail = this.#tail.then(() => this.#process(frame)).catch((error: unknown) => {
+    this.#tail = this.#tail.then(() => this.#process(frame, enqueuedAt)).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === 'UNSUPPORTED_DEVICE_EVENT') {
+        // Newer firmware emits notifications (for example the U-disk ready
+        // notification) that this pinned core ABI does not know. They are not
+        // needed for synchronization; ignore them instead of dropping the
+        // whole gateway connection.
+        this.debug('device gateway frame ignored', {
+          device_id: this.deviceId, connection_epoch: this.connectionEpoch, error: message,
+        }, 'warn');
+        return;
+      }
       this.debug('device gateway frame rejected', {
-        device_id: this.deviceId, connection_epoch: this.connectionEpoch,
-        error: error instanceof Error ? error.message : String(error),
+        device_id: this.deviceId, connection_epoch: this.connectionEpoch, error: message,
       }, 'warn');
       this.socket.close(1002, 'invalid device frame');
     }).finally(() => {
@@ -196,7 +233,7 @@ class DeviceActor {
     });
   }
 
-  close(): void { this.#closed = true; clearTimeout(this.#bindTimer); if (this.#livenessTimer) clearInterval(this.#livenessTimer); if (this.#inventoryTimer) clearTimeout(this.#inventoryTimer); if (this.#transferTimer) clearTimeout(this.#transferTimer); if (this.#transferGapTimer) clearTimeout(this.#transferGapTimer); if (this.#statusTimer) clearInterval(this.#statusTimer); if (this.#statusQueryTimer) clearTimeout(this.#statusQueryTimer); if (this.#controlTimer) clearTimeout(this.#controlTimer); if (this.#otaTimer) clearTimeout(this.#otaTimer); this.debug('device gateway actor closed', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, confirmed: this.#confirmed }); }
+  close(): void { this.#closed = true; this.#activeStatusRequest = null; clearTimeout(this.#bindTimer); if (this.#livenessTimer) clearInterval(this.#livenessTimer); if (this.#inventoryTimer) clearTimeout(this.#inventoryTimer); if (this.#transferTimer) clearTimeout(this.#transferTimer); if (this.#transferGapTimer) clearTimeout(this.#transferGapTimer); if (this.#busyRetryTimer) clearTimeout(this.#busyRetryTimer); if (this.#statusTimer) clearInterval(this.#statusTimer); if (this.#statusQueryTimer) clearTimeout(this.#statusQueryTimer); if (this.#controlTimer) clearTimeout(this.#controlTimer); if (this.#otaTimer) clearTimeout(this.#otaTimer); this.debug('device gateway actor closed', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, confirmed: this.#confirmed }); }
   supersede(): void { this.close(); this.socket.close(4001, 'connection superseded'); }
 
   async requestIncrementalInventory(commandId: string): Promise<boolean> {
@@ -274,7 +311,10 @@ class DeviceActor {
   }
 
   #startNextInventory(): void {
-    if (!this.#confirmed || this.#inventory || this.#activeStatusQuery || this.#activeTransfer || this.#activeControl || this.#activeOta || this.#controlQueue.length > 0 || this.#pendingInventories.length === 0) return;
+    // Keep the high-volume transfer lane contiguous. A queued inventory waits
+    // until the transfer queue drains instead of consuming the device's next
+    // command tick and pushing the next file out by a full tick.
+    if (!this.#confirmed || this.#inventory || this.#activeStatusQuery || this.#activeTransfer || this.#transferQueue.length > 0 || this.#activeControl || this.#activeOta || this.#controlQueue.length > 0 || this.#pendingInventories.length === 0) return;
     const next = this.#pendingInventories.shift()!;
     this.#inventory = { commandId: next.commandId, requestStart: next.startSessionId, total: null, nextOffset: 0, files: [], transferFiles: [] };
     this.#sendInventoryPage();
@@ -318,6 +358,7 @@ class DeviceActor {
     if (this.#closed || !this.#confirmed || this.#activeStatusQuery || this.#inventory || this.#pendingInventories.length > 0 || this.#activeTransfer || this.#transferQueue.length > 0 || this.#activeControl || this.#controlQueue.length > 0 || this.#activeOta) return;
     const next = this.#statusQueue.shift(); if (!next) return;
     this.#activeStatusQuery = next.eventKind;
+    this.#activeStatusRequest = next.request;
     this.socket.send(next.request);
     this.#statusQueryTimer = setTimeout(() => { this.#background(this.#expireStatusQuery(next.eventKind)); }, this.statusQueryTimeoutMs);
     this.#statusQueryTimer.unref();
@@ -327,19 +368,19 @@ class DeviceActor {
   async #completeStatusQuery(eventKind: GatewayEvent['kind']): Promise<void> {
     if (eventKind !== this.#activeStatusQuery) return;
     if (this.#statusQueryTimer) clearTimeout(this.#statusQueryTimer);
-    this.#statusQueryTimer = null; this.#activeStatusQuery = null;
+    this.#statusQueryTimer = null; this.#activeStatusQuery = null; this.#activeStatusRequest = null;
     if (this.#pendingInventories.length > 0 || this.#transferQueue.length > 0 || this.#controlQueue.length > 0) this.#statusQueue = [];
     this.#startNextInventory(); await this.#startNextControl(); await this.#startNextTransfer(); this.#startNextStatusQuery();
   }
 
   async #expireStatusQuery(eventKind: StatusEventKind): Promise<void> {
     if (this.#closed || this.#activeStatusQuery !== eventKind) return;
-    this.#statusQueryTimer = null; this.#activeStatusQuery = null; this.#statusQueue = [];
+    this.#statusQueryTimer = null; this.#activeStatusQuery = null; this.#activeStatusRequest = null; this.#statusQueue = [];
     this.debug('device status query timed out', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, event_kind: eventKind, timeout_ms: this.statusQueryTimeoutMs }, 'warn');
     this.#startNextInventory(); await this.#startNextControl(); await this.#startNextTransfer();
   }
 
-  async #process(frame: Uint8Array): Promise<void> {
+  async #process(frame: Uint8Array, enqueuedAt: number): Promise<void> {
     let result: ReturnType<GatewayProtocolCore['process']>;
     try {
       result = this.core.process(frame);
@@ -364,7 +405,18 @@ class DeviceActor {
       if (result.response) {
         this.#heartbeatAckSequence += 1;
         this.socket.send(result.response);
-        this.debug('device heartbeat acknowledged', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, heartbeat_ack_sequence: this.#heartbeatAckSequence, queued: this.#queued, queued_bytes: this.#queuedBytes, response_bytes: result.response.byteLength }, 'info');
+        this.debug('device heartbeat acknowledged', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, heartbeat_ack_sequence: this.#heartbeatAckSequence, queued: this.#queued, queued_bytes: this.#queuedBytes, queue_wait_ms: Date.now() - enqueuedAt, response_bytes: result.response.byteLength }, 'info');
+        // The heartbeat ACK just woke the device's RX path. Re-send an
+        // in-flight status query now instead of waiting for another 5 min timer
+        // or relying on a separate keepalive. Do not reset its timeout: the
+        // original deadline still bounds this best-effort query.
+        if (this.#activeStatusQuery && this.#activeStatusRequest &&
+            !this.#activeTransfer && this.#transferQueue.length === 0 &&
+            !this.#inventory && this.#pendingInventories.length === 0 &&
+            !this.#activeControl && !this.#activeOta && this.#controlQueue.length === 0) {
+          this.socket.send(this.#activeStatusRequest);
+          this.debug('device status query re-sent after heartbeat ack', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, event_kind: this.#activeStatusQuery, timeout_ms: this.statusQueryTimeoutMs }, 'info');
+        }
       }
       try { await this.#persist(result.event); }
       catch (error) { this.debug('device heartbeat persistence failed', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, error: error instanceof Error ? error.message : String(error) }, 'warn'); }
@@ -395,6 +447,13 @@ class DeviceActor {
         { sql: "UPDATE provisioning_sessions SET status='completed',completed_at=?,failed_at=NULL,failure_code=NULL,updated_at=? WHERE id=(SELECT id FROM provisioning_sessions WHERE device_id=? AND status IN ('reserved','ble_authenticated','configured','online','failed') ORDER BY created_at DESC LIMIT 1)", params: [now, now, this.deviceId] },
       ]);
       if (updated[0]?.changes !== 1) throw new Error('DEVICE_CONNECTION_STALE');
+      // A relay fallback is sticky for the life of the batch so an unreachable
+      // HTTP origin is not retried for every file. A fresh connection epoch is
+      // a new network/link, so drop pins that were inherited by sibling files
+      // (they never failed on their own) and let the next file probe direct
+      // again. Files with their own failure code keep their pin.
+      const clearedPins = await this.db.run("UPDATE recording_files SET force_relay=0,updated_at=? WHERE device_id=? AND status='pending' AND force_relay=1 AND error_code IS NULL", [now, this.deviceId]);
+      if (clearedPins.changes > 0) this.debug('stale relay fallback pins cleared on reconnect', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, cleared: clearedPins.changes }, 'info');
       const device = { ...nextDevice, capability_version: nextCapabilityVersion, capability_changed_at: capabilityChangedAt };
       if (firstClaim) await this.emitEvent(device, 'device.claimed', { device_id: this.deviceId });
       await this.emitEvent(device, 'device.online', { device_id: this.deviceId, connection_epoch: this.connectionEpoch });
@@ -530,13 +589,34 @@ class DeviceActor {
       this.debug('device file transfer result ignored without matching active transfer', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, session_id: event.sessionId });
       return;
     }
+    if (this.#busyRetryTimer) { clearTimeout(this.#busyRetryTimer); this.#busyRetryTimer = null; }
     if (event.result === 0 && event.content.byteLength > 0) {
       if (event.size > 0 && event.size !== active.expectedSize) throw new Error('DEVICE_REPORTED_SIZE_MISMATCH');
       await this.appendRelay(active.fileId, event.offset, event.content, active.expectedSize);
       this.#armTransferTimeout(active);
     } else if (event.result === 0 && event.content.byteLength === 0) {
+      // Direct S3 uploads report progress as an empty-content result whose
+      // offset is between 0 and the expected size. The terminal result uses
+      // offset 0 or offset === expectedSize, so keep those completing paths.
+      if (event.offset > 0 && event.offset < active.expectedSize) {
+        this.recordTransferProgress(active.fileId, event.offset, active.expectedSize);
+        this.#armTransferTimeout(active);
+        this.debug('device file transfer progress received', {
+          device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+          file_id: active.fileId, session_id: active.sessionId,
+          offset: event.offset, expected_size: active.expectedSize,
+        });
+        return;
+      }
+      this.debug('device file transfer completion signal', {
+        device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+        file_id: active.fileId, session_id: active.sessionId,
+        offset: event.offset, reported_size: event.size, expected_size: active.expectedSize,
+      }, 'info');
       await this.completeUpload(active.fileId, event.size);
       await this.#finishActiveTransfer('completed');
+    } else if (event.result === deviceTransferBusyResult && await this.#retryBusyTransfer(active)) {
+      return;
     } else if (event.result !== 0) {
       const errorCode = `DEVICE_TRANSFER_RESULT_${event.result.toString(16).padStart(2, '0').toUpperCase()}`;
       const failed = await this.db.all<Row>("SELECT f.*,d.group_id,d.ownership_epoch FROM recording_files f JOIN devices d ON d.id=f.device_id WHERE f.id=? AND f.status='syncing'", [active.fileId]);
@@ -544,7 +624,6 @@ class DeviceActor {
       await this.db.run(retryViaRelay
         ? "UPDATE recording_files SET status='pending',force_relay=1,error_code=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing'"
         : "UPDATE recording_files SET status='failed',error_code=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing'", [errorCode, timestamp(), active.fileId]);
-      if (retryViaRelay) await this.db.run("UPDATE recording_files SET force_relay=1,updated_at=? WHERE device_id=? AND status IN ('pending','failed') AND force_relay=0", [timestamp(), this.deviceId]);
       for (const file of failed) await this.emitEvent(file, 'recording.sync_failed', { file_id: file.id, device_id: this.deviceId, session_id: file.session_id, attribute: file.attribute, error_code: errorCode, ...recordingEventFacts({ ...file, resource_version: Number(file.resource_version ?? 1) + 1 }) });
       await this.#finishActiveTransfer(errorCode);
       if (retryViaRelay) {
@@ -805,7 +884,7 @@ class DeviceActor {
   }
 
   async #startNextTransfer(): Promise<void> {
-    if (this.#closed || !this.#confirmed || this.#scanFinalizing || this.#activeTransfer || this.#activeStatusQuery || this.#activeControl || this.#activeOta || this.#controlQueue.length > 0 || this.#inventory || this.#pendingInventories.length > 0) return;
+    if (this.#closed || !this.#confirmed || this.#scanFinalizing || this.#activeTransfer || this.#activeStatusQuery || this.#activeControl || this.#activeOta || this.#controlQueue.length > 0 || this.#inventory) return;
     const waitMs = this.#nextTransferNotBefore - Date.now();
     if (waitMs > 0) {
       if (!this.#transferGapTimer) {
@@ -831,19 +910,87 @@ class DeviceActor {
       await this.#startNextTransfer();
       return;
     }
-    this.#activeTransfer = { fileId: plan.fileId, sessionId: file.sessionId, attribute: file.attribute, expectedSize: file.size };
+    this.#activeTransfer = { fileId: plan.fileId, sessionId: file.sessionId, attribute: file.attribute, expectedSize: file.size, requestedAt: Date.now(), offset: plan.offset ?? 0, uploadUrl: plan.uploadUrl, busyRetries: 0 };
     this.#armTransferTimeout(this.#activeTransfer);
     const request = this.core.requestFileTransfer({ sessionId: file.sessionId, offset: plan.offset ?? 0, attribute: file.attribute, uploadUrl: plan.uploadUrl });
-    this.socket.send(request);
-    this.debug('device file transfer requested', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, file_id: plan.fileId, session_id: file.sessionId, attribute: file.attribute, expected_size: file.size, offset: plan.offset ?? 0, transport_url_origin: plan.uploadUrl ? new URL(plan.uploadUrl).origin : null, request_bytes: request.byteLength, queue_depth: this.#transferQueue.length }, 'info');
+    const socketBufferedBefore = this.socket.bufferedAmount ?? null;
+    const sendStartedAt = Date.now();
+    this.socket.send(request, (error?: Error) => {
+      // The callback fires once the frame has been handed to the socket. If
+      // this is slow, the Server outbound pipe (not the Device) is the queue.
+      this.debug('device file transfer request flushed', {
+        device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+        file_id: plan.fileId, session_id: file.sessionId,
+        buffered_before: socketBufferedBefore,
+        buffered_after: this.socket.bufferedAmount ?? null,
+        flush_ms: Date.now() - sendStartedAt,
+        error: error?.message ?? null,
+      }, error ? 'warn' : 'info');
+    });
+    this.debug('device file transfer requested', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, file_id: plan.fileId, session_id: file.sessionId, attribute: file.attribute, expected_size: file.size, offset: plan.offset ?? 0, transport: plan.uploadUrl ? 'device_http' : 'server_relay', transport_url_origin: plan.uploadUrl ? new URL(plan.uploadUrl).origin : null, idle_ms: this.#lastTransferFinishedAt === null ? null : Date.now() - this.#lastTransferFinishedAt, socket_buffered_bytes: socketBufferedBefore, request_bytes: request.byteLength, queue_depth: this.#transferQueue.length }, 'info');
+  }
+
+  async #retryBusyTransfer(active: ActiveTransfer): Promise<boolean> {
+    if (active.busyRetries >= transferBusyRetryLimit) {
+      this.debug('device file transfer still busy after retries', {
+        device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+        file_id: active.fileId, session_id: active.sessionId,
+        attempts: active.busyRetries, retry_limit: transferBusyRetryLimit,
+      }, 'warn');
+      return false;
+    }
+    active.busyRetries += 1;
+    if (this.#transferTimer) { clearTimeout(this.#transferTimer); this.#transferTimer = null; }
+    if (this.#busyRetryTimer) clearTimeout(this.#busyRetryTimer);
+    // Keep the same upload plan and ticket. Re-planning would supersede the
+    // ticket of the upload that is still running on the Device and would reset
+    // the current-transfer progress in the Admin UI.
+    this.#busyRetryTimer = setTimeout(() => {
+      this.#busyRetryTimer = null;
+      if (this.#closed || this.#activeTransfer !== active) return;
+      const request = this.core.requestFileTransfer({ sessionId: active.sessionId, offset: active.offset, attribute: active.attribute, uploadUrl: active.uploadUrl });
+      const sendStartedAt = Date.now();
+      this.socket.send(request, (error?: Error) => {
+        this.debug('device busy transfer request flushed', {
+          device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+          file_id: active.fileId, session_id: active.sessionId,
+          flush_ms: Date.now() - sendStartedAt, error: error?.message ?? null,
+        }, error ? 'warn' : 'info');
+      });
+      this.#armTransferTimeout(active);
+      this.debug('device file transfer busy; retried the same request', {
+        device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+        file_id: active.fileId, session_id: active.sessionId, attribute: active.attribute,
+        expected_size: active.expectedSize, retry_attempt: active.busyRetries,
+        retry_in_ms: this.transferBusyRetryMs, queue_depth: this.#transferQueue.length,
+      }, 'warn');
+    }, this.transferBusyRetryMs);
+    this.#busyRetryTimer.unref();
+    return true;
   }
 
   async #finishActiveTransfer(outcome: string): Promise<void> {
+    if (this.#busyRetryTimer) { clearTimeout(this.#busyRetryTimer); this.#busyRetryTimer = null; }
     const completed = this.#activeTransfer;
     if (this.#transferTimer) { clearTimeout(this.#transferTimer); this.#transferTimer = null; }
+    const finishedAt = Date.now();
     this.#activeTransfer = null;
-    if (outcome === 'completed') this.#nextTransferNotBefore = Date.now() + transferGapMs;
-    this.debug('device file transfer lane released', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, file_id: completed?.fileId ?? null, session_id: completed?.sessionId ?? null, outcome, queue_depth: this.#transferQueue.length });
+    this.#lastTransferFinishedAt = finishedAt;
+    if (outcome === 'completed') this.#nextTransferNotBefore = finishedAt + transferGapMs;
+    const durationMs = completed ? finishedAt - completed.requestedAt : null;
+    const bytesPerSecond = completed && durationMs ? Math.round(completed.expectedSize / (durationMs / 1_000)) : null;
+    // The protocol does not expose the radio link. Throughput is the only
+    // Server-side signal: PAN tops out around 150 KB/s, Wi-Fi is >= 1 MB/s.
+    const linkHint = bytesPerSecond === null ? null : bytesPerSecond < 200 * 1024 ? 'bt_pan_likely' : bytesPerSecond >= 1_000_000 ? 'wifi_likely' : 'unknown';
+    this.debug('device file transfer lane released', {
+      device_id: this.deviceId, connection_epoch: this.connectionEpoch,
+      file_id: completed?.fileId ?? null, session_id: completed?.sessionId ?? null,
+      expected_size: completed?.expectedSize ?? null, outcome,
+      duration_ms: durationMs,
+      bytes_per_second: bytesPerSecond,
+      link_hint: linkHint,
+      queue_depth: this.#transferQueue.length,
+    }, 'info');
     this.#startNextInventory();
     await this.#startNextControl();
     await this.#startNextTransfer();
@@ -876,7 +1023,6 @@ class DeviceActor {
     await this.db.run(retry
       ? "UPDATE recording_files SET status='pending',force_relay=CASE WHEN transport<>'server_relay' THEN 1 ELSE force_relay END,error_code=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing'"
       : "UPDATE recording_files SET status='failed',error_code=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing'", [errorCode, changedAt, active.fileId]);
-    if (forceRelay) await this.db.run("UPDATE recording_files SET force_relay=1,updated_at=? WHERE device_id=? AND status IN ('pending','failed') AND force_relay=0", [changedAt, this.deviceId]);
     for (const file of files) await this.emitEvent(file, 'recording.sync_failed', { file_id: file.id, device_id: this.deviceId, session_id: file.session_id, attribute: file.attribute, error_code: errorCode, ...recordingEventFacts({ ...file, resource_version: Number(file.resource_version ?? 1) + 1 }) });
     this.debug(retry ? 'device file transfer will be recovered' : 'device file transfer failed after recovery was exhausted', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, file_id: active.fileId, session_id: active.sessionId, attribute: active.attribute, error_code: errorCode, retry, force_relay: forceRelay }, retry ? 'warn' : 'info');
     return retry;
@@ -886,6 +1032,7 @@ class DeviceActor {
     const active = this.#activeTransfer;
     if (!active) return;
     if (this.#transferTimer) { clearTimeout(this.#transferTimer); this.#transferTimer = null; }
+    if (this.#busyRetryTimer) { clearTimeout(this.#busyRetryTimer); this.#busyRetryTimer = null; }
     await this.#recoverTransfer(active, 'DEVICE_TRANSFER_CONNECTION_CLOSED', true);
     this.#activeTransfer = null;
   }
@@ -947,15 +1094,23 @@ class DeviceActor {
 
 export class DeviceGateway {
   #actors = new Map<string, DeviceActor>();
-  constructor(private readonly db: Database, private readonly core: GatewayProtocolCore, private readonly emitEvent: EmitEvent, private readonly planUpload: PlanUpload, private readonly completeUpload: CompleteUpload, private readonly appendRelay: AppendRelay, private readonly maxFileBytes: number, private readonly debug: DebugLog = () => undefined, private readonly timings: GatewayTimingOptions = {}) {}
+  constructor(private readonly db: Database, private readonly core: GatewayProtocolCore, private readonly emitEvent: EmitEvent, private readonly planUpload: PlanUpload, private readonly completeUpload: CompleteUpload, private readonly appendRelay: AppendRelay, private readonly maxFileBytes: number, private readonly debug: DebugLog = () => undefined, private readonly timings: GatewayTimingOptions = {}, private readonly recordTransferProgress: RecordTransferProgress = () => undefined) {}
 
   async attach(socket: GatewaySocket, deviceId: string, rawToken: Buffer, deviceHttpBaseUrl = ''): Promise<number> {
     const now = timestamp();
     const epoch = await this.db.get<{ connection_epoch: number }>("UPDATE devices SET online=0,connection_epoch=connection_epoch+1,updated_at=? WHERE id=? AND claim_status IN ('reserved','active') AND deleted_at IS NULL RETURNING connection_epoch", [now, deviceId]);
     if (!epoch) { rawToken.fill(0); throw new Error('DEVICE_NOT_FOUND'); }
     const previous = this.#actors.get(deviceId); previous?.supersede();
+    const interrupted = await this.db.get<{ active: number }>(
+      "SELECT 1 AS active FROM recording_files WHERE device_id=? AND (status='syncing' OR (status='pending' AND error_code IN ('DEVICE_TRANSFER_CONNECTION_CLOSED','DEVICE_TRANSFER_PROCESS_RESTARTED') AND updated_at>?)) LIMIT 1",
+      [deviceId, new Date(Date.now() - 2 * 60_000).toISOString()],
+    );
+    const resumeTransferNotBefore = Number(interrupted?.active) === 1
+      ? Date.now() + (this.timings.transferResumeGraceMs ?? transferResumeGraceDefaultMs)
+      : 0;
+    if (resumeTransferNotBefore > 0) this.debug('device transfer resume grace armed', { device_id: deviceId, connection_epoch: epoch.connection_epoch, resume_in_ms: resumeTransferNotBefore - Date.now() }, 'info');
     if (!previous) await this.#recoverOrphanedTransfers(deviceId);
-    const actor = new DeviceActor(deviceId, epoch.connection_epoch, socket, this.core, this.db, this.emitEvent, this.planUpload, this.completeUpload, this.appendRelay, this.maxFileBytes, this.debug, deviceHttpBaseUrl, this.timings.inventoryTimeoutMs ?? inventoryTimeoutDefaultMs, this.timings.statusQueryTimeoutMs ?? statusQueryTimeoutDefaultMs, this.timings.transferTimeoutMs, this.timings.livenessTimeoutMs ?? deviceLivenessTimeoutDefaultMs, this.timings.transferPriorityGraceMs ?? transferPriorityGraceDefaultMs, rawToken);
+    const actor = new DeviceActor(deviceId, epoch.connection_epoch, socket, this.core, this.db, this.emitEvent, this.planUpload, this.completeUpload, this.appendRelay, this.recordTransferProgress, this.maxFileBytes, this.debug, deviceHttpBaseUrl, this.timings.inventoryTimeoutMs ?? inventoryTimeoutDefaultMs, this.timings.statusQueryTimeoutMs ?? statusQueryTimeoutDefaultMs, this.timings.transferTimeoutMs, this.timings.livenessTimeoutMs ?? deviceLivenessTimeoutDefaultMs, this.timings.transferPriorityGraceMs ?? transferPriorityGraceDefaultMs, this.timings.transferBusyRetryMs ?? transferBusyRetryDefaultMs, resumeTransferNotBefore, rawToken);
     this.#actors.set(deviceId, actor);
     socket.on('message', (data) => actor.enqueue(data));
     socket.on('close', () => {
@@ -1002,7 +1157,6 @@ export class DeviceGateway {
       if (direct) forcedRelay += 1;
       await this.emitEvent(file, 'recording.sync_failed', { file_id: file.id, device_id: deviceId, session_id: file.session_id, attribute: file.attribute, error_code: 'DEVICE_TRANSFER_PROCESS_RESTARTED', ...recordingEventFacts({ ...file, resource_version: Number(file.resource_version ?? 1) + 1 }) });
     }
-    if (forcedRelay > 0) await this.db.run("UPDATE recording_files SET force_relay=1,updated_at=? WHERE device_id=? AND status IN ('pending','failed') AND force_relay=0", [recoveredAt, deviceId]);
     this.debug('orphaned device file transfers recovered after gateway restart', { device_id: deviceId, recovered_files: recovered, relay_fallback_files: forcedRelay }, 'warn');
   }
 

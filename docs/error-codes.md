@@ -23,7 +23,8 @@ All API failures use `{ success:false, code, message, request_id }`. Callers bra
 | `TRANSFER_PREVIEW_STALE` | 409 | File/byte/transfer/event counts or ownership epoch changed; preview again. |
 | `FILE_IDENTITY_CONFLICT` | 409 | Same device identity tuple reappeared with different metadata; operator review is required. |
 | `UPLOAD_TICKET_INVALID` | 404 | Ticket is expired, failed, consumed, or unknown. Rediscover/replan the file. |
-| `FILE_LIST_TIMEOUT` | sync command | Device did not return the requested recording inventory page within 30 seconds. The command lane is released; keep the Device online and retry. |
+| `FILE_LIST_TIMEOUT` | sync command | Device did not return the requested recording inventory page within 60 seconds. The command lane is released; keep the Device online and retry. |
+| `DEVICE_TRANSFER_BUSY` | file state | Device reported `0x05` (a transfer is already in progress, usually an HTTP upload started before a WebSocket reconnect). The Server keeps the existing upload plan and retries the same request after 30 seconds; it does not re-plan, mark the batch failed, advance the queue, or reset the current-transfer progress. |
 | `DEVICE_TRANSFER_RESULT_0C` | file state | Device aborted its direct upload. The Server automatically retries once through `server_relay`; a relay-path recurrence is terminal and requires connectivity inspection. |
 | `DEVICE_TRANSFER_TIMEOUT` | file state | Device produced no transfer result before the size-aware watchdog expired. Direct work falls back to relay; a silent relay transfer becomes failed and can be reset explicitly. |
 | `DEVICE_TRANSFER_CONNECTION_CLOSED` | file state | The Device WebSocket ended during transfer. The file returns to pending and resumes on the next inventory; interrupted direct work is pinned to relay. |

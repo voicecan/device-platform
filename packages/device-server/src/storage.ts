@@ -22,6 +22,25 @@ export class FilesystemStorage {
     return value ? { bytes: value.bytes, expectedSize: value.expectedSize, startedAt: new Date(value.startedAt).toISOString(), updatedAt: new Date(value.updatedAt).toISOString() } : null;
   }
 
+  // Direct S3 uploads never pass through this process, so the Gateway feeds the
+  // Device-reported offset into the same in-memory progress surface used by the
+  // Admin current-transfer bar.
+  recordTransferProgress(fileId: string, bytes: number, expectedSize: number): void {
+    if (!Number.isSafeInteger(bytes) || !Number.isSafeInteger(expectedSize) || bytes < 0 || expectedSize <= 0) return;
+    const clamped = Math.min(bytes, expectedSize);
+    const now = Date.now();
+    const current = this.#progress.get(fileId);
+    if (current) {
+      current.bytes = clamped; current.expectedSize = expectedSize; current.updatedAt = now;
+    } else {
+      this.#progress.set(fileId, { bytes: clamped, expectedSize, startedAt: now, updatedAt: now });
+    }
+  }
+
+  clearTransferProgress(fileId: string): void {
+    this.#progress.delete(fileId);
+  }
+
   locator(fileId: string): string {
     if (!/^file_[a-zA-Z0-9-]+$/.test(fileId)) throw new Error('INVALID_FILE_ID');
     return join(fileId.slice(5, 7), fileId);

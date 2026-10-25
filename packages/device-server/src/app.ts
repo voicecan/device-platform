@@ -545,9 +545,13 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     }
     return prepared.eventId;
   };
-  const roundCompletionStatement = (deviceId: string, at: string): SqlStatement => ({
-    sql: "UPDATE devices SET sync_round_completed=CASE WHEN sync_round_completed<sync_round_total THEN sync_round_completed+1 ELSE sync_round_total END,updated_at=? WHERE id=?",
-    params: [at, deviceId],
+  // Count a round completion only when this transaction actually moved the
+  // file from 'syncing' to its new 'synced_at'. A duplicate completion for an
+  // already-synced file must not inflate the round counter and make the UI jump
+  // to 100% before every pending file is done.
+  const roundCompletionStatement = (deviceId: string, fileId: string, at: string): SqlStatement => ({
+    sql: "UPDATE devices SET sync_round_completed=CASE WHEN sync_round_completed<sync_round_total THEN sync_round_completed+1 ELSE sync_round_total END,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM recording_files WHERE id=? AND status='synced' AND synced_at=?)",
+    params: [at, deviceId, fileId, at],
   });
   const syncSummarySql = `SELECT COUNT(*) AS total,
     SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
@@ -621,19 +625,25 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     if (!file || file.status === 'synced') return;
     if (reportedSize > 0 && reportedSize !== Number(file.expected_size)) throw new Error('DEVICE_REPORTED_SIZE_MISMATCH');
     if (!s3Storage || file.transport !== 's3_direct') return;
-    const attempt = await db.get<{ id: string; staging_key: string; expected_size: number }>('SELECT id,staging_key,expected_size FROM s3_upload_attempts WHERE file_id=? AND completed_at IS NULL AND failed_at IS NULL ORDER BY created_at DESC LIMIT 1', [file.id]);
-    if (!attempt) throw new Error('S3_ATTEMPT_MISSING');
-    const committed = await s3Storage.verifyAndCommit(String(file.id), attempt.id, attempt.staging_key, attempt.expected_size); const committedAt = now();
-    const completedFile = { ...file, actual_size: committed.size, sha256: committed.sha256, synced_at: committedAt, resource_version: Number(file.resource_version ?? 1) + 1 };
-    const prepared = await prepareEvent(file, 'file.synced', { file_id: file.id, device_id: file.device_id, session_id: file.session_id, attribute: file.attribute, file_size: committed.size, ...(committed.sha256 ? { sha256: committed.sha256 } : {}), ...recordingEventFacts(completedFile) });
-    const results = await db.batch([
-      { sql: "UPDATE recording_files SET status='synced',actual_size=?,sha256=?,storage_locator=?,error_code=NULL,synced_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing' AND EXISTS(SELECT 1 FROM devices d WHERE d.id=recording_files.device_id AND d.ownership_epoch=? AND d.group_id=?)", params: [committed.size, committed.sha256, committed.locator, committedAt, committedAt, file.id, file.ownership_epoch, file.group_id], expectChanges: 1 },
-      { sql: 'UPDATE s3_upload_attempts SET completed_at=?,final_locator=? WHERE id=? AND completed_at IS NULL AND failed_at IS NULL', params: [committedAt, committed.locator, attempt.id], expectChanges: 1 },
-      roundCompletionStatement(String(file.device_id), committedAt),
-      ...prepared.statements,
-    ]);
-    if (results[0]?.changes !== 1 || results[1]?.changes !== 1) throw new Error('S3_ATTEMPT_RACE');
-    dispatcher.scheduleDrain();
+    try {
+      const attempt = await db.get<{ id: string; staging_key: string; expected_size: number }>('SELECT id,staging_key,expected_size FROM s3_upload_attempts WHERE file_id=? AND completed_at IS NULL AND failed_at IS NULL ORDER BY created_at DESC LIMIT 1', [file.id]);
+      if (!attempt) throw new Error('S3_ATTEMPT_MISSING');
+      const committed = await s3Storage.verifyAndCommit(String(file.id), attempt.id, attempt.staging_key, attempt.expected_size); const committedAt = now();
+      const completedFile = { ...file, actual_size: committed.size, sha256: committed.sha256, synced_at: committedAt, resource_version: Number(file.resource_version ?? 1) + 1 };
+      const prepared = await prepareEvent(file, 'file.synced', { file_id: file.id, device_id: file.device_id, session_id: file.session_id, attribute: file.attribute, file_size: committed.size, ...(committed.sha256 ? { sha256: committed.sha256 } : {}), ...recordingEventFacts(completedFile) });
+      const results = await db.batch([
+        { sql: "UPDATE recording_files SET status='synced',actual_size=?,sha256=?,storage_locator=?,error_code=NULL,synced_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing' AND EXISTS(SELECT 1 FROM devices d WHERE d.id=recording_files.device_id AND d.ownership_epoch=? AND d.group_id=?)", params: [committed.size, committed.sha256, committed.locator, committedAt, committedAt, file.id, file.ownership_epoch, file.group_id], expectChanges: 1 },
+        { sql: 'UPDATE s3_upload_attempts SET completed_at=?,final_locator=? WHERE id=? AND completed_at IS NULL AND failed_at IS NULL', params: [committedAt, committed.locator, attempt.id], expectChanges: 1 },
+        roundCompletionStatement(String(file.device_id), String(file.id), committedAt),
+        ...prepared.statements,
+      ]);
+      if (results[0]?.changes !== 1 || results[1]?.changes !== 1) throw new Error('S3_ATTEMPT_RACE');
+      dispatcher.scheduleDrain();
+    } finally {
+      // S3 progress is Device-reported and has no filesystem/relay writer to
+      // retire it. Drop it once the attempt commits or fails.
+      storage.clearTransferProgress(fileId);
+    }
   };
   const appendGatewayRelay = async (fileId: string, offset: number, content: Uint8Array, reportedSize: number): Promise<void> => {
     const terminalBatch = offset + content.byteLength === reportedSize;
@@ -649,7 +659,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const completedAt = now(); const completedFile = { ...file, actual_size: stored.size, sha256: stored.sha256, synced_at: completedAt, resource_version: Number(file.resource_version ?? 1) + 1 }; const prepared = await prepareEvent(file, 'file.synced', { file_id: file.id, device_id: file.device_id, session_id: file.session_id, attribute: file.attribute, file_size: stored.size, sha256: stored.sha256, ...recordingEventFacts(completedFile) });
     await db.batch([
       { sql: "UPDATE recording_files SET status='synced',actual_size=?,sha256=?,storage_locator=?,error_code=NULL,synced_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='syncing' AND transport='server_relay' AND EXISTS(SELECT 1 FROM devices d WHERE d.id=recording_files.device_id AND d.ownership_epoch=? AND d.group_id=?)", params: [stored.size, stored.sha256, stored.locator, completedAt, completedAt, file.id, file.ownership_epoch, file.group_id], expectChanges: 1 },
-      roundCompletionStatement(String(file.device_id), completedAt),
+      roundCompletionStatement(String(file.device_id), String(file.id), completedAt),
       ...prepared.statements,
     ]);
     dispatcher.scheduleDrain();
@@ -658,7 +668,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     if (level === 'warn') app.log.warn(details, event);
     else if (level === 'info') app.log.info(details, event);
     else app.log.debug(details, event);
-  });
+  }, undefined, (fileId, transferred, expectedSize) => storage.recordTransferProgress(fileId, transferred, expectedSize));
   reconciler = new Reconciler(db, storage, s3Storage, config, emitEvent, (error) => reportBackgroundFailure(error));
   const openPlatformService = registerOpenPlatformRoutes({ app, db, config, gateway, storage, s3Storage, resolveAccess, audit });
   registerQuickMcpRoutes({ app, db, config, service: openPlatformService, resolveAccess, audit });
@@ -1778,7 +1788,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       const committed = await db.batch([
         { sql: "UPDATE recording_files SET status='synced',actual_size=?,sha256=?,storage_locator=?,error_code=NULL,synced_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND EXISTS(SELECT 1 FROM upload_tickets WHERE id=? AND consumed_at IS NULL AND failed_at IS NULL) AND EXISTS(SELECT 1 FROM devices d WHERE d.id=recording_files.device_id AND d.ownership_epoch=? AND d.group_id=?)", params: [stored.size, stored.sha256, stored.locator, timestamp, timestamp, ticket.file_id, ticket.id, file.ownership_epoch, file.group_id], expectChanges: 1 },
         { sql: 'UPDATE upload_tickets SET consumed_at=? WHERE id=? AND consumed_at IS NULL AND failed_at IS NULL', params: [timestamp, ticket.id], expectChanges: 1 },
-        roundCompletionStatement(String(file.device_id), timestamp),
+        roundCompletionStatement(String(file.device_id), ticket.file_id, timestamp),
         ...prepared.statements,
       ]);
       if (committed[1]?.changes !== 1) throw new Error('UPLOAD_TICKET_RACE');
