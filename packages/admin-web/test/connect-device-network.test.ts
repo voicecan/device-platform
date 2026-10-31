@@ -127,9 +127,19 @@ test('an unmatched Wi-Fi reply still fails when the device is not connected', as
     ...input,
     session: { ...input.session, configureWifi: async () => { calls.push('wifi'); throw new Error('RESPONSE_MISMATCH'); } },
   }), /RESPONSE_MISMATCH/);
-  assert.deepEqual(calls, ['wifi', 'read', 'report']);
+  assert.deepEqual(calls, ['wifi', 'read', 'read', 'read', 'read', 'read', 'read', 'read', 'read', 'read', 'report']);
   assert.equal(calls.includes('server'), false);
   assert.equal(calls.includes('clear-password'), false);
+});
+
+test('an unmatched Wi-Fi reply waits for the device to finish associating', async () => {
+  const { input, calls } = fixture([false, false, false, true]);
+  await connectDeviceNetwork({
+    ...input,
+    session: { ...input.session, configureWifi: async () => { calls.push('wifi'); throw new Error('RESPONSE_MISMATCH'); } },
+    confirmOnline: async () => true,
+  });
+  assert.deepEqual(calls, ['wifi', 'read', 'read', 'read', 'read', 'report', 'clear-password', 'server']);
 });
 
 test('an unmatched server reply is settled by the authoritative online check', async () => {

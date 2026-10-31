@@ -35,8 +35,16 @@ export async function connectDeviceNetwork<T extends NetworkStatus>(input: {
       if (code !== 'WIFI_CONFIGURATION_REJECTED' && !ambiguous) throw cause;
       // A rejected or unmatched reply says nothing about the actual network
       // state, especially when the device connected Wi-Fi before the reply was
-      // lost. Read the device and continue only after a positive observation.
-      const observed = await input.session.refresh();
+      // lost. The Device may still be associating when the reply is lost or
+      // mismatched, so poll briefly and continue only after a positive
+      // observation instead of failing on the first (still-connecting) read.
+      let observed = await input.session.refresh();
+      if (ambiguous) {
+        for (let attempt = 0; attempt < 8 && !observed.wifiConfigured; attempt += 1) {
+          await (input.pause?.() ?? new Promise((resolve) => globalThis.setTimeout(resolve, 2_000)));
+          observed = await input.session.refresh();
+        }
+      }
       if (!observed.wifiConfigured) {
         await input.onStatus(observed);
         throw cause;
