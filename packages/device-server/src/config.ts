@@ -212,7 +212,12 @@ export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): 
   const officialFirmwareBaseUrl = normalizedOfficialSource.pathname.endsWith('/api/v1/public/device-firmware/')
     ? normalizedOfficialSource.href
     : new URL('api/v1/public/device-firmware/', normalizedOfficialSource).href;
-  const storageDriver = environment.VOICECAN_STORAGE_DRIVER === 's3_direct' ? 's3_direct' : environment.VOICECAN_STORAGE_DRIVER === 'server_relay' ? 'server_relay' : 'filesystem_http';
+  // Default to server_relay: when no object storage is configured, the
+  // Device streams recording bytes over the already-established WebSocket
+  // (the relay lane) and the Server writes them to the local filesystem.
+  // This avoids a second HTTP connection per file and is the fastest local
+  // path. filesystem_http remains available as an explicit opt-in.
+  const storageDriver = environment.VOICECAN_STORAGE_DRIVER === 's3_direct' ? 's3_direct' : environment.VOICECAN_STORAGE_DRIVER === 'filesystem_http' ? 'filesystem_http' : 'server_relay';
   const s3 = storageDriver === 's3_direct' ? {
     ...(environment.VOICECAN_S3_ENDPOINT ? { endpoint: environment.VOICECAN_S3_ENDPOINT } : {}),
     region: environment.VOICECAN_S3_REGION ?? 'us-east-1',

@@ -56,7 +56,7 @@ test('P0 lifecycle, rate limit, sync recovery, backup restore and key rotation',
 
     const defaultStorage = await app.inject({ method: 'GET', url: '/api/v1/admin/storage', headers });
     assert.equal(defaultStorage.statusCode, 200, defaultStorage.body);
-    assert.equal(defaultStorage.json().data.driver, 'filesystem_http');
+    assert.equal(defaultStorage.json().data.driver, 'server_relay');
     assert.equal(defaultStorage.json().data.max_storage_bytes, 100 * 1024 * 1024 * 1024);
     assert.equal(defaultStorage.json().data.driver_change_requires_restart, true);
     const invalidStorage = await app.inject({ method: 'PATCH', url: '/api/v1/admin/storage', headers, payload: { max_storage_bytes: 3 * 1024 * 1024 * 1024, warning_ratio: 0.9, stop_ratio: 0.8, reason: 'invalid ordering' } });
