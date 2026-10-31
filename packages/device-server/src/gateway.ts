@@ -53,7 +53,7 @@ const transferBusyRetryLimit = 4;
 // After a reconnect that interrupted an in-flight upload, let the Device finish
 // its HTTP body before asking for the next file. Without this grace the first
 // request races the old upload and returns 0x05 repeatedly.
-const transferResumeGraceDefaultMs = 30_000;
+const transferResumeGraceDefaultMs = 10_000;
 const transferTimeoutFloorMs = 2 * 60_000;
 const transferTimeoutCeilingMs = 45 * 60_000;
 const transferMinimumBytesPerSecond = 16 * 1_024;
@@ -161,9 +161,12 @@ class DeviceActor {
   ) {
     this.#nextTransferNotBefore = resumeTransferNotBefore;
     try { const request = this.core.createBindRequest(rawToken); this.socket.send(request); this.debug('device bind request sent', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, bytes: request.byteLength }); } finally { rawToken.fill(0); }
+    // The Device enforces its own 10 s post-connect bind timeout. Give the
+    // Server a longer deadline (20 s) so the Server never closes a connection
+    // before the Device has had its full bind window to answer.
     this.#bindTimer = setTimeout(() => {
       if (!this.#confirmed) this.socket.close(1008, 'device bind confirmation timeout');
-    }, 10_000);
+    }, 20_000);
     this.#livenessTimer = setInterval(() => { void this.#checkLiveness(); }, Math.max(100, Math.min(500, Math.floor(this.livenessTimeoutMs / 2))));
     this.#livenessTimer.unref();
   }
@@ -729,6 +732,14 @@ class DeviceActor {
       }
       await this.#startNextTransfer();
     }
+    // An inventory also ends through this finalizer (last page, or the empty
+    // incremental page shortcut in #process). Release every lane here the same
+    // way the per-page handler's finally block does: without the control and
+    // status restarts a status refresh accepted while the scan was running
+    // stays in #statusQueue forever, and every later refresh is rejected with
+    // DEVICE_STATUS_REFRESH_UNAVAILABLE until the connection is replaced.
+    await this.#startNextControl();
+    this.#startNextStatusQuery();
   }
 
   async #discoverAndPlan(file: FileDescriptor, enqueue = true, front = false): Promise<boolean> {

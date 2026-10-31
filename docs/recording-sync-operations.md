@@ -29,7 +29,7 @@ Firmware returns `0x05` when it rejects a file-transfer command because another 
 
 `0x05` is transient backpressure, not a failed recording. The Server keeps the existing upload plan and ticket, re-sends the same file-transfer request after a 30-second backoff (up to 4 attempts), and deliberately does **not** advance the transfer queue or emit `recording.sync_failed`. Re-planning on every busy result would supersede the ticket of the upload that is still running on the Device and reset the Admin current-transfer progress, so the Server only retries the request. A busy result that persists beyond the retry budget falls through to the normal failure path for operator inspection.
 
-After a reconnect that found a `syncing` row or a recent `DEVICE_TRANSFER_CONNECTION_CLOSED`/`DEVICE_TRANSFER_PROCESS_RESTARTED` row, the Server arms a 30-second transfer resume grace before requesting the first file. This lets the Device finish the HTTP body that was already in flight and avoids the initial `0x05` burst.
+After a reconnect that found a `syncing` row or a recent `DEVICE_TRANSFER_CONNECTION_CLOSED`/`DEVICE_TRANSFER_PROCESS_RESTARTED` row, the Server arms a 10-second transfer resume grace before requesting the first file. This lets the Device finish the HTTP body that was already in flight and avoids the initial `0x05` burst.
 
 ## `DEVICE_TRANSFER_RESULT_0C`
 
