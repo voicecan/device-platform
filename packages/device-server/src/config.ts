@@ -4,6 +4,7 @@ import { accessSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
+import { createSocket } from 'node:dgram';
 import { isIP } from 'node:net';
 import { validateDeviceWsUrl } from './device-url.js';
 
@@ -108,16 +109,70 @@ async function loadMasterKeyring(dataDir: string, serialized?: string): Promise<
   }
 }
 
-export function detectedAdvertiseHosts(): string[] {
-  const addresses = Object.values(networkInterfaces()).flatMap((entries) => entries ?? [])
-    .filter((entry) => entry.family === 'IPv4' && !entry.internal && !entry.address.startsWith('169.254.'))
-    .map((entry) => entry.address);
+export type NetworkAddress = { address: string; family: string; internal: boolean };
+export type NetworkInterfaceMap = Record<string, ReadonlyArray<NetworkAddress> | undefined>;
+
+// Hyper-V, VPN, container, and other virtual adapters frequently share a
+// private 192.168.* address with the real LAN. They must never win automatic
+// device-address selection just because their address sorts first.
+const virtualInterfacePattern = /^(?:vEthernet\b|Hyper-V\b|Tailscale\b|WSL\b|Docker\b|docker\b|VMware\b|VirtualBox\b|VBox\b|VMnet\b|Loopback\b|TAP\b|TUN\b|ZeroTier\b|WireGuard\b|wg\d|zt\d|utun|awdl|llw|anpi|veth|virbr|br-|Bluetooth\b|Npcap\b|蓝牙)/i;
+
+function isVirtualInterface(name: string): boolean {
+  return virtualInterfacePattern.test(name);
+}
+
+function preferDefaultRoute(addresses: string[], defaultRouteAddress?: string): string[] {
   const priority = (address: string): number => address.startsWith('192.168.') ? 0 : address.startsWith('10.') ? 1 : /^172\.(?:1[6-9]|2\d|3[01])\./.test(address) ? 2 : 3;
-  return [...new Set(addresses)].sort((left, right) => priority(left) - priority(right) || left.localeCompare(right));
+  return [...new Set(addresses)].sort((left, right) => {
+    if (left === defaultRouteAddress) return -1;
+    if (right === defaultRouteAddress) return 1;
+    return priority(left) - priority(right) || left.localeCompare(right);
+  });
+}
+
+let defaultRouteProbe: Promise<string | undefined> | undefined;
+
+/** Resolve the source address selected by the default route without sending traffic. */
+export function detectDefaultRouteAddress(): Promise<string | undefined> {
+  if (defaultRouteProbe) return defaultRouteProbe;
+  defaultRouteProbe = new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const socket = createSocket('udp4');
+    const finish = (address?: string): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      try { socket.close(); } catch { /* already closed */ }
+      resolve(address);
+    };
+    timer = setTimeout(() => finish(undefined), 500);
+    socket.once('error', () => finish(undefined));
+    socket.connect(53, '1.1.1.1', () => {
+      try {
+        const address = socket.address().address;
+        finish(address && address !== '0.0.0.0' ? address : undefined);
+      } catch {
+        finish(undefined);
+      }
+    });
+  });
+  return defaultRouteProbe;
+}
+
+export function detectedAdvertiseHosts(defaultRouteAddress?: string, interfaces: NetworkInterfaceMap = networkInterfaces()): string[] {
+  const addresses = Object.entries(interfaces).flatMap(([name, entries]) => {
+    if (isVirtualInterface(name)) return [];
+    return (entries ?? [])
+      .filter((entry) => entry.family === 'IPv4' && !entry.internal && !entry.address.startsWith('169.254.'))
+      .map((entry) => entry.address);
+  });
+  return preferDefaultRoute(addresses, defaultRouteAddress);
 }
 
 export function currentDeviceAdvertiseHosts(config: Pick<ServerConfig, 'deviceAdvertiseHost' | 'deviceAdvertiseHostConfigured'>, detected = detectedAdvertiseHosts()): string[] {
-  return [...new Set([...(config.deviceAdvertiseHostConfigured ? [config.deviceAdvertiseHost] : []), ...detected])];
+  const automaticPreferred = !config.deviceAdvertiseHostConfigured && detected.includes(config.deviceAdvertiseHost) ? config.deviceAdvertiseHost : undefined;
+  return [...new Set([...(config.deviceAdvertiseHostConfigured ? [config.deviceAdvertiseHost] : []), ...(automaticPreferred ? [automaticPreferred] : []), ...detected])];
 }
 
 export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): Promise<ServerConfig> {
@@ -137,7 +192,8 @@ export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): 
   const configuredDeviceWsUrl = environment.VOICECAN_DEVICE_WSS_URL?.trim();
   const deviceWssUrl = configuredDeviceWsUrl ? validateDeviceWsUrl(configuredDeviceWsUrl) : undefined;
   const configuredAdvertiseHost = environment.VOICECAN_DEVICE_ADVERTISE_HOST?.trim();
-  const detectedHosts = detectedAdvertiseHosts();
+  const defaultRouteAddress = configuredAdvertiseHost ? undefined : await detectDefaultRouteAddress();
+  const detectedHosts = detectedAdvertiseHosts(defaultRouteAddress);
   const deviceAdvertiseHost = configuredAdvertiseHost || detectedHosts[0] || '127.0.0.1';
   const deviceAdvertiseHosts = [...new Set([deviceAdvertiseHost, ...detectedHosts])];
   const deviceConnectUrl = environment.VOICECAN_CONNECT_WEB_URL?.trim() || 'https://connect.voice-can.com/';
