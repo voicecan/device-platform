@@ -1055,3 +1055,51 @@ test('gateway transfers verified OTA content only after the device requests an o
   assert.deepEqual(controls, [{ kind: 'power', action: 'reboot' }]);
   assert.ok(runs.some((entry) => entry.sql.includes('SET status=?') && entry.params[0] === 'succeeded' && entry.params[1] === 'OTA_REBOOT_REQUESTED'));
 });
+
+test('gateway streams a multi-chunk OTA image in order after the device requests an offset', async () => {
+  const otaRequests: Array<{ version: string; size: number; crc16: number; force?: boolean }> = [];
+  const chunks: Array<{ offset: number; content: Uint8Array }> = [];
+  const controls: unknown[] = [];
+  const runs: Array<{ sql: string; params: unknown[] }> = [];
+  const database = {
+    get: async (sql: string) => {
+      if (sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1')) return { connection_epoch: 9 };
+      if (sql.includes('SELECT * FROM devices WHERE id=?')) return { id: 'device-1', group_id: 'group-1', connection_epoch: 9, credential_epoch: 1, claim_status: 'active', firmware_version: 'v0.5.2' };
+      return null;
+    },
+    all: async () => [],
+    run: async (sql: string, params: unknown[] = []) => { runs.push({ sql, params }); return { changes: sql.includes("SET status='dispatched'") || sql.includes("SET status='running'") || sql.includes('SET status=?') ? 1 : 0 }; },
+    batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
+    [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
+    [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 0, batchOffset: 0, files: [] } }],
+    [12, { event: { kind: 'ota_check', result: 0 } }],
+    [13, { event: { kind: 'ota_transfer_request', offset: 0 } }],
+    [14, { event: { kind: 'ota_status', result: 0 } }],
+  ]);
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: (input) => { controls.push(input); return Uint8Array.of(9); },
+    requestOta: (input) => { otaRequests.push(input); return Uint8Array.of(20); }, createOtaChunk: (input) => { chunks.push(input); return Uint8Array.of(21); }, requestOtaStatus: () => Uint8Array.of(22),
+    process: (frame) => events.get(frame[0]!)!,
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket(); await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10)); socket.emit('message', Uint8Array.of(11)); await new Promise((resolve) => setImmediate(resolve));
+  const content = new Uint8Array(3_000); for (let index = 0; index < content.length; index += 1) content[index] = index % 251;
+  assert.equal(await gateway.dispatchOta('device-1', 'command-ota', { version: 'v0.5.4-dev', size: content.byteLength, crc16: 0x1234, content, force: true }), true);
+  assert.deepEqual(otaRequests, [{ version: 'v0.5.4-dev', size: 3_000, crc16: 0x1234, force: true }]);
+  assert.deepEqual(chunks, []);
+  socket.emit('message', Uint8Array.of(12)); socket.emit('message', Uint8Array.of(13));
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.deepEqual(chunks, [
+    { offset: 0, content: content.slice(0, 1_480) },
+    { offset: 1_480, content: content.slice(1_480, 2_960) },
+    { offset: 2_960, content: content.slice(2_960) },
+  ]);
+  assert.deepEqual(controls, []);
+  socket.emit('message', Uint8Array.of(14)); await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(controls, [{ kind: 'power', action: 'reboot' }]);
+  assert.ok(runs.some((entry) => entry.sql.includes('SET status=?') && entry.params[0] === 'succeeded' && entry.params[1] === 'OTA_REBOOT_REQUESTED'));
+});

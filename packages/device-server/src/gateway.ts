@@ -58,6 +58,13 @@ const transferTimeoutFloorMs = 2 * 60_000;
 const transferTimeoutCeilingMs = 45 * 60_000;
 const transferMinimumBytesPerSecond = 16 * 1_024;
 const inboundQueueHighWatermarkBytes = 128 * 1024;
+// OTA is pushed Server -> Device. The Device's WSS PDU caps the data payload at
+// 1484 bytes (1500 tx buffer - 10 uprotocol overhead - 6 ota_data_pkt_t header),
+// so 1480 leaves a 4-byte margin. The Device does not ack each chunk (its receive
+// queue is depth 10 and it re-requests an offset only on overflow), so the Server
+// streams the whole image with a fixed 1 ms gap instead of flooding the queue.
+const otaChunkSize = 1_480;
+const otaStreamIntervalMs = 1;
 const inboundQueueLowWatermarkBytes = 64 * 1024;
 const inboundQueueHardLimitBytes = 512 * 1024;
 
@@ -122,7 +129,7 @@ class DeviceActor {
   #controlTimer: ReturnType<typeof setTimeout> | null = null;
   #controlQueue: Array<{ commandId: string; input: DeviceControl }> = [];
   #activeControl: { commandId: string; input: DeviceControl } | null = null;
-  #activeOta: { commandId: string; firmware: GatewayOtaPackage } | null = null;
+  #activeOta: { commandId: string; firmware: GatewayOtaPackage; nextOffset: number; streaming: boolean } | null = null;
   #otaTimer: ReturnType<typeof setTimeout> | null = null;
   #livenessTimer: ReturnType<typeof setInterval> | null = null;
   #lastInboundAt = Date.now();
@@ -293,7 +300,7 @@ class DeviceActor {
     const startedAt = timestamp();
     const changed = await this.db.run("UPDATE commands SET status='running',started_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='dispatched' AND connection_epoch=?", [startedAt, startedAt, commandId, this.connectionEpoch]);
     if (changed.changes !== 1) return false;
-    this.#activeOta = { commandId, firmware };
+    this.#activeOta = { commandId, firmware, nextOffset: 0, streaming: false };
     this.socket.send(this.core.requestOta({ version: firmware.version, size: firmware.size, crc16: firmware.crc16, ...(firmware.force === undefined ? {} : { force: firmware.force }) }));
     this.#otaTimer = setTimeout(() => { this.#background(this.#finishOta(false, 'DEVICE_OTA_TIMEOUT')); }, 15 * 60_000); this.#otaTimer.unref();
     this.debug('device OTA requested', { device_id: this.deviceId, command_id: commandId, version: firmware.version, firmware_size: firmware.size, firmware_crc16: firmware.crc16, connection_epoch: this.connectionEpoch });
@@ -539,10 +546,12 @@ class DeviceActor {
     if (event.kind === 'ota_transfer_request') {
       const active = this.#activeOta; if (!active) return;
       if (!Number.isSafeInteger(event.offset) || event.offset < 0 || event.offset >= active.firmware.size) { await this.#finishOta(false, 'DEVICE_OTA_OFFSET_INVALID'); return; }
-      const end = Math.min(event.offset + 1_480, active.firmware.size);
-      const content = active.firmware.content.slice(event.offset, end);
-      this.socket.send(this.core.createOtaChunk({ offset: event.offset, content }));
-      this.debug('device OTA chunk sent', { device_id: this.deviceId, command_id: active.commandId, offset: event.offset, bytes: content.byteLength, firmware_size: active.firmware.size });
+      // The Device sends one request at the start (offset 0) and re-requests a
+      // specific offset when its receive queue overflows (flow control). Treat
+      // every request as "resume streaming from this offset": rewind nextOffset
+      // and make sure the stream is running.
+      active.nextOffset = event.offset;
+      this.#startOtaStream();
       return;
     }
     if (event.kind === 'ota_status') {
@@ -1067,6 +1076,29 @@ class DeviceActor {
     this.debug('device OTA lane released', { device_id: this.deviceId, command_id: active.commandId, succeeded, code });
     if (succeeded) { this.#deviceInfoCached = false; await this.db.run('UPDATE device_status SET info_updated_at=NULL WHERE device_id=?', [this.deviceId]); }
     this.#activeOta = null; this.#startNextInventory(); await this.#startNextControl(); await this.#startNextTransfer();
+  }
+
+  #startOtaStream(): void {
+    const active = this.#activeOta;
+    if (!active || active.streaming) return;
+    active.streaming = true;
+    this.#background(this.#otaStreamLoop());
+  }
+
+  async #otaStreamLoop(): Promise<void> {
+    while (true) {
+      const active = this.#activeOta;
+      if (!active || !active.streaming) return;
+      const offset = active.nextOffset;
+      if (offset >= active.firmware.size) { active.streaming = false; return; }
+      const end = Math.min(offset + otaChunkSize, active.firmware.size);
+      const content = active.firmware.content.slice(offset, end);
+      active.nextOffset = end;
+      this.socket.send(this.core.createOtaChunk({ offset, content }));
+      this.debug('device OTA chunk sent', { device_id: this.deviceId, command_id: active.commandId, offset, bytes: content.byteLength, firmware_size: active.firmware.size });
+      if (end >= active.firmware.size) { active.streaming = false; return; }
+      await new Promise<void>((resolve) => setTimeout(resolve, otaStreamIntervalMs));
+    }
   }
 
   async #resumeQueuedCommands(): Promise<boolean> {
