@@ -62,8 +62,11 @@ const inboundQueueHighWatermarkBytes = 128 * 1024;
 // 1484 bytes (1500 tx buffer - 10 uprotocol overhead - 6 ota_data_pkt_t header),
 // so 1480 leaves a 4-byte margin. The Device does not ack each chunk (its receive
 // queue is depth 10 and it re-requests an offset only on overflow), so the Server
-// streams the whole image with a fixed 1 ms gap instead of flooding the queue.
+// streams the whole image in batches and only yields between batches. A single
+// setTimeout(1) per chunk costs ~10 ms of event-loop scheduling, which caps the
+// stream at ~110 KB/s; batching amortizes that cost.
 const otaChunkSize = 1_480;
+const otaStreamBatch = 8;
 const otaStreamIntervalMs = 1;
 const inboundQueueLowWatermarkBytes = 64 * 1024;
 const inboundQueueHardLimitBytes = 512 * 1024;
@@ -1100,14 +1103,16 @@ class DeviceActor {
     while (true) {
       const active = this.#activeOta;
       if (!active || !active.streaming) return;
-      const offset = active.nextOffset;
-      if (offset >= active.firmware.size) { active.streaming = false; return; }
-      const end = Math.min(offset + otaChunkSize, active.firmware.size);
-      const content = active.firmware.content.slice(offset, end);
-      active.nextOffset = end;
-      this.socket.send(this.core.createOtaChunk({ offset, content }));
-      this.debug('device OTA chunk sent', { device_id: this.deviceId, command_id: active.commandId, offset, bytes: content.byteLength, firmware_size: active.firmware.size });
-      if (end >= active.firmware.size) { active.streaming = false; return; }
+      for (let index = 0; index < otaStreamBatch; index += 1) {
+        const offset = active.nextOffset;
+        if (offset >= active.firmware.size) { active.streaming = false; return; }
+        const end = Math.min(offset + otaChunkSize, active.firmware.size);
+        const content = active.firmware.content.slice(offset, end);
+        active.nextOffset = end;
+        this.socket.send(this.core.createOtaChunk({ offset, content }));
+        this.debug('device OTA chunk sent', { device_id: this.deviceId, command_id: active.commandId, offset, bytes: content.byteLength, firmware_size: active.firmware.size });
+        if (end >= active.firmware.size) { active.streaming = false; return; }
+      }
       await new Promise<void>((resolve) => setTimeout(resolve, otaStreamIntervalMs));
     }
   }
