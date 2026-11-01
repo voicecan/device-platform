@@ -111,14 +111,22 @@ test('checking the existing network cannot bypass a disconnected device or uncon
   await assert.rejects(connectDeviceNetwork({ ...connected.input, wifi: undefined, confirmOnline: async () => false, onComplete: () => { completed = true; } }), /SERVER_ONLINE_TIMEOUT/);
   assert.equal(completed, false);
 });
-test('an unmatched Wi-Fi reply continues when the device reports a connected network', async () => {
+test('an unmatched Wi-Fi reply is settled by the authoritative online check', async () => {
   const { input, calls } = fixture([true]);
+  const stages: string[] = [];
+  let completed = false;
   await connectDeviceNetwork({
     ...input,
     session: { ...input.session, configureWifi: async () => { calls.push('wifi'); throw new Error('RESPONSE_MISMATCH'); } },
     confirmOnline: async () => true,
+    onStage: (stage) => stages.push(stage),
+    onComplete: () => { completed = true; },
   });
-  assert.deepEqual(calls, ['wifi', 'read', 'report', 'clear-password', 'server']);
+  // The server already sees the device online after the Wi-Fi switch; do not
+  // depend on the BLE status read that races the same switch.
+  assert.deepEqual(calls, ['wifi', 'clear-password']);
+  assert.equal(completed, true);
+  assert.deepEqual(stages, ['configure_wifi', 'wait_server', 'wifi_connected', 'server_connected']);
 });
 
 test('an unmatched Wi-Fi reply still fails when the device is not connected', async () => {
@@ -134,10 +142,14 @@ test('an unmatched Wi-Fi reply still fails when the device is not connected', as
 
 test('an unmatched Wi-Fi reply waits for the device to finish associating', async () => {
   const { input, calls } = fixture([false, false, false, true]);
+  // The first eight online checks cover the recovery window and fail; the
+  // device read then catches the completed association, and the final online
+  // check settles the server step.
+  let onlineChecks = 0;
   await connectDeviceNetwork({
     ...input,
     session: { ...input.session, configureWifi: async () => { calls.push('wifi'); throw new Error('RESPONSE_MISMATCH'); } },
-    confirmOnline: async () => true,
+    confirmOnline: async () => ++onlineChecks > 8,
   });
   assert.deepEqual(calls, ['wifi', 'read', 'read', 'read', 'read', 'report', 'clear-password', 'server']);
 });

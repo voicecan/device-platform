@@ -33,11 +33,26 @@ export async function connectDeviceNetwork<T extends NetworkStatus>(input: {
       const code = connectionErrorCode(cause);
       const ambiguous = isAmbiguousDeviceReply(cause);
       if (code !== 'WIFI_CONFIGURATION_REJECTED' && !ambiguous) throw cause;
-      // A rejected or unmatched reply says nothing about the actual network
-      // state, especially when the device connected Wi-Fi before the reply was
-      // lost. The Device may still be associating when the reply is lost or
-      // mismatched, so poll briefly and continue only after a positive
-      // observation instead of failing on the first (still-connecting) read.
+      // A disruptive configure_wifi can lose or misorder its reply while the
+      // device is already coming back online. The BLE status read races the
+      // Wi-Fi switch too, so give the authoritative server view a short window
+      // first and only fall back to the device read when it is still
+      // associating or the server address has not been configured yet.
+      if (ambiguous && input.confirmOnline) {
+        input.onStage?.('wait_server');
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          if (await input.confirmOnline().catch(() => false)) {
+            input.onStage?.('wifi_connected');
+            input.onWifiConnected?.();
+            input.onStage?.('server_connected');
+            input.onComplete?.();
+            return;
+          }
+          await (input.pause?.() ?? new Promise((resolve) => globalThis.setTimeout(resolve, 2_000)));
+        }
+      }
+      // The server has not seen the device yet: read the device state to cover
+      // first-time provisioning and devices that are still associating.
       let observed = await input.session.refresh();
       if (ambiguous) {
         for (let attempt = 0; attempt < 8 && !observed.wifiConfigured; attempt += 1) {
