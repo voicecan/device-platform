@@ -104,6 +104,9 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [deleteFileTarget, setDeleteFileTarget] = useState<SyncFile | null>(null);
+  const [deleteFileReason, setDeleteFileReason] = useState('');
+  const [deleteFileError, setDeleteFileError] = useState('');
   const [connectionEvents, setConnectionEvents] = useState<ConnectionEvent[]>([]);
   const [diagnosticNotice, setDiagnosticNotice] = useState('');
   const connectionStep = (stage: ConnectionStage): void => setConnectionEvents((events) => advanceConnection(events, stage));
@@ -544,13 +547,32 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
     }
     void run('sync', () => api(`/devices/${encodeURIComponent(deviceId)}/sync`, { method: 'POST', headers: { 'idempotency-key': randomUuidV4() }, body: '{}' }), t('Device synchronization requested.'));
   };
-  const deleteFile = (file: SyncFile): void => {
+  const requestDeleteFile = (file: SyncFile): void => {
     if (!canRelease) return;
-    if (!globalThis.confirm(t('Delete this synchronized recording object? The original file on the device is not deleted.'))) return;
-    void run(`delete:${file.id}`, async () => {
+    setDeleteFileTarget(file);
+    setDeleteFileReason('');
+    setDeleteFileError('');
+  };
+  const confirmDeleteFile = async (): Promise<void> => {
+    const file = deleteFileTarget;
+    const reason = deleteFileReason.trim();
+    if (!file || !reason) return;
+    setBusy(`delete:${file.id}`);
+    setError('');
+    setDeleteFileError('');
+    try {
       const preview = await api<{ resource_version: string; confirmation_token: string }>(`/files/${encodeURIComponent(file.id)}/deletion-preview`, { method: 'POST', body: '{}' });
-      return api(`/files/${encodeURIComponent(file.id)}`, { method: 'DELETE', body: JSON.stringify({ reason: 'Administrator deleted the synchronized recording object', resource_version: preview.resource_version, confirmation_token: preview.confirmation_token }) });
-    }, t('Recording object deleted. The original on the device was not deleted.'));
+      await api(`/files/${encodeURIComponent(file.id)}`, { method: 'DELETE', body: JSON.stringify({ reason, resource_version: preview.resource_version, confirmation_token: preview.confirmation_token }) });
+      setDeleteFileTarget(null);
+      setDeleteFileReason('');
+      setNotice(t('Recording object deleted. The original on the device was not deleted.'));
+      await load(deviceId, true);
+      onDevicesRefresh();
+    } catch (cause) {
+      setDeleteFileError(errorMessage(cause));
+    } finally {
+      setBusy('');
+    }
   };
 
   const diagnostics = connectionEvents.length ? <section className="connection-diagnostics" aria-label={t('Connection diagnostics')} aria-live="polite">
@@ -655,7 +677,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
         return <tr key={file.id} title={file.id}><td><span className={`status-pill status-${file.status}`} title={file.error_code ?? undefined}>{t(file.status)}</span></td><td><strong>{file.session_id}</strong></td><td>{formatBytes(file.actual_size ?? file.expected_size)}</td><td><time dateTime={stamp?.iso} title={sessionTimestampTitle(file.session_id, language)}>{formatSessionTimestamp(file.session_id, language)}</time></td><td><time dateTime={file.synced_at ?? undefined} title={isoTimestampTitle(file.synced_at, language)}>{formatIsoTimestamp(file.synced_at, language)}</time></td><td><div className="sync-row-actions">
           {file.status === 'pending' ? <Button kind="secondary" disabled={!wsConnected || syncActive || Boolean(busy)} onClick={() => syncFile(file)}>{busy === 'sync' ? t('Requesting…') : t('Sync now')}</Button> : null}
           {file.status === 'failed' ? <Button kind="secondary" disabled={Boolean(busy)} onClick={() => syncFile(file)}>{busy === `retry:${file.id}` ? t('Retrying…') : t('Retry')}</Button> : null}
-          {file.status === 'synced' && canRelease ? <Button kind="danger" disabled={Boolean(busy)} onClick={() => deleteFile(file)}>{busy === `delete:${file.id}` ? t('Deleting…') : t('Delete')}</Button> : null}
+          {file.status === 'synced' && canRelease ? <Button kind="danger" disabled={Boolean(busy)} onClick={() => requestDeleteFile(file)}>{busy === `delete:${file.id}` ? t('Deleting…') : t('Delete')}</Button> : null}
         </div></td></tr>;
       })}</tbody></table>{recordingPageCount > 1 ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={currentRecordingPage === 0} onClick={() => setRecordingPage((page) => Math.max(0, page - 1))}>{t('Previous')}</Button><span>{t('Page {page} of {total}', { page: currentRecordingPage + 1, total: recordingPageCount })}</span><Button kind="ghost" disabled={currentRecordingPage >= recordingPageCount - 1} onClick={() => setRecordingPage((page) => Math.min(recordingPageCount - 1, page + 1))}>{t('Next')}</Button></nav> : null}</div>}
     </section>
@@ -672,5 +694,10 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
     </section>
     <section className="device-lower-grid"><article><p className="eyebrow">{t('Latest semantic command')}</p><DataTable data={workspace?.latest_command ?? commands} t={t} emptyMessage={t('No reviewed commands have been requested for this device.')}/></article><article><p className="eyebrow">{t('Public capability manifest')}</p><DataTable data={capabilities} t={t}/></article></section>
     </details>
+    {deleteFileTarget ? <div className="secret-dialog-backdrop"><section className="secret-dialog device-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-recording-title">
+      <header><span className="secret-dialog-icon"><Icon name="file" size={24}/></span><div><p className="eyebrow">{t('Recording file')}</p><h2 id="delete-recording-title">{t('Delete synchronized recording')}</h2><p>{t('The recording object will be deleted from the server. The original file on the device is not deleted.')}</p></div></header>
+      <div className="device-delete-dialog-body"><Field id="recording-delete-reason" label={t('Reason for deletion')} value={deleteFileReason} onChange={setDeleteFileReason} maxLength={256} wide required/>{deleteFileError ? <div className="inline-alert inline-alert-error" role="alert">{deleteFileError}</div> : null}</div>
+      <div className="device-delete-dialog-actions"><Button kind="secondary" disabled={busy === `delete:${deleteFileTarget.id}`} onClick={() => { setDeleteFileTarget(null); setDeleteFileReason(''); setDeleteFileError(''); }}>{t('Cancel')}</Button><Button kind="danger" disabled={!deleteFileReason.trim() || busy === `delete:${deleteFileTarget.id}`} onClick={() => void confirmDeleteFile()}>{busy === `delete:${deleteFileTarget.id}` ? t('Deleting…') : t('Delete')}</Button></div>
+    </section></div> : null}
   </div>;
 }

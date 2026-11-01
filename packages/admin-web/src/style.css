@@ -1372,3 +1372,8 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospac
 @media (max-width: 760px) {
   .device-status-header-actions { width: 100%; justify-content: flex-start; }
 }
+
+/* Recording object deletion */
+.device-delete-dialog { width: min(540px, 100%); }
+.device-delete-dialog-body { display: grid; gap: 14px; margin: 22px 0; }
+.device-delete-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--vc-border); padding-top: 16px; }

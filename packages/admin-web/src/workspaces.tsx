@@ -76,7 +76,7 @@ function alertSeverityClass(severity: unknown): string {
 function SecurityAlertsWorkspace({ t, run }: { t: Translate; run: Runner }) {
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
   const [summary, setSummary] = useState<SecurityAlertSummary>();
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState(() => t('Reviewed open platform security alert.'));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -95,17 +95,16 @@ function SecurityAlertsWorkspace({ t, run }: { t: Translate; run: Runner }) {
   };
   useEffect(() => { void load(); }, []);
   const open = summary?.security_alerts?.open;
+  const resolutionReason = (): string => reason.trim() || t('Reviewed open platform security alert.');
   const resolveOne = async (alert: SecurityAlert): Promise<void> => {
-    if (!reason.trim()) { setNotice(t('Enter a resolution reason first.')); return; }
     setNotice('');
-    const result = await run(() => api(`/open-platform/security-alerts/${encodeURIComponent(String(alert.id))}/resolve`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }));
+    const result = await run(() => api(`/open-platform/security-alerts/${encodeURIComponent(String(alert.id))}/resolve`, { method: 'POST', body: JSON.stringify({ reason: resolutionReason() }) }));
     if (result !== undefined) { setNotice(t('Security alert resolved.')); await load(); }
   };
   const resolveAll = async (): Promise<void> => {
-    if (!reason.trim()) { setNotice(t('Enter a resolution reason first.')); return; }
     if (!globalThis.confirm(t('Resolve all open security alerts? This cannot be undone.'))) return;
     setNotice('');
-    const result = await run(() => api<{ resolved: number }>('/open-platform/security-alerts/resolve-all', { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }));
+    const result = await run(() => api<{ resolved: number }>('/open-platform/security-alerts/resolve-all', { method: 'POST', body: JSON.stringify({ reason: resolutionReason() }) }));
     if (result !== undefined) { setNotice(t('{count} security alerts resolved.', { count: result.resolved })); await load(); }
   };
   return <div className="security-alerts-workspace">
@@ -113,7 +112,7 @@ function SecurityAlertsWorkspace({ t, run }: { t: Translate; run: Runner }) {
       <div className="settings-intro"><span className="settings-mark"><Icon name="shield" size={20}/></span><div><h2>{t('Bulk resolution')}</h2><p>{t('Resolve open alerts with an auditable reason. The alert history is retained.')}</p></div></div>
       <form className="form-grid" onSubmit={(event) => event.preventDefault()}>
         <Field id="security-alert-reason" label={t('Resolution reason')} value={reason} onChange={setReason} wide required/>
-        <div className="form-actions"><Button icon="check" disabled={!reason.trim() || !open} onClick={() => void resolveAll()}>{t('Resolve all open alerts')}</Button></div>
+        <div className="form-actions"><Button icon="check" disabled={!open} onClick={() => void resolveAll()}>{t('Resolve all open alerts')}</Button></div>
       </form>
       {notice ? <p role="status" className="inline-alert inline-alert-success">{notice}</p> : null}
     </section>
@@ -126,7 +125,7 @@ function SecurityAlertsWorkspace({ t, run }: { t: Translate; run: Runner }) {
         <td data-label={t('Application')}>{String(alert.application_id ?? '—')}</td>
         <td data-label={t('Created')}>{alertTime(alert.created_at)}</td>
         <td data-label={t('Status')}><span className={`status-pill ${alert.status === 'open' ? 'status-failed' : 'status-ready'}`}>{t(String(alert.status ?? '—'))}</span></td>
-        <td data-label={t('Actions')}>{alert.status === 'open' ? <Button kind="secondary" disabled={!reason.trim()} onClick={() => void resolveOne(alert)}>{t('Resolve')}</Button> : <span>{alert.resolved_at ? alertTime(alert.resolved_at) : '—'}</span>}</td>
+        <td data-label={t('Actions')}>{alert.status === 'open' ? <Button kind="secondary" onClick={() => void resolveOne(alert)}>{t('Resolve')}</Button> : <span>{alert.resolved_at ? alertTime(alert.resolved_at) : '—'}</span>}</td>
       </tr>)}</tbody></table></div> : <div className="empty-state"><h3>{t('No security alerts')}</h3><p>{t('Open platform activity has not raised any alerts.')}</p></div>}
     </section>
   </div>;
