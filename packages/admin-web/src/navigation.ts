@@ -10,7 +10,7 @@ export function urlForView(currentHref: string, view: View): URL {
   else url.searchParams.set('view', view);
 
   if (view !== 'devices') url.searchParams.delete('device');
-  if (view !== 'files') url.searchParams.delete('recording_device');
+  if (view !== 'files') { url.searchParams.delete('recording_device'); url.searchParams.delete('recording_status'); }
 
   // Binding intents belong to one visit of the provisioning workspace. Clear
   // them both when leaving that workspace and when starting a fresh visit.

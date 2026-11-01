@@ -283,6 +283,12 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
     finally { setBusy(''); }
   };
 
+  const toggleAttention = (): void => {
+    const muted = !attentionMuted;
+    if (!globalThis.confirm(t(muted ? 'Mute attention for this device? It will no longer count as offline in Overview.' : 'Unmute attention for this device?'))) return;
+    void run('attention', () => api(`/devices/${encodeURIComponent(deviceId)}/attention`, { method: 'POST', body: JSON.stringify({ muted, reason: muted ? 'Administrator muted device attention' : 'Administrator unmuted device attention' }) }), t(muted ? 'Device attention muted.' : 'Device attention unmuted.'));
+  };
+
   const reportBleStatus = async (session: BoundDeviceMaintenance, serialNumber: string, status = session.status): Promise<void> => {
     if (deviceId === selectedDevice.current) { const reading = connectionReading(status); setConnectionReadings((readings) => [...readings, reading].slice(-24)); }
     await api(`/devices/${encodeURIComponent(deviceId)}/ble-status`, { method: 'POST', body: JSON.stringify({ serial_number: serialNumber, info: session.info, status }) });
@@ -483,6 +489,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   if (items.length === 0 && !deviceId) return <div className="empty-state"><div className="empty-orbit"><Icon name="device" size={24}/></div><h3>{t('No bound devices')}</h3><p>{t('Bind a device to start monitoring its connection and recording synchronization.')}</p></div>;
   const summary = workspace?.summary;
   const current = workspace?.device ?? items.find((device) => String(device.id) === deviceId);
+  const attentionMuted = typeof current?.attention_muted_at === 'string' && current.attention_muted_at.length > 0;
   const recordingPageSize = 10;
   const recordingPageCount = Math.max(1, Math.ceil((workspace?.files.length ?? 0) / recordingPageSize));
   const currentRecordingPage = Math.min(recordingPage, recordingPageCount - 1);
@@ -553,6 +560,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
         <Button kind="secondary" onClick={() => setEditing(false)}>{t('Cancel')}</Button>
       </div> : <div className="device-name-heading">
         <h2>{String(current?.display_name ?? current?.sn ?? t('Unnamed resource'))}</h2>
+        {attentionMuted ? <span className="status-pill status-warning">{t('Attention muted')}</span> : null}
         {canEdit ? <button type="button" className="icon-button" aria-label={t('Edit device name')} title={t('Edit device name')} onClick={beginEdit}><Icon name="edit" size={16}/></button> : null}
       </div>}
     </section>
@@ -591,6 +599,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
           <header><span className="device-vital-icon"><Icon name="pulse" size={20}/></span><div><strong>{t('Device controls')}</strong><small>{controlConnected ? t('Connection ready') : t('Connection required')}</small></div></header>
           <div className="device-control-actions"><Button kind="secondary" icon="refresh" disabled={Boolean(busy)} onClick={() => void refreshDeviceStatus()}>{busy === 'status-refresh' ? t('Refreshing…') : t('Refresh')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={() => void toggleBle()}>{bleConnected ? t('Disconnect BLE') : t('Connect BLE')}</Button></div>
           {canEdit ? <div className="device-control-actions"><Button kind="secondary" disabled={controlDisabled} onClick={() => void runControl({ kind: 'usb', enabled: !(status?.usb_state === 1 || status?.usb_state === 2) }, status?.usb_state === 1 || status?.usb_state === 2 ? t('USB mode disabled.') : t('USB mode enabled.'))}>{status?.usb_state === 1 || status?.usb_state === 2 ? t('Disable USB') : t('Enable USB')}</Button></div> : null}
+          {canEdit ? <div className="device-control-actions"><Button kind="secondary" disabled={Boolean(busy)} onClick={toggleAttention}>{attentionMuted ? t('Unmute attention') : t('Mute attention')}</Button></div> : null}
           {canEdit ? <div className="device-control-actions device-auto-shutdown-actions"><Select ariaLabel={t('Auto shutdown')} value={autoShutdown} onChange={(value) => { autoShutdownTouched.current = true; setAutoShutdown(value); }} options={[['never', 'Never'], ['15min', '15 minutes'], ['30min', '30 minutes'], ['1h', '1 hour'], ['5h', '5 hours']].map(([value, label]) => ({ value: value!, label: t(label!) }))}/><Button kind="secondary" disabled={controlDisabled} onClick={() => { autoShutdownTouched.current = true; void runControl({ kind: 'auto_shutdown', interval: autoShutdown as 'never' | '15min' | '30min' | '1h' | '5h' }, t('Auto shutdown setting updated.')); }}>{t('Apply auto shutdown')}</Button></div> : null}
           {canRelease ? <div className="device-control-actions"><Button kind="secondary" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Restart this device now?'))) void runControl({ kind: 'power', action: 'reboot' }, t('Restart requested.')); }}>{t('Restart')}</Button><Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Shut down this device now?'))) void runControl({ kind: 'power', action: 'shutdown' }, t('Shutdown requested.')); }}>{t('Shut down')}</Button><Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Reset device configuration? Recordings are preserved.'))) void runControl({ kind: 'factory_reset', scope: 'configuration' }, t('Configuration reset requested.')); }}>{t('Reset configuration')}</Button></div> : null}
           {canRelease ? <div className="device-control-actions"><Button kind="secondary" disabled={Boolean(busy)} onClick={() => setWifiEditorOpen((open) => !open)}>{wifiEditorOpen ? t('Cancel') : t('Configure Wi-Fi')}</Button></div> : null}

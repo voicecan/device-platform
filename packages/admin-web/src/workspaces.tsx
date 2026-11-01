@@ -6,7 +6,7 @@ import { api, errorMessage } from './api.js';
 import { EmbeddedDeviceProvisioner, RemoteDeviceProvisioner } from './device-integration.js';
 import type { StartRemoteProvisioning } from './device-integration.js';
 import type { Locale } from './i18n.js';
-import { Button, DataTable, Field, FlowHeader, Icon, ResourcePicker, Stepper } from './ui.js';
+import { Button, collectionOf, DataTable, Field, FlowHeader, Icon, ResourcePicker, Stepper } from './ui.js';
 import type { DeviceWsCandidate, Translate } from './ui.js';
 import { NativeHandoffPanel } from './native-handoff-panel.js';
 import { BindingPreparation } from './binding-preparation.js';
@@ -34,7 +34,7 @@ function deviceConnectUrl(): string {
 
 export const resourcePaths: Partial<Record<View, string>> = {
   events: '/events?limit=20', audit: '/audit-logs',
-  'open-platform-overview': '/open-platform/overview', 'permission-catalog': '/open-platform/permission-catalog', 'oauth-clients': '/open-platform/oauth-clients', 'call-logs': '/open-platform/call-logs', 'download-grants': '/open-platform/download-grants', 'security-alerts': '/open-platform/security-alerts',
+  'open-platform-overview': '/open-platform/overview', 'permission-catalog': '/open-platform/permission-catalog', 'oauth-clients': '/open-platform/oauth-clients', 'call-logs': '/open-platform/call-logs', 'download-grants': '/open-platform/download-grants',
 };
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
@@ -53,7 +53,83 @@ export function AdminWorkspace({ view, t, run, locale, onNavigateDevice, canExpo
   if (view === 'release') return <ReleaseWorkspace t={t} run={run} />;
   if (view === 'inspector') return <InspectorWorkspace t={t} run={run} />;
   if (view === 'storage') return <StorageWorkspace t={t} run={run} />;
+  if (view === 'security-alerts') return <SecurityAlertsWorkspace t={t} run={run} />;
   return null;
+}
+
+type SecurityAlert = Record<string, unknown> & { id: string; application_id?: string | null; severity?: string; code?: string; status?: string; details_json?: string; created_at?: string; resolved_at?: string | null };
+type SecurityAlertSummary = { security_alerts?: { open?: number; critical?: number } };
+function alertDetails(value: unknown): string {
+  if (typeof value !== 'string' || !value) return '—';
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return Object.entries(parsed).map(([key, item]) => `${key}=${String(item)}`).join(' · ');
+  } catch { return value; }
+}
+function alertTime(value: unknown): string {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) return '—';
+  return new Date(value).toLocaleString(globalThis.document?.documentElement.lang || 'zh-CN', { hour12: false });
+}
+function alertSeverityClass(severity: unknown): string {
+  return severity === 'critical' ? 'status-failed' : severity === 'warning' ? 'status-warning' : 'status-pending';
+}
+function SecurityAlertsWorkspace({ t, run }: { t: Translate; run: Runner }) {
+  const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
+  const [summary, setSummary] = useState<SecurityAlertSummary>();
+  const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const load = async (): Promise<void> => {
+    setLoading(true);
+    try {
+      const [rows, overview] = await Promise.all([
+        api('/open-platform/security-alerts'),
+        api<SecurityAlertSummary>('/open-platform/overview'),
+      ]);
+      setAlerts(collectionOf(rows).map((row) => ({ ...row } as SecurityAlert)));
+      setSummary(overview);
+      setError('');
+    } catch (cause) { setError(errorMessage(cause)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, []);
+  const open = summary?.security_alerts?.open;
+  const resolveOne = async (alert: SecurityAlert): Promise<void> => {
+    if (!reason.trim()) { setNotice(t('Enter a resolution reason first.')); return; }
+    setNotice('');
+    const result = await run(() => api(`/open-platform/security-alerts/${encodeURIComponent(String(alert.id))}/resolve`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }));
+    if (result !== undefined) { setNotice(t('Security alert resolved.')); await load(); }
+  };
+  const resolveAll = async (): Promise<void> => {
+    if (!reason.trim()) { setNotice(t('Enter a resolution reason first.')); return; }
+    if (!globalThis.confirm(t('Resolve all open security alerts? This cannot be undone.'))) return;
+    setNotice('');
+    const result = await run(() => api<{ resolved: number }>('/open-platform/security-alerts/resolve-all', { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }));
+    if (result !== undefined) { setNotice(t('{count} security alerts resolved.', { count: result.resolved })); await load(); }
+  };
+  return <div className="security-alerts-workspace">
+    <section className="operation-card">
+      <div className="settings-intro"><span className="settings-mark"><Icon name="shield" size={20}/></span><div><h2>{t('Bulk resolution')}</h2><p>{t('Resolve open alerts with an auditable reason. The alert history is retained.')}</p></div></div>
+      <form className="form-grid" onSubmit={(event) => event.preventDefault()}>
+        <Field id="security-alert-reason" label={t('Resolution reason')} value={reason} onChange={setReason} wide required/>
+        <div className="form-actions"><Button icon="check" disabled={!reason.trim() || !open} onClick={() => void resolveAll()}>{t('Resolve all open alerts')}</Button></div>
+      </form>
+      {notice ? <p role="status" className="inline-alert inline-alert-success">{notice}</p> : null}
+    </section>
+    <section className="content-card">
+      <header className="fleet-heading"><div><h2>{t('Security alerts')}</h2><p>{t('{count} open alerts', { count: open ?? 0 })}</p></div><Button kind="ghost" icon="refresh" disabled={loading} onClick={() => void load()}>{t('Refresh')}</Button></header>
+      {error ? <div className="inline-alert inline-alert-error" role="alert"><p>{error}</p><Button kind="secondary" onClick={() => void load()}>{t('Try again')}</Button></div> : null}
+      {loading && !alerts.length ? <div className="loading-panel" role="status"><span className="spinner"/><span>{t('Loading security alerts…')}</span></div> : alerts.length ? <div className="fleet-table-wrap"><table className="data-table security-alert-table"><thead><tr>{['Severity','Code','Application','Created','Status','Actions'].map((label) => <th key={label}>{t(label)}</th>)}</tr></thead><tbody>{alerts.map((alert) => <tr key={String(alert.id)}>
+        <td data-label={t('Severity')}><span className={`status-pill ${alertSeverityClass(alert.severity)}`}>{t(String(alert.severity ?? 'warning'))}</span></td>
+        <td data-label={t('Code')}><strong>{String(alert.code ?? '—')}</strong><small className="security-alert-details">{alertDetails(alert.details_json)}</small></td>
+        <td data-label={t('Application')}>{String(alert.application_id ?? '—')}</td>
+        <td data-label={t('Created')}>{alertTime(alert.created_at)}</td>
+        <td data-label={t('Status')}><span className={`status-pill ${alert.status === 'open' ? 'status-failed' : 'status-ready'}`}>{t(String(alert.status ?? '—'))}</span></td>
+        <td data-label={t('Actions')}>{alert.status === 'open' ? <Button kind="secondary" disabled={!reason.trim()} onClick={() => void resolveOne(alert)}>{t('Resolve')}</Button> : <span>{alert.resolved_at ? alertTime(alert.resolved_at) : '—'}</span>}</td>
+      </tr>)}</tbody></table></div> : <div className="empty-state"><h3>{t('No security alerts')}</h3><p>{t('Open platform activity has not raised any alerts.')}</p></div>}
+    </section>
+  </div>;
 }
 
 function GroupsWorkspace({ t, run }: { t: Translate; run: Runner }) {

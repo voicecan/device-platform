@@ -10,13 +10,14 @@ import { deviceListUrl, urlForView } from './navigation.js';
 import { AdminWorkspace, labels, navGroups, resourcePaths } from './workspaces.js';
 import { DeviceManagement } from './device-management.js';
 import { DeviceFleet } from './device-fleet.js';
+import { Overview } from './overview.js';
 import { AddDeviceDialog } from './add-device-dialog.js';
 import type { View } from './workspaces.js';
-import { Button, containsRevealedSecrets, DataTable, Icon, ResultPanel, SecretRevealDialog, Select, Stepper, collectionOf } from './ui.js';
+import { Button, containsRevealedSecrets, DataTable, Icon, ResultPanel, SecretRevealDialog, Select, Stepper } from './ui.js';
 import type { Translate } from './ui.js';
 
 type AuthMode = 'loading' | 'setup' | 'login' | 'ready';
-type SessionUser = { username: string; role: string; membership_role?: string | null };
+type SessionUser = { username: string; role: string; membership_role?: string | null; group_id?: string | null };
 type ConnectReturn = { phase: 'checking' | 'completed' | 'failed'; message: string; deviceId?: string };
 
 const LocaleContext = createContext<Locale>('en');
@@ -224,9 +225,15 @@ export function App() {
     finally { setCsrfToken(''); setView('overview'); updateViewLocation('overview', 'replace'); await refreshSession(); }
   };
 
-  const selectView = (nextView: View): void => {
+  const selectView = (nextView: View, options?: { recordingStatus?: string }): void => {
     if (nextView === 'devices') globalThis.history.pushState({ view: 'devices' }, '', deviceListUrl(globalThis.location.href));
     else if (nextView !== view) updateViewLocation(nextView);
+    if (nextView === 'files') {
+      const url = new URL(globalThis.location.href);
+      if (options?.recordingStatus) url.searchParams.set('recording_status', options.recordingStatus);
+      else url.searchParams.delete('recording_status');
+      globalThis.history.replaceState({ view: 'files' }, '', url);
+    }
     setDeviceId(''); setView(nextView); setError(''); setOperationResult(undefined);
     setMobileNavOpen(false);
   };
@@ -282,7 +289,7 @@ export function App() {
       <header className="app-topbar"><button type="button" className="mobile-menu" aria-label={t('Open navigation')} onClick={() => setMobileNavOpen(true)}><Icon name="menu"/></button><div className="breadcrumbs"><span>{t('Voicecan device platform')}</span><Icon name="arrow" size={14}/><strong>{t(deviceId && pageView === 'devices' ? 'Device details' : labels[pageView])}</strong></div><div className="topbar-actions"><label className="language-control"><Icon name="globe" size={16}/><span className="sr-only">{t('Language')}</span><Select compact ariaLabel={t('Language')} value={locale} options={[{ value: 'zh-CN', label: '中文' }, { value: 'en', label: 'English' }]} onChange={(next) => setLocale(next as Locale)}/></label><div className="user-chip"><span>{user?.username.slice(0, 1).toUpperCase()}</span><div><strong>{user?.username}</strong><small>{t(user?.role.replaceAll('_', ' ') ?? '')}</small></div></div></div></header>
       <main className="page"><header className="page-header"><div>{deviceId && pageView === 'devices' ? <Button className="fleet-back" kind="ghost" onClick={() => selectView('devices')}>{t('Back to device list')}</Button> : <p className="eyebrow">{t(pageEyebrow(pageView))}</p>}<h1>{t(deviceId && pageView === 'devices' ? 'Device details' : labels[pageView])}</h1>{deviceId && pageView === 'devices' ? null : <p>{t(pageDescription(pageView))}</p>}</div><PageActions view={pageView} deviceId={deviceId} canRelease={user?.role === 'system_admin'} t={t} onNavigate={selectView} onRefresh={() => void loadResource(view, resourceCursors[resourcePage] ?? '')} onRelease={releaseDevice}/></header>
         {view === 'files' ? <RecordingLibrary t={t}/> : null}
-        {view === 'overview' ? <Overview t={t} health={health} onNavigate={selectView}/> : null}
+        {view === 'overview' ? <Overview t={t} health={health} onNavigate={selectView} onSelectDevice={selectDevice} isSystemAdmin={user?.role === 'system_admin'} isGroupAdmin={user?.membership_role === 'group_admin'} hasGroup={Boolean(user?.group_id)}/> : null}
         {pageView === 'devices' ? <><DeviceFleet t={t} onSelect={selectDevice} active={!deviceId}/>{deviceId ? <DeviceManagement key={deviceId} devices={undefined} t={t} canEdit={user?.role === 'system_admin' || user?.membership_role === 'group_admin'} canRelease={user?.role === 'system_admin'} onDevicesRefresh={() => {}}/> : null}</> : null}
         {resourcePaths[view] ? <section className="content-card resource-card">{loading && resourceData === undefined ? <ResourceSkeleton/> : error && resourceData === undefined ? <ResultPanel result={undefined} error={error} loading={false} t={t}/> : <><DataTable data={resourceData} t={t} pageSize={cursorPaginated ? 100 : 12}/>{cursorPaginated && resourceData !== undefined ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={resourcePage === 0 || loading} onClick={goToPreviousResourcePage}>{t('Previous')}</Button><span>{t('Page {page}', { page: resourcePage + 1 })}</span><Button kind="ghost" disabled={!nextResourceCursor || loading} onClick={goToNextResourcePage}>{t('Next')}</Button></nav> : null}</>}</section> : null}
         {!resourcePaths[view] && !['overview', 'devices', 'provision', 'files'].includes(view) ? <AdminWorkspace headerActions={bindingHeaderActions} key={view} view={view} t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'}/> : null}
@@ -354,49 +361,6 @@ function AuthExperience({ mode, notice, health, locale, setLocale, onSetup, onLo
       <div className="auth-notice" role="status"><span className={`health-dot health-${health}`}/>{notice}</div>
     </div></section>
   </main>;
-}
-
-function Overview({ t, health, onNavigate }: { t: Translate; health: string; onNavigate: (view: View) => void }) {
-  const [data, setData] = useState<Record<string, unknown>>({});
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let active = true;
-    void Promise.allSettled([api('/admin/devices?limit=1'), api('/files?limit=20'), api('/events?limit=5'), api('/open-platform/applications')]).then((results) => {
-      if (!active) return;
-      const value = (index: number): unknown => results[index]?.status === 'fulfilled' ? results[index].value : [];
-      setData({ devices: value(0), files: value(1), events: value(2), applications: value(3) });
-      setLoading(false);
-    });
-    return () => { active = false; };
-  }, []);
-  const count = (key: string): number => {
-    const resource = data[key];
-    if (resource && typeof resource === 'object' && !Array.isArray(resource)) {
-      const total = Number((resource as Record<string, unknown>).total_count);
-      if (Number.isSafeInteger(total) && total >= 0) return total;
-    }
-    return collectionOf(resource).length;
-  };
-  const metrics = [
-    { label: 'Devices', value: count('devices'), icon: 'device' as const, target: 'devices' as const },
-    { label: 'Recording files', value: count('files'), icon: 'file' as const, target: 'files' as const },
-    { label: 'Events', value: count('events'), icon: 'pulse' as const, target: 'events' as const },
-    { label: 'Applications', value: count('applications'), icon: 'code' as const, target: 'open-platform' as const },
-  ];
-  return <div className="platform-home">
-    <section className="home-intro"><div><p className="eyebrow">{t('Start here')}</p><h2>{t('From your device to your AI tool')}</h2><p>{t('Connect once. Record whenever you need. Your recordings synchronize here, ready for your own AI tool.')}</p></div><span className={`status-pill status-${health}`}>{t('Server {status}',{status:t(health)})}</span></section>
-    <section className="home-journey" aria-label={t('Getting started')}>
-      <article><span className="journey-number">1</span><h3>{t('Add your device')}</h3><p>{t('Connect Bluetooth, then Wi-Fi. Backup and server setup happen automatically.')}</p><Button onClick={()=>onNavigate('provision')}>{t('Add device')}</Button></article>
-      <article><span className="journey-number">2</span><h3>{t('Find your recordings')}</h3><p>{t('Record on the device. Check synchronization here before handing audio to your AI tool.')}</p><Button kind="secondary" onClick={()=>onNavigate('files')}>{t('View recordings')}</Button></article>
-      <article><span className="journey-number">3</span><h3>{t('Connect AI tools')}</h3><p>{t('Choose OpenClaw or Codex, authorize access and check the connection.')}</p><Button kind="secondary" onClick={()=>onNavigate('open-platform')}>{t('Choose an AI tool')}</Button></article>
-    </section>
-    <section className="home-inventory"><h3>{t('Your platform')}</h3><div>{metrics.filter(m=>m.target!=='events').map(m=><button type="button" key={m.label} onClick={()=>onNavigate(m.target)}><span>{t(m.label)}</span><strong>{loading?'—':m.value}</strong><Icon name="arrow"/></button>)}</div><p>{t('An authorized connection is not the same as a connected client. Verify it in your AI tool.')}</p></section>
-  </div>;
-
-}
-
-function QuickAction({ icon, title, description, onClick }: { icon: Parameters<typeof Icon>[0]['name']; title: string; description: string; onClick: () => void }) {
-  return <button type="button" className="quick-action" onClick={onClick}><span><Icon name={icon}/></span><div><strong>{title}</strong><p>{description}</p></div><Icon name="arrow"/></button>;
 }
 
 function ResourceSkeleton() {
