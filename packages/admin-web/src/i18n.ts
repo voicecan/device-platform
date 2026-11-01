@@ -1327,6 +1327,8 @@ const zhCN: Readonly<Record<string, string>> = {
   'Ask a System Administrator to add this account to a device group.': '请联系系统管理员将此账号加入设备组。',
   'Ask a System Administrator to open Users and assign this account to a group.': '请让系统管理员在「用户」中把此账号加入一个设备组。',
   'No device group assigned': '未分配设备组',
+  'Group Administrator access is required.': '需要设备组管理员权限。',
+  'System Administrator access is required.': '需要系统管理员权限。',
   'This account can sign in, but it has no devices or recordings to show until a System Administrator adds it to a group.': '此账号可以登录，但在系统管理员将其加入设备组之前，没有可显示的设备或录音。',
   'This group has no devices yet': '此设备组还没有设备',
   'Your group devices and recordings are ready.': '你所在设备组的设备和录音均正常。',

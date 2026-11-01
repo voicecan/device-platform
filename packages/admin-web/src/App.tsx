@@ -272,14 +272,26 @@ export function App() {
     void loadResource(view, nextResourceCursor);
   };
 
+  const isSystemAdmin = user?.role === 'system_admin';
+  const isGroupAdmin = user?.membership_role === 'group_admin';
+  const canManageGroup = isSystemAdmin || isGroupAdmin;
+  const visibleNavGroups = navGroups
+    .map((group) => ({ ...group, items: group.items.filter((item) => {
+      if (item === 'users') return isSystemAdmin;
+      if (item === 'groups') return canManageGroup;
+      if (item === 'storage') return isSystemAdmin;
+      return true;
+    }) }))
+    .filter((group) => group.items.length > 0);
+
   return <LocaleContext.Provider value={locale}>{mode === 'ready' ? <div className="app-shell admin-linear">
     <aside className={`sidebar ${mobileNavOpen ? 'sidebar-open' : ''}`}>
       <div className="brand"><span className="brand-mark">V<span>○</span></span><div><strong>Voicecan</strong><small>{t('Device platform')}</small></div><button type="button" className="sidebar-close" aria-label={t('Close navigation')} onClick={() => setMobileNavOpen(false)}><Icon name="close"/></button></div>
       <nav className="side-nav" aria-label={t('Main navigation')}>
-        <section>{navGroups[0]?.items.map((item) => <button type="button" key={item} className={pageView === item ? 'active' : undefined} aria-current={pageView === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{pageView === item ? <i/> : null}</button>)}</section>
-        <details className="admin-navigation" open={navGroups.slice(1).some((group) => group.items.includes(view)) ? true : undefined}>
+        <section>{visibleNavGroups[0]?.items.map((item) => <button type="button" key={item} className={pageView === item ? 'active' : undefined} aria-current={pageView === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{pageView === item ? <i/> : null}</button>)}</section>
+        <details className="admin-navigation" open={visibleNavGroups.slice(1).some((group) => group.items.includes(view)) ? true : undefined}>
           <summary><Icon name="storage"/><span>{t('Management and advanced settings')}</span><Icon name="arrow" size={14}/></summary>
-          {navGroups.slice(1).map((group) => <section key={group.label}><p>{t(group.label)}</p>{group.items.filter((item) => !['storage'].includes(item) || user?.role === 'system_admin').map((item) => <button type="button" key={item} className={pageView === item ? 'active' : undefined} aria-current={pageView === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{pageView === item ? <i/> : null}</button>)}</section>)}
+          {visibleNavGroups.slice(1).map((group) => <section key={group.label}><p>{t(group.label)}</p>{group.items.map((item) => <button type="button" key={item} className={pageView === item ? 'active' : undefined} aria-current={pageView === item ? 'page' : undefined} onClick={() => selectView(item)}><Icon name={navIcon(item)}/><span>{t(labels[item])}</span>{pageView === item ? <i/> : null}</button>)}</section>)}
         </details>
       </nav>
       <div className="sidebar-footer"><div className="server-mini"><span className={`health-dot health-${health}`}/><div><strong>{t('Device Server')}</strong><small>{t(health)}</small></div></div><button type="button" onClick={() => void logout()}><Icon name="logout"/><span>{t('Sign out')}</span></button></div>
@@ -292,14 +304,14 @@ export function App() {
         {view === 'overview' ? <Overview t={t} health={health} onNavigate={selectView} onSelectDevice={selectDevice} isSystemAdmin={user?.role === 'system_admin'} isGroupAdmin={user?.membership_role === 'group_admin'} hasGroup={Boolean(user?.group_id)}/> : null}
         {pageView === 'devices' ? <><DeviceFleet t={t} onSelect={selectDevice} active={!deviceId}/>{deviceId ? <DeviceManagement key={deviceId} devices={undefined} t={t} canEdit={user?.role === 'system_admin' || user?.membership_role === 'group_admin'} canRelease={user?.role === 'system_admin'} onDevicesRefresh={() => {}}/> : null}</> : null}
         {resourcePaths[view] ? <section className="content-card resource-card">{loading && resourceData === undefined ? <ResourceSkeleton/> : error && resourceData === undefined ? <ResultPanel result={undefined} error={error} loading={false} t={t}/> : <><DataTable data={resourceData} t={t} pageSize={cursorPaginated ? 100 : 12}/>{cursorPaginated && resourceData !== undefined ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={resourcePage === 0 || loading} onClick={goToPreviousResourcePage}>{t('Previous')}</Button><span>{t('Page {page}', { page: resourcePage + 1 })}</span><Button kind="ghost" disabled={!nextResourceCursor || loading} onClick={goToNextResourcePage}>{t('Next')}</Button></nav> : null}</>}</section> : null}
-        {!resourcePaths[view] && !['overview', 'devices', 'provision', 'files'].includes(view) ? <AdminWorkspace headerActions={bindingHeaderActions} key={view} view={view} t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'}/> : null}
+        {!resourcePaths[view] && !['overview', 'devices', 'provision', 'files'].includes(view) ? <AdminWorkspace headerActions={bindingHeaderActions} key={view} view={view} t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'} isSystemAdmin={isSystemAdmin} isGroupAdmin={isGroupAdmin}/> : null}
 
         {view !== 'overview' && !['provision', 'release'].includes(view) && (!resourcePaths[view] || operationResult !== undefined) ? <ResultPanel result={operationResult} error={error} loading={loading} t={t}/> : null}
         {view === 'release' && (loading || error) ? <ResultPanel result={undefined} error={error} loading={loading} t={t}/> : null}
       </main>
     </div>
     {view === 'provision' ? <AddDeviceDialog t={t} busy={loading} onClose={() => selectView('devices')} headerRef={setBindingHeaderActions}>
-      <AdminWorkspace headerActions={bindingHeaderActions} view="provision" t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'}/>
+      <AdminWorkspace headerActions={bindingHeaderActions} view="provision" t={t} run={run} locale={locale} onNavigateDevice={selectDevice} canExportBackup={user?.role === 'system_admin'} isSystemAdmin={isSystemAdmin} isGroupAdmin={isGroupAdmin}/>
       {view === 'provision' && connectReturn ? <section className={`connect-return connect-return-${connectReturn.phase}`} role="status"><span>{connectReturn.phase === 'checking' ? <span className="spinner"/> : connectReturn.phase === 'completed' ? '✓' : '!'}</span><div><strong>{t(connectReturn.phase === 'checking' ? 'Checking connection result' : connectReturn.phase === 'completed' ? 'Device connected' : 'Connection needs attention')}</strong><p>{connectReturn.message}</p>{connectReturn.deviceId ? <code>{connectReturn.deviceId}</code> : null}</div></section> : null}
       {connectReturn?.phase === 'completed' && connectReturn.deviceId ? <Button onClick={() => selectDevice(connectReturn.deviceId!)}>{t('Open device details')}</Button> : null}
       {loading || error ? <ResultPanel result={undefined} error={error} loading={loading} t={t}/> : null}
