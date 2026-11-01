@@ -230,6 +230,7 @@ function mapDevice(row: Row): Device {
     firmware_version: row.firmware_version === null ? null : String(row.firmware_version),
     group_id: String(row.group_id), ownership_epoch: Number(row.ownership_epoch),
     online: Boolean(row.online), last_seen_at: row.last_seen_at === null ? null : String(row.last_seen_at),
+    attention_muted_at: row.attention_muted_at === null || row.attention_muted_at === undefined ? null : String(row.attention_muted_at),
     created_at: String(row.created_at), updated_at: String(row.updated_at),
   };
 }
@@ -1274,12 +1275,14 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const groupId = query.group_id === undefined ? '' : String(query.group_id);
     if (search.length > 128 || groupId.length > 80) throw new HttpError(400, 'INVALID_FILTER', 'Device filter is too long');
     if (query.online !== undefined && query.online !== 'true' && query.online !== 'false') throw new HttpError(400, 'INVALID_FILTER', 'online must be true or false');
+    if (query.attention !== undefined && query.attention !== 'active') throw new HttpError(400, 'INVALID_FILTER', 'attention must be active');
     let where = `d.deleted_at IS NULL AND d.claim_status='active' AND ${guard.clause}`;
     const params: unknown[] = [...guard.params];
     if (search) { const pattern = `%${search.toLowerCase().replace(/[!%_]/g, '!$&')}%`; where += " AND (LOWER(COALESCE(d.display_name,'')) LIKE ? ESCAPE '!' OR LOWER(d.sn) LIKE ? ESCAPE '!')"; params.push(pattern, pattern); }
     if (groupId) { where += ' AND d.group_id=?'; params.push(groupId); }
     if (query.online !== undefined) { where += ' AND d.online=?'; params.push(query.online === 'true' ? 1 : 0); }
-    const scope = `admin-devices:${context.actorId}:${createHash('sha256').update(JSON.stringify({ guard, search, groupId, online: query.online ?? null })).digest('hex')}`;
+    if (query.attention === 'active') where += ' AND d.attention_muted_at IS NULL';
+    const scope = `admin-devices:${context.actorId}:${createHash('sha256').update(JSON.stringify({ guard, search, groupId, online: query.online ?? null, attention: query.attention ?? null })).digest('hex')}`;
     const cursor = cursorDecode(query.cursor, scope);
     const summary = await db.get<{ total: number; online: number }>(`SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN d.online=1 THEN 1 ELSE 0 END),0) AS online FROM devices d WHERE ${where}`, params);
     const pageParams = [...params]; let pageWhere = where;
@@ -1434,6 +1437,20 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     await audit(request, context, 'device.updated', 'device', deviceId, String(device.group_id), optionalString(body, 'reason', 256) ?? 'Updated device display name');
     return success(reply, mapDevice((await db.get<Row>('SELECT * FROM devices WHERE id=?', [deviceId]))!));
   });
+  app.post('/api/v1/devices/:id/attention', async (request, reply) => {
+    const context = await resolveAccess(request, true);
+    if (context.actorType !== 'user') throw new AccessDeniedError();
+    const deviceId = String((request.params as Row).id);
+    const device = await requireDevice(context, deviceId);
+    requireGroupAdmin(context, String(device.group_id));
+    const body = bodyOf(request);
+    if (typeof body.muted !== 'boolean') throw new HttpError(400, 'INVALID_ATTENTION_STATE', 'muted must be boolean');
+    const timestamp = now();
+    await db.run('UPDATE devices SET attention_muted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL', [body.muted ? timestamp : null, timestamp, deviceId]);
+    const reason = optionalString(body, 'reason', 256) ?? (body.muted ? 'Attention muted by administrator' : 'Attention unmuted by administrator');
+    await audit(request, context, body.muted ? 'device.attention_muted' : 'device.attention_unmuted', 'device', deviceId, String(device.group_id), reason);
+    return success(reply, mapDevice((await db.get<Row>('SELECT * FROM devices WHERE id=?', [deviceId]))!));
+  });
   app.post('/api/v1/devices/:id/transfer-out-sessions', async (request, reply) => {
     const context = await resolveAccess(request, true); requireSystemAdmin(context); const body = bodyOf(request); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId);
     const transferCheckAt = now(); const active = await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM recording_files f WHERE f.device_id=? AND (f.status='syncing' OR EXISTS(SELECT 1 FROM upload_tickets u WHERE u.file_id=f.id AND u.consumed_at IS NULL AND u.failed_at IS NULL AND u.expires_at>?) OR EXISTS(SELECT 1 FROM s3_upload_attempts s WHERE s.file_id=f.id AND s.completed_at IS NULL AND s.failed_at IS NULL AND s.expires_at>?))", [deviceId, transferCheckAt, transferCheckAt]);
@@ -1584,12 +1601,13 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const context = await resolveAccess(request); requireScope(context, 'files:read'); const guard = sqlGroupGuard(context); const query = request.query as Row; const baseScope = context.isSystemAdmin ? 'admin' : requireGroup(context); const params: unknown[] = [...guard.params]; let where = guard.clause;
     const deletionStatus = query.deletion_status === undefined ? 'active' : String(query.deletion_status); if (!['active','requested','failed','object_deleted'].includes(deletionStatus)) throw new HttpError(400, 'INVALID_DELETION_STATUS', 'Unsupported deletion status'); if (deletionStatus !== 'active' && !context.isSystemAdmin) throw new AccessDeniedError(); where += ' AND f.deletion_status=?'; params.push(deletionStatus);
     if (query.status) { const status = String(query.status); if (!['pending','syncing','synced','blocked','failed','identity_conflict','canceled'].includes(status)) throw new HttpError(400, 'INVALID_FILE_STATUS', 'Unsupported file status'); where += ' AND f.status=?'; params.push(status); }
+    if (query.attention !== undefined) { if (query.attention !== 'active') throw new HttpError(400, 'INVALID_FILTER', 'attention must be active'); where += ' AND d.attention_muted_at IS NULL'; }
     if (query.device_id) { where += ' AND f.device_id=?'; params.push(String(query.device_id)); }
     if (query.attribute !== undefined) { const attribute = Number(query.attribute); if (!Number.isSafeInteger(attribute) || attribute < 0 || attribute > 2) throw new HttpError(400, 'INVALID_FILE_ATTRIBUTE', 'Unsupported file attribute'); where += ' AND f.attribute=?'; params.push(attribute); }
     if (query.from) { where += ' AND f.created_at>=?'; params.push(String(query.from)); }
     if (query.to) { where += ' AND f.created_at<=?'; params.push(String(query.to)); }
     if (query.search) { const search = String(query.search).trim(); if (search.length > 128) throw new HttpError(400, 'INVALID_SEARCH', 'Search is too long'); where += " AND (d.sn LIKE ? ESCAPE '\\' OR CAST(f.session_id AS TEXT)=?)"; params.push(`%${search.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`, search); }
-    const scope = `${baseScope}:${createHash('sha256').update(JSON.stringify({ status: query.status ?? null, deletion_status: deletionStatus, device_id: query.device_id ?? null, attribute: query.attribute ?? null, from: query.from ?? null, to: query.to ?? null, search: query.search ?? null })).digest('hex')}`; const cursor = cursorDecode(query.cursor, scope); const total = await db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM recording_files f JOIN devices d ON d.id=f.device_id WHERE ${where}`, params); const pageParams = [...params]; let pageWhere = where;
+    const scope = `${baseScope}:${createHash('sha256').update(JSON.stringify({ status: query.status ?? null, deletion_status: deletionStatus, attention: query.attention ?? null, device_id: query.device_id ?? null, attribute: query.attribute ?? null, from: query.from ?? null, to: query.to ?? null, search: query.search ?? null })).digest('hex')}`; const cursor = cursorDecode(query.cursor, scope); const total = await db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM recording_files f JOIN devices d ON d.id=f.device_id WHERE ${where}`, params); const pageParams = [...params]; let pageWhere = where;
     if (cursor) { pageWhere += ' AND (f.created_at<? OR (f.created_at=? AND f.id<?))'; pageParams.push(cursor.createdAt, cursor.createdAt, cursor.itemId); }
     const limit = query.limit === undefined ? 50 : Number(query.limit); if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, 'INVALID_LIMIT', 'limit must be between 1 and 100'); const rows = await db.all<Row>(`SELECT f.* FROM recording_files f JOIN devices d ON d.id=f.device_id WHERE ${pageWhere} ORDER BY f.created_at DESC,f.id DESC LIMIT ?`, [...pageParams, limit + 1]); const items = rows.slice(0, limit); const last = items.at(-1); return success(reply, { items: items.map(mapFile), count: items.length, total_count: Number(total?.count ?? 0), next_cursor: rows.length > limit && last ? cursorEncode(String(last.created_at), String(last.id), scope) : null });
   });

@@ -49,6 +49,7 @@ test('migration upgrades the v1 delivery ledger and remains idempotent', async (
     assert.ok(deviceColumns.some((column) => column.name === 'display_name'));
     assert.ok(deviceColumns.some((column) => column.name === 'capability_version'));
     assert.ok(deviceColumns.some((column) => column.name === 'capability_changed_at'));
+    assert.ok(deviceColumns.some((column) => column.name === 'attention_muted_at'));
     const commandColumns = current.prepare('PRAGMA table_info(commands)').all() as Array<{ name: string }>;
     assert.ok(commandColumns.some((column) => column.name === 'result_code'));
     assert.ok(commandColumns.some((column) => column.name === 'dispatched_at'));

@@ -97,6 +97,7 @@ components:
         ownership_epoch: { type: integer, minimum: 1 }
         online: { type: boolean }
         last_seen_at: { type: [string, 'null'], format: date-time }
+        attention_muted_at: { type: [string, 'null'], format: date-time }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     RecordingFile:
@@ -668,6 +669,7 @@ paths:
         - { name: cursor, in: query, schema: { type: string }, description: Opaque cursor bound to actor, permissions and filters }
         - { name: search, in: query, schema: { type: string, maxLength: 128 }, description: Literal case-insensitive name or serial substring }
         - { name: online, in: query, schema: { type: string, enum: ['true', 'false'] } }
+        - { name: attention, in: query, schema: { type: string, enum: [active] }, description: Exclude devices whose offline and failed-sync attention is muted }
         - { name: group_id, in: query, schema: { type: string, maxLength: 80 } }
       responses:
         '200':
@@ -718,6 +720,23 @@ paths:
         required: true
         content: { application/json: { schema: { type: object, properties: { display_name: { type: [string, 'null'], maxLength: 80 }, reason: { type: string, maxLength: 256 } } } } }
       responses: { '200': { description: Updated device }, '403': { description: Group administrator required }, '404': { description: Missing or unauthorized } }
+  /devices/{id}/attention:
+    post:
+      summary: Mute or unmute this device's offline and failed-sync attention in the operator overview
+      security: [{ sessionCookie: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [muted]
+              properties:
+                muted: { type: boolean }
+                reason: { type: string, maxLength: 256 }
+      responses: { '200': { description: Updated device attention state }, '403': { description: Group administrator required }, '404': { description: Missing or unauthorized } }
   /devices/{id}/capabilities:
     get:
       summary: Read the stable reviewed public Capability Manifest
@@ -900,6 +919,7 @@ paths:
       security: [{ sessionCookie: [] }, { groupToken: [] }]
       parameters:
         - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: attention, description: Exclude recordings belonging to devices with muted operator attention, schema: { type: string, enum: [active] } }
         - { in: query, name: deletion_status, description: Non-active values require System Admin, schema: { type: string, enum: [active, requested, failed, object_deleted] } }
         - { in: query, name: device_id, schema: { type: string } }
         - { in: query, name: attribute, schema: { type: integer, minimum: 0, maximum: 2 } }
@@ -1214,6 +1234,23 @@ paths:
     delete: { summary: Administratively revoke a temporary grant, security: [{ sessionCookie: [] }], responses: { '200': { description: Revoked } } }
   /open-platform/security-alerts:
     get: { summary: List open-platform security alerts, security: [{ sessionCookie: [] }], responses: { '200': { description: Alerts } } }
+  /open-platform/security-alerts/resolve-all:
+    post:
+      summary: Resolve all open security alerts in the caller's scope with an auditable reason
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 256 }
+                code: { type: string, maxLength: 64 }
+                application_id: { type: string, maxLength: 80 }
+      responses: { '200': { description: Number of resolved alerts }, '403': { description: Group administrator required } }
   /open-platform/security-alerts/{id}/resolve:
     post: { summary: Resolve a reviewed security alert with a reason, security: [{ sessionCookie: [] }], responses: { '200': { description: Resolved } } }
 

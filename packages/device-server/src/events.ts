@@ -216,7 +216,16 @@ export class EventDispatcher {
         statusCode ? Number(statusCode) : null, errorMessage, row.id, this.#instanceId, row.endpoint_id,
       ]);
       if (attempts >= 12 && updated.changes === 1 && row.application_id) {
-        await this.db.run('INSERT INTO open_platform_security_alerts(id,application_id,severity,code,details_json,created_at) VALUES(?,?,?,?,?,?)', [`alert_${randomUUID()}`, row.application_id, 'warning', 'WEBHOOK_DELIVERY_DEAD', JSON.stringify({ endpoint_id: row.endpoint_id, delivery_id: row.id, event_id: row.event_id, attempts }), new Date().toISOString()]);
+        const details = JSON.stringify({ endpoint_id: row.endpoint_id, delivery_id: row.id, event_id: row.event_id, attempts });
+        await this.db.run(
+          `INSERT INTO open_platform_security_alerts(id,application_id,severity,code,details_json,created_at)
+           SELECT ?,?,?,?,?,?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM open_platform_security_alerts
+             WHERE application_id=? AND code='WEBHOOK_DELIVERY_DEAD' AND status='open' AND instr(details_json,?)>0
+           )`,
+          [`alert_${randomUUID()}`, row.application_id, 'warning', 'WEBHOOK_DELIVERY_DEAD', details, new Date().toISOString(), row.application_id, `"endpoint_id":"${row.endpoint_id}"`],
+        );
       }
     }
   }

@@ -133,6 +133,7 @@ export type Device = {
   ownership_epoch: number;
   online: boolean;
   last_seen_at: string | null;
+  attention_muted_at?: string | null;
   created_at: string;
   updated_at: string;
 };
