@@ -1382,7 +1382,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     return success(reply, { ...mapPublicCommand(command!), transport: dispatched ? 'ws' : 'unavailable', firmware }, 202);
   });
   app.post('/api/v1/devices/:id/ble-maintenance-session', async (request, reply) => {
-    const context = await resolveAccess(request, true); requireSystemAdmin(context); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId);
+    const context = await resolveAccess(request, true); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId); requireGroupAdmin(context, String(device.group_id));
     const credential = await db.get<Row>('SELECT id,token_ciphertext,key_version FROM device_credentials WHERE device_id=? AND credential_epoch=? AND status=\'active\' AND revoked_at IS NULL', [deviceId, device.credential_epoch]);
     if (!credential) throw new HttpError(409, 'DEVICE_CREDENTIAL_UNAVAILABLE', 'The active device credential cannot be used for BLE maintenance.');
     const key = config.masterKeys.get(Number(credential.key_version)); if (!key) throw new HttpError(503, 'DEVICE_CREDENTIAL_KEY_UNAVAILABLE', 'The credential encryption key is not available.');
@@ -1394,7 +1394,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     } finally { plaintext.fill(0); }
   });
   app.post('/api/v1/devices/:id/ble-status', async (request, reply) => {
-    const context = await resolveAccess(request, true); requireSystemAdmin(context); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId); const body = bodyOf(request);
+    const context = await resolveAccess(request, true); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId); requireGroupAdmin(context, String(device.group_id)); const body = bodyOf(request);
     if (requiredString(body, 'serial_number', 128) !== String(device.sn)) throw new HttpError(409, 'BLE_DEVICE_MISMATCH', 'The selected Bluetooth device does not match this server device.');
     const value = body.status; if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'INVALID_DEVICE_STATUS', 'status must be a device status object');
     const info = body.info && typeof body.info === 'object' && !Array.isArray(body.info) ? body.info as Row : undefined;
@@ -1419,7 +1419,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const context = await resolveAccess(request, true); if (context.actorType !== 'user') throw new AccessDeniedError(); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId); requireGroupAdmin(context, String(device.group_id)); const body = bodyOf(request); const reason = requiredString(body, 'reason', 256);
     if (!device.online) throw new HttpError(409, 'DEVICE_CONNECTION_REQUIRED', 'Connect the device through WebSocket or use a local BLE maintenance connection before sending controls.');
     const parsed = parseDeviceControl(body.control); if (!parsed) throw new HttpError(400, 'INVALID_DEVICE_CONTROL', 'control is not a supported semantic device operation'); const control = parsed as DeviceControl;
-    if (control.kind === 'power' || control.kind === 'factory_reset') requireSystemAdmin(context);
+    if (control.kind === 'factory_reset' || (control.kind === 'power' && control.action === 'shipmode')) requireSystemAdmin(context);
     const idempotencyKey = String(request.headers['idempotency-key'] ?? ''); if (!idempotencyKey || idempotencyKey.length > 200) throw new HttpError(400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key is required');
     const commandId = id('cmd'); const kind = `device.${control.kind}`; const callerScope = `user:${context.actorId}:device-control`; const requestHash = createHash('sha256').update(JSON.stringify({ deviceId, control })).digest('hex'); const timestamp = now();
     try { await db.run('INSERT INTO commands(id,device_id,kind,status,idempotency_key,caller_scope,request_hash,payload_json,deadline_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [commandId, deviceId, kind, 'queued', idempotencyKey, callerScope, requestHash, JSON.stringify(control), plus(2 * 60_000), timestamp, timestamp]); }

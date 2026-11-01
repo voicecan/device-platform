@@ -757,19 +757,19 @@ paths:
       responses: { '202': { description: Refresh accepted }, '409': { description: Device is offline or busy } }
   /devices/{id}/ble-maintenance-session:
     post:
-      summary: System Admin obtains a memory-only credential handoff for nearby BLE maintenance
+      summary: Group Admin obtains a memory-only credential handoff for nearby BLE maintenance
       security: [{ sessionCookie: [] }]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
-      responses: { '200': { description: Short-lived browser memory handoff }, '403': { description: System Admin required } }
+      responses: { '200': { description: Short-lived browser memory handoff }, '403': { description: Group Admin required } }
   /devices/{id}/ble-status:
     post:
-      summary: System Admin reports authenticated BLE device information and a complete status snapshot
+      summary: Group Admin reports authenticated BLE device information and a complete status snapshot
       security: [{ sessionCookie: [] }]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
       responses: { '200': { description: BLE snapshot stored }, '409': { description: Bluetooth serial does not match } }
   /devices/{id}/control:
     post:
-      summary: Dispatch a reviewed semantic device control over an active WebSocket connection
+      summary: Dispatch a reviewed semantic device control over an active WebSocket connection; factory reset and ship mode remain System Admin only
       security: [{ sessionCookie: [] }]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
       responses: { '202': { description: Control dispatched }, '400': { description: Unsupported semantic control }, '409': { description: Device is offline or its WebSocket disconnected before dispatch } }
