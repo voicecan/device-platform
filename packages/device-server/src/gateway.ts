@@ -280,7 +280,8 @@ class DeviceActor {
   }
 
   requestStatus(): boolean {
-    if (this.#closed || !this.#confirmed || this.#activeStatusQuery || this.#statusQueue.length > 0 || this.#activeTransfer || this.#transferQueue.length > 0 || this.#inventory || this.#pendingInventories.length > 0 || this.#activeControl || this.#activeOta || this.#controlQueue.length > 0) return false;
+    if (this.#closed || !this.#confirmed || this.#activeControl || this.#activeOta || this.#controlQueue.length > 0) return false;
+    if (this.#activeStatusQuery || this.#statusQueue.length > 0) return true;
     this.#statusQueue = [
       ...(this.#deviceInfoCached ? [] : [{ eventKind: 'device_info' as const, request: this.core.requestDeviceInfo() }]),
       { eventKind: 'device_status', request: this.core.requestDeviceStatus() },
@@ -368,7 +369,7 @@ class DeviceActor {
   }
 
   #startNextStatusQuery(): void {
-    if (this.#closed || !this.#confirmed || this.#activeStatusQuery || this.#inventory || this.#pendingInventories.length > 0 || this.#activeTransfer || this.#transferQueue.length > 0 || this.#activeControl || this.#controlQueue.length > 0 || this.#activeOta) return;
+    if (this.#closed || !this.#confirmed || this.#activeStatusQuery || this.#inventory || this.#pendingInventories.length > 0 || this.#activeTransfer || this.#activeControl || this.#controlQueue.length > 0 || this.#activeOta) return;
     const next = this.#statusQueue.shift(); if (!next) return;
     this.#activeStatusQuery = next.eventKind;
     this.#activeStatusRequest = next.request;
@@ -382,8 +383,9 @@ class DeviceActor {
     if (eventKind !== this.#activeStatusQuery) return;
     if (this.#statusQueryTimer) clearTimeout(this.#statusQueryTimer);
     this.#statusQueryTimer = null; this.#activeStatusQuery = null; this.#activeStatusRequest = null;
-    if (this.#pendingInventories.length > 0 || this.#transferQueue.length > 0 || this.#controlQueue.length > 0) this.#statusQueue = [];
-    this.#startNextInventory(); await this.#startNextControl(); await this.#startNextTransfer(); this.#startNextStatusQuery();
+    this.#startNextStatusQuery();
+    if (this.#activeStatusQuery) return;
+    this.#startNextInventory(); await this.#startNextControl(); await this.#startNextTransfer();
   }
 
   async #expireStatusQuery(eventKind: StatusEventKind): Promise<void> {
@@ -487,11 +489,15 @@ class DeviceActor {
         const fullScan = firstClaim || !current.initial_scan_completed_at || lastSessionId === 0;
         this.requestInventory(null, fullScan ? 0 : lastSessionId + 1);
       }
-      // Status is deliberately low priority. The device can take tens of
-      // seconds to answer a status query, and polling it aggressively competes
-      // with heartbeat ACK processing. Keep the refresh infrequent and let the
-      // timeout cover a slow device response; the admin can still request a
-      // manual refresh.
+      // A fresh/released device has no cached model, hardware, battery or
+      // storage. Queue one status snapshot before the first file transfer so the
+      // device page is usable while a large backlog is still syncing.
+      if (firstClaim && !this.#deviceInfoCached) this.requestStatus();
+      // Status is deliberately low priority after the initial snapshot. The
+      // device can take tens of seconds to answer a status query, and polling it
+      // aggressively competes with heartbeat ACK processing. Keep the refresh
+      // infrequent and let the timeout cover a slow device response; the admin
+      // can still request a manual refresh.
       this.#statusTimer = setInterval(() => { this.requestStatus(); }, statusRefreshIntervalDefaultMs);
       this.#statusTimer.unref();
       return;
@@ -733,6 +739,7 @@ class DeviceActor {
       } finally {
         this.#scanFinalizing = false;
       }
+      this.#startNextStatusQuery();
       await this.#startNextTransfer();
     }
     // An inventory also ends through this finalizer (last page, or the empty
@@ -1014,6 +1021,7 @@ class DeviceActor {
       link_hint: linkHint,
       queue_depth: this.#transferQueue.length,
     }, 'info');
+    this.#startNextStatusQuery();
     this.#startNextInventory();
     await this.#startNextControl();
     await this.#startNextTransfer();

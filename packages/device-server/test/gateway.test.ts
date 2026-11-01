@@ -488,6 +488,35 @@ test('gateway gives file discovery priority and serializes status queries', asyn
   socket.close();
 });
 
+test('gateway queues a first status snapshot for a newly claimed device', async () => {
+  const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
+    [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.6.22' } }],
+    [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 0, batchOffset: 0, files: [] } }],
+    [12, { event: { kind: 'device_info', model: 'CAPSO', serialNumber: 'SN-1', hardwareVersion: 'B100', firmwareVersion: 'v0.6.22' } }],
+  ]);
+  const database = {
+    get: async (sql: string) => sql.startsWith('UPDATE devices SET online=0,connection_epoch=connection_epoch+1') ? { connection_epoch: 7 }
+      : sql.startsWith('SELECT * FROM devices WHERE id=? AND connection_epoch=? AND deleted_at IS NULL') ? { id: 'device-1', connection_epoch: 7, credential_epoch: 1, claim_status: 'reserved', firmware_version: 'v0.6.22' }
+        : sql.startsWith('SELECT info_updated_at FROM device_status') ? null
+          : sql.includes('SELECT * FROM devices WHERE id=?') ? { id: 'device-1', connection_epoch: 7, credential_epoch: 1, claim_status: 'reserved', firmware_version: 'v0.6.22' } : null,
+    all: async () => [], run: async () => ({ changes: 1 }), batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22), process: (frame) => events.get(frame[0]!)!,
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket(); await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+  socket.emit('message', Uint8Array.of(10)); await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(socket.sent.map((frame) => frame[0]), [1, 4, 2], 'inventory still starts first');
+  socket.emit('message', Uint8Array.of(11)); await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(socket.sent.map((frame) => frame[0]), [1, 4, 2, 5], 'the first status query starts after inventory and before transfers');
+  socket.emit('message', Uint8Array.of(12)); await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(socket.sent.map((frame) => frame[0]), [1, 4, 2, 5, 6], 'the status queue continues before transfers');
+  socket.close();
+});
+
 test('gateway re-sends an in-flight status query after a heartbeat ACK', async () => {
   const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
     [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
