@@ -506,6 +506,13 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
 
   const status = deviceStatus?.status;
   const storageUsedKb = status?.storage_total_kb !== null && status?.storage_total_kb !== undefined && status.storage_free_kb !== null && status.storage_free_kb !== undefined ? Math.max(0, status.storage_total_kb - status.storage_free_kb) : null;
+  const recordState = status?.record_state;
+  const recordMode = status?.record_mode;
+  const isRecording = recordState === 1;
+  const isPaused = recordState === 2;
+  const recordingModeKnown = typeof recordMode === 'number';
+  const lookbackMode = recordingModeKnown && (recordMode & 0x10) !== 0;
+  const recordingControlHint = t('Recording controls are not available in this device protocol version.');
   const batteryPercent = percentage(status?.battery_percent);
   const storageUsedPercent = status?.storage_total_kb && storageUsedKb !== null ? percentage(storageUsedKb / status.storage_total_kb * 100) : null;
   const storageBarWidth = storageUsedPercent !== null && storageUsedPercent > 0 ? Math.max(1.5, storageUsedPercent) : storageUsedPercent ?? 0;
@@ -570,7 +577,11 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
     <section className="device-status-card device-status-live">
       <header>
         <div><p className="eyebrow">{t('Live device status')}</p><h3>{t('Device status')}</h3></div>
-        <span className={`status-pill ${bleConnected ? 'status-ready' : 'status-neutral'}`}>{bleConnected ? t('BLE connected') : !status ? t('Not read yet') : t(status.source === 'ble' ? 'Last read by BLE' : 'Last read through server')}</span>
+        <div className="device-status-header-actions">
+          <span className={`status-pill ${bleConnected ? 'status-ready' : 'status-neutral'}`}>{bleConnected ? t('BLE connected') : !status ? t('Not read yet') : t(status.source === 'ble' ? 'Last read by BLE' : 'Last read through server')}</span>
+          <Button kind="secondary" icon="refresh" disabled={Boolean(busy)} onClick={() => void refreshDeviceStatus()}>{busy === 'status-refresh' ? t('Refreshing…') : t('Refresh')}</Button>
+          <Button kind="secondary" disabled={Boolean(busy)} onClick={() => void toggleBle()}>{bleConnected ? t('Disconnect BLE') : t('Connect BLE')}</Button>
+        </div>
       </header>
       <div className="device-status-grid">
         <div className="device-status-overview">
@@ -597,12 +608,19 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
         </div>
         <aside className="device-control-stack">
           <header><span className="device-vital-icon"><Icon name="pulse" size={20}/></span><div><strong>{t('Device controls')}</strong><small>{controlConnected ? t('Connection ready') : t('Connection required')}</small></div></header>
-          <div className="device-control-actions"><Button kind="secondary" icon="refresh" disabled={Boolean(busy)} onClick={() => void refreshDeviceStatus()}>{busy === 'status-refresh' ? t('Refreshing…') : t('Refresh')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={() => void toggleBle()}>{bleConnected ? t('Disconnect BLE') : t('Connect BLE')}</Button></div>
-          {canEdit ? <div className="device-control-actions"><Button kind="secondary" disabled={controlDisabled} onClick={() => void runControl({ kind: 'usb', enabled: !(status?.usb_state === 1 || status?.usb_state === 2) }, status?.usb_state === 1 || status?.usb_state === 2 ? t('USB mode disabled.') : t('USB mode enabled.'))}>{status?.usb_state === 1 || status?.usb_state === 2 ? t('Disable USB') : t('Enable USB')}</Button></div> : null}
-          {canEdit ? <div className="device-control-actions"><Button kind="secondary" disabled={Boolean(busy)} onClick={toggleAttention}>{attentionMuted ? t('Unmute attention') : t('Mute attention')}</Button></div> : null}
+          {canEdit ? <div className="device-control-actions device-control-actions-compact"><Button kind="secondary" disabled={controlDisabled} onClick={() => void runControl({ kind: 'usb', enabled: !(status?.usb_state === 1 || status?.usb_state === 2) }, status?.usb_state === 1 || status?.usb_state === 2 ? t('USB mode disabled.') : t('USB mode enabled.'))}>{status?.usb_state === 1 || status?.usb_state === 2 ? t('Disable USB') : t('Enable USB')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={toggleAttention}>{attentionMuted ? t('Unmute attention') : t('Mute attention')}</Button></div> : null}
           {canEdit ? <div className="device-control-actions device-auto-shutdown-actions"><Select ariaLabel={t('Auto shutdown')} value={autoShutdown} onChange={(value) => { autoShutdownTouched.current = true; setAutoShutdown(value); }} options={[['never', 'Never'], ['15min', '15 minutes'], ['30min', '30 minutes'], ['1h', '1 hour'], ['5h', '5 hours']].map(([value, label]) => ({ value: value!, label: t(label!) }))}/><Button kind="secondary" disabled={controlDisabled} onClick={() => { autoShutdownTouched.current = true; void runControl({ kind: 'auto_shutdown', interval: autoShutdown as 'never' | '15min' | '30min' | '1h' | '5h' }, t('Auto shutdown setting updated.')); }}>{t('Apply auto shutdown')}</Button></div> : null}
-          {canEdit ? <div className="device-control-actions"><Button kind="secondary" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Restart this device now?'))) void runControl({ kind: 'power', action: 'reboot' }, t('Restart requested.')); }}>{t('Restart')}</Button><Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Shut down this device now?'))) void runControl({ kind: 'power', action: 'shutdown' }, t('Shutdown requested.')); }}>{t('Shut down')}</Button>{canRelease ? <Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Reset device configuration? Recordings are preserved.'))) void runControl({ kind: 'factory_reset', scope: 'configuration' }, t('Configuration reset requested.')); }}>{t('Reset configuration')}</Button> : null}</div> : null}
-          {canEdit ? <div className="device-control-actions"><Button kind="secondary" disabled={Boolean(busy)} onClick={() => setWifiEditorOpen((open) => !open)}>{wifiEditorOpen ? t('Cancel') : t('Configure Wi-Fi')}</Button></div> : null}
+          {canEdit ? <div className="device-control-actions device-control-actions-compact"><Button kind="secondary" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Restart this device now?'))) void runControl({ kind: 'power', action: 'reboot' }, t('Restart requested.')); }}>{t('Restart')}</Button><Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Shut down this device now?'))) void runControl({ kind: 'power', action: 'shutdown' }, t('Shutdown requested.')); }}>{t('Shut down')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={() => setWifiEditorOpen((open) => !open)}>{wifiEditorOpen ? t('Cancel') : t('Configure Wi-Fi')}</Button>{canRelease ? <Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Reset device configuration? Recordings are preserved.'))) void runControl({ kind: 'factory_reset', scope: 'configuration' }, t('Configuration reset requested.')); }}>{t('Reset configuration')}</Button> : null}</div> : null}
+          <section className="device-recording-controls" aria-label={t('Recording controls')}>
+            <div className="device-recording-row">
+              <Button className="device-recording-action" kind={isRecording ? 'danger' : 'secondary'} disabled title={recordingControlHint}>{isRecording ? t('Stop recording') : isPaused ? t('Resume recording') : t('Start recording')}</Button>
+              <Button className="device-recording-action" kind="secondary" disabled title={!isRecording ? (lookbackMode ? t('Start a Lookback recording to preserve.') : t('Start a recording to insert a highlight.')) : recordingControlHint}>{lookbackMode ? t('Preserve') : t('Highlight')}</Button>
+              <div className="device-recording-modes" role="group" aria-label={t('Recording mode')}>
+                <button type="button" className={recordingModeKnown && !lookbackMode ? 'is-active' : undefined} aria-pressed={recordingModeKnown && !lookbackMode} disabled title={recordingControlHint}>{t('Smart Capture')}</button>
+                <button type="button" className={lookbackMode ? 'is-active' : undefined} aria-pressed={lookbackMode} disabled title={recordingControlHint}>{t('Lookback')}</button>
+              </div>
+            </div>
+          </section>
         </aside>
       </div>
       {wifiEditorOpen ? <form className="device-wifi-form" onSubmit={(event) => { event.preventDefault(); void confirmWifi(); }}>
