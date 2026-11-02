@@ -5,6 +5,7 @@ export type { BluetoothDeviceHandle } from '@voicecan/device-web';
 import type { ProvisioningBroker, ProvisioningResult } from '@voicecan/device-web';
 import type { DeviceControl, DeviceInfo, DeviceStatus, FirmwareInstallResult, FirmwarePackage, SemanticProtocolSession, WifiConfiguration } from '@voicecan/device-core';
 import type { DeviceConnectLocale } from './protocol.js';
+import { applyMaintenanceControl } from './maintenance-control.js';
 
 export * from './protocol.js';
 export type { DeviceControl } from '@voicecan/device-core';
@@ -56,12 +57,9 @@ export async function connectBoundDevice(input: { rawToken: Uint8Array; expected
     let status = await session.getStatus(input.signal); const activeSession = session;
     const refresh = async (): Promise<DeviceStatus> => { status = await activeSession.getStatus(); return status; };
     return {
-      info, status, device: transport.device!, ...(transport.deviceName ? { deviceName: transport.deviceName } : {}), refresh,
+      info, get status() { return status; }, device: transport.device!, ...(transport.deviceName ? { deviceName: transport.deviceName } : {}), refresh,
       control: async (control): Promise<DeviceStatus> => {
-        if (control.kind === 'auto_shutdown') await activeSession.setAutoShutdown(control.interval);
-        else if (control.kind === 'usb' || control.kind === 'privacy' || control.kind === 'earphone_recording') await activeSession.setFeature(control.kind, control.enabled);
-        else if (control.kind === 'power') await activeSession.power(control.action);
-        else await activeSession.factoryReset(control.scope);
+        await applyMaintenanceControl(activeSession, control);
         if (control.kind === 'power' || control.kind === 'factory_reset') return status;
         return refresh();
       },

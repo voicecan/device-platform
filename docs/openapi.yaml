@@ -184,7 +184,11 @@ components:
       required: [id, type, device_id, status, idempotency_key, requested_at, dispatched_at, started_at, completed_at, expires_at, result_code, error_code, resource_version]
       properties:
         id: { type: string }
-        type: { const: recording.sync }
+        type: { type: string, enum: [recording.sync, device.ota, device.recording, device.recording_mode, device.auto_shutdown, device.usb, device.privacy, device.earphone_recording, device.power, device.factory_reset] }
+        control:
+          oneOf:
+            - { $ref: '#/components/schemas/DeviceControl' }
+            - { type: 'null' }
         device_id: { type: string }
         status: { type: string, enum: [queued, dispatched, running, succeeded, failed, expired] }
         idempotency_key: { type: string }
@@ -196,6 +200,47 @@ components:
         result_code: { type: [string, 'null'] }
         error_code: { type: [string, 'null'] }
         resource_version: { type: integer, minimum: 1 }
+    DeviceControl:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, action]
+          properties:
+            kind: { const: recording }
+            action: { type: string, enum: [start, pause, resume, stop, highlight, preserve] }
+        - type: object
+          additionalProperties: false
+          required: [kind, mode, microphoneMode, microphoneGainDb]
+          properties:
+            kind: { const: recording_mode }
+            mode: { type: string, enum: [smart_capture, lookback] }
+            microphoneMode: { type: integer, enum: [0, 1, 2] }
+            microphoneGainDb: { type: integer, minimum: 0, maximum: 31 }
+            lookbackSeconds: { type: integer, minimum: 0, maximum: 15, default: 0, description: Must be zero or omitted for smart_capture. }
+        - type: object
+          additionalProperties: false
+          required: [kind, interval]
+          properties:
+            kind: { const: auto_shutdown }
+            interval: { type: string, enum: [never, 15min, 30min, 1h, 5h] }
+        - type: object
+          additionalProperties: false
+          required: [kind, enabled]
+          properties:
+            kind: { type: string, enum: [usb, privacy, earphone_recording] }
+            enabled: { type: boolean }
+        - type: object
+          additionalProperties: false
+          required: [kind, action]
+          properties:
+            kind: { const: power }
+            action: { type: string, enum: [reboot, shutdown, shipmode] }
+        - type: object
+          additionalProperties: false
+          required: [kind, scope]
+          properties:
+            kind: { const: factory_reset }
+            scope: { type: string, enum: [configuration, recordings, all] }
     CursorPageFiles:
       type: object
       additionalProperties: false
@@ -772,6 +817,16 @@ paths:
       summary: Dispatch a reviewed semantic device control over an active WebSocket connection; factory reset and ship mode remain System Admin only
       security: [{ sessionCookie: [] }]
       parameters: [{ in: path, name: id, required: true, schema: { type: string } }, { in: header, name: Idempotency-Key, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, control]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 256 }
+                control: { $ref: '#/components/schemas/DeviceControl' }
       responses: { '202': { description: Control dispatched }, '400': { description: Unsupported semantic control }, '409': { description: Device is offline or its WebSocket disconnected before dispatch } }
   /admin/firmware-packages:
     get:

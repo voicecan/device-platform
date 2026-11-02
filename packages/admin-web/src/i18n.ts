@@ -3,6 +3,18 @@ export type Locale = 'zh-CN' | 'en';
 const localeKey = 'voicecan.locale';
 
 const zhCN: Readonly<Record<string, string>> = {
+  'Recording control confirmed.': '设备已确认录音操作。',
+  'Recording mode updated.': '录音模式已更新。',
+  'Recording failed: device storage is full.': '录音失败：设备存储空间已满。',
+  'Recording failed: the device is in USB disk mode.': '录音失败：设备处于 U 盘模式。',
+  'Recording failed: device hardware error.': '录音失败：设备硬件错误。',
+  'The device is already recording.': '设备已处于录音状态。',
+  'Recording controls were used too frequently. Try again shortly.': '录音操作过于频繁，请稍后重试。',
+  'Refresh the device status before changing recording mode.': '请先刷新设备状态，再切换录音模式。',
+  'The device did not confirm the recording command in time.': '设备未及时确认录音操作。',
+  'The recording command is still pending. Check command history before retrying.': '录音命令仍在等待执行，请先查看命令历史再决定是否重试。',
+  'Recording mode failed: noise reduction is unsupported.': '录音模式设置失败：设备不支持降噪。',
+  'The device rejected the recording mode change.': '设备拒绝了录音模式变更。',
   "This authorization expired or was revoked. Review it in Connection management.": "授权已过期或已撤销，请在「连接管理」中检查。",
   "This authorization changed. Review it in Connection management.": "授权范围已变更，请在「连接管理」中检查。",
   "The local credential file is missing. Review this connection in Connection management.": "本机凭据文件丢失，请在「连接管理」中检查此连接。",

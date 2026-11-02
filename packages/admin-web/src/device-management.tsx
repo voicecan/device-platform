@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { connectBoundDevice, type BluetoothDeviceHandle, type BoundDeviceMaintenance, type DeviceControl } from '@voicecan/device-connect-web';
 import { api, apiBinary, apiBinaryUpload, errorMessage } from './api.js';
 import { randomUuidV4 } from './random.js';
+import { recordingModeControl, recordingResultMessage, waitForRecordingCommand, type RecordingControlCommand } from './recording-control.js';
 import { formatIsoTimestamp, formatSessionTimestamp, isoTimestampTitle, sessionTimestamp, sessionTimestampTitle } from './recording-timestamp.js';
 import { deviceConnectionState, recordingSyncCounts, currentDeviceOptions } from './device-connection-state.js';
 import { Button, DataTable, Field, Icon, Select, collectionOf, formatLocalDateTime, type Translate } from './ui.js';
@@ -93,6 +94,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const [autoShutdown, setAutoShutdown] = useState('never');
   const autoShutdownTouched = useRef(false);
   const bleSession = useRef<BoundDeviceMaintenance | undefined>(undefined);
+  const recordingControlAbort = useRef<AbortController | undefined>(undefined);
   const bleDevice = useRef<BluetoothDeviceHandle | undefined>(undefined);
   const bleIdentity = useRef<BleIdentity>({});
   const bleReconnectTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
@@ -102,6 +104,8 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const bleNameAutoAttempt = useRef('');
   const statusRefreshAttempt = useRef('');
   const [busy, setBusy] = useState('');
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [deleteFileTarget, setDeleteFileTarget] = useState<SyncFile | null>(null);
@@ -135,6 +139,33 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
     }
 
   }, [deviceId, items, requested]);
+
+  useEffect(() => () => { recordingControlAbort.current?.abort(); }, [deviceId]);
+
+  // WSS status is cached by the gateway; BLE reads back the nearby device.
+  useEffect(() => {
+    if (!deviceId) return;
+    let stopped = false; let inFlight = false;
+    const timer = globalThis.setInterval(() => {
+      if (inFlight || busyRef.current || globalThis.document?.visibilityState === 'hidden') return;
+      inFlight = true;
+      void (async () => {
+        try {
+          const sequence = loadSequence.current;
+          const session = bleSession.current;
+          if (session) {
+            const status = await session.refresh();
+            if (stopped) return;
+            await reportBleStatus(session, session.info.serialNumber, status);
+          }
+          const next = await api<DeviceStatusWorkspace>(`/devices/${encodeURIComponent(deviceId)}/status`);
+          if (!stopped && !busyRef.current && sequence === loadSequence.current) setDeviceStatus(next);
+        } catch { /* workspace refresh owns the visible connection error */ }
+        finally { inFlight = false; }
+      })();
+    }, 2_000);
+    return () => { stopped = true; globalThis.clearInterval(timer); };
+  }, [deviceId, bleConnected]);
 
   const load = async (selected = deviceId, quiet = false): Promise<void> => {
     if (!selected || selected !== selectedDevice.current) return;
@@ -277,13 +308,14 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const saveName = (): void => { void run('rename', () => api(`/devices/${encodeURIComponent(deviceId)}`, { method: 'PATCH', body: JSON.stringify({ display_name: displayName.trim() || null, reason: 'Administrator updated device display name' }) }), t('Device name updated.')).then(() => setEditing(false)); };
 
   const run = async (key: string, operation: () => Promise<unknown>, success: string): Promise<void> => {
-    if (busy && busy !== 'loading') return;
+    if (busyRef.current && busyRef.current !== 'loading') return;
+    busyRef.current = key;
     setBusy(key); setError(''); setNotice('');
     const connectionOperation = ['ble-connect', 'wifi-configure'].includes(key);
     if (connectionOperation) { setConnectionEvents([]); setDiagnosticNotice(''); }
     try { await operation(); if (connectionOperation) setConnectionEvents((events) => events.map((event) => event.state === 'running' ? { ...event, state: 'done' } : event)); if (deviceId !== selectedDevice.current) return; setNotice(success); await load(deviceId, true); onDevicesRefresh(); }
-    catch (cause) { if (connectionOperation) { const code = connectionErrorCode(cause); setConnectionEvents((events) => (events.length ? events : [{ stage: key === 'ble-connect' ? 'backup' : 'configure_wifi', at: Date.now(), state: 'running' } as ConnectionEvent]).map((event) => event.state === 'running' ? { ...event, state: 'failed', code } : event)); setError(''); } else setError(errorMessage(cause)); }
-    finally { setBusy(''); }
+    catch (cause) { if (deviceId !== selectedDevice.current || (key.startsWith('control:recording') && recordingControlAbort.current?.signal.aborted)) return; if (connectionOperation) { const code = connectionErrorCode(cause); setConnectionEvents((events) => (events.length ? events : [{ stage: key === 'ble-connect' ? 'backup' : 'configure_wifi', at: Date.now(), state: 'running' } as ConnectionEvent]).map((event) => event.state === 'running' ? { ...event, state: 'failed', code } : event)); setError(''); } else setError(errorMessage(cause)); }
+    finally { if (deviceId === selectedDevice.current) { busyRef.current = ''; setBusy(''); } }
   };
 
   const toggleAttention = (): void => {
@@ -405,16 +437,34 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   };
 
   const runControl = async (control: DeviceControl, success: string): Promise<void> => run(`control:${control.kind}`, async () => {
-    const session = bleSession.current;
-    if (session) {
-      try {
-        const status = await session.control(control); const serialNumber = String(workspace?.device.sn ?? current?.sn ?? '');
-        if (serialNumber && control.kind !== 'power' && control.kind !== 'factory_reset') await reportBleStatus(session, serialNumber, status);
-        return status;
-      } catch (cause) { clearDisconnectedBleSession(cause); throw cause; }
+    const recording = control.kind === 'recording' || control.kind === 'recording_mode';
+    const controller = new AbortController();
+    if (recording) { recordingControlAbort.current?.abort(); recordingControlAbort.current = controller; }
+    try {
+      const session = bleSession.current;
+      if (session) {
+        try {
+          const status = await session.control(control); const serialNumber = String(workspace?.device.sn ?? current?.sn ?? '');
+          if (serialNumber && control.kind !== 'power' && control.kind !== 'factory_reset') await reportBleStatus(session, serialNumber, status);
+          return status;
+        } catch (cause) { clearDisconnectedBleSession(cause); throw cause; }
+      }
+      if (current?.online !== true) throw new Error(t('Connect the device through WebSocket or BLE before sending controls.'));
+      const command = await api<RecordingControlCommand>(`/devices/${encodeURIComponent(deviceId)}/control`, { method: 'POST', headers: { 'idempotency-key': randomUuidV4() }, body: JSON.stringify({ control, reason: 'Administrator requested reviewed device control' }) });
+      if (recording) {
+        await waitForRecordingCommand(command, (id) => api<RecordingControlCommand>(`/commands/${encodeURIComponent(id)}`, { signal: controller.signal }), controller.signal);
+        // The acknowledgement is followed by a fresh gateway status query.
+        await api(`/devices/${encodeURIComponent(deviceId)}/status/refresh`, { method: 'POST', body: '{}' }).catch(() => undefined);
+      }
+      return command;
+    } catch (cause) {
+      if (recording && !controller.signal.aborted) {
+        const result = cause && typeof cause === 'object' && 'result' in cause ? Number(cause.result) : null;
+        const code = result === null ? errorMessage(cause) : `DEVICE_RESULT_${result.toString(16).padStart(2, '0').toUpperCase()}`;
+        throw new Error(t(recordingResultMessage(code, control.kind === 'recording_mode')));
+      }
+      throw cause;
     }
-    if (current?.online !== true) throw new Error(t('Connect the device through WebSocket or BLE before sending controls.'));
-    return api(`/devices/${encodeURIComponent(deviceId)}/control`, { method: 'POST', headers: { 'idempotency-key': randomUuidV4() }, body: JSON.stringify({ control, reason: 'Administrator requested reviewed device control' }) });
   }, success);
   const configureWifiOperation = async (): Promise<void> => {
     const session = bleSession.current; if (!session) throw new Error(t('Connect with BLE before using nearby maintenance.'));
@@ -515,7 +565,14 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const isPaused = recordState === 2;
   const recordingModeKnown = typeof recordMode === 'number';
   const lookbackMode = recordingModeKnown && (recordMode & 0x10) !== 0;
-  const recordingControlHint = t('Recording controls are not available in this device protocol version.');
+  const recordingDisabled = controlDisabled || !canEdit || ![0, 1, 2].includes(recordState ?? -1);
+  const recordingModeDisabled = recordingDisabled || status?.microphone_mode === null || status?.microphone_gain_db === null;
+  const changeRecordingMode = (mode: 'smart_capture' | 'lookback'): void => {
+    try {
+      if (!status) throw new Error('RECORDING_SETTINGS_UNAVAILABLE');
+      void runControl(recordingModeControl(mode, status), t('Recording mode updated.'));
+    } catch (cause) { setError(t(recordingResultMessage(errorMessage(cause)))); }
+  };
   const batteryPercent = percentage(status?.battery_percent);
   const storageUsedPercent = status?.storage_total_kb && storageUsedKb !== null ? percentage(storageUsedKb / status.storage_total_kb * 100) : null;
   const storageBarWidth = storageUsedPercent !== null && storageUsedPercent > 0 ? Math.max(1.5, storageUsedPercent) : storageUsedPercent ?? 0;
@@ -633,13 +690,13 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
           {canEdit ? <div className="device-control-actions device-control-actions-compact"><Button kind="secondary" disabled={controlDisabled} onClick={() => void runControl({ kind: 'usb', enabled: !(status?.usb_state === 1 || status?.usb_state === 2) }, status?.usb_state === 1 || status?.usb_state === 2 ? t('USB mode disabled.') : t('USB mode enabled.'))}>{status?.usb_state === 1 || status?.usb_state === 2 ? t('Disable USB') : t('Enable USB')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={toggleAttention}>{attentionMuted ? t('Unmute attention') : t('Mute attention')}</Button></div> : null}
           {canEdit ? <div className="device-control-actions device-auto-shutdown-actions"><Select ariaLabel={t('Auto shutdown')} value={autoShutdown} onChange={(value) => { autoShutdownTouched.current = true; setAutoShutdown(value); }} options={[['never', 'Never'], ['15min', '15 minutes'], ['30min', '30 minutes'], ['1h', '1 hour'], ['5h', '5 hours']].map(([value, label]) => ({ value: value!, label: t(label!) }))}/><Button kind="secondary" disabled={controlDisabled} onClick={() => { autoShutdownTouched.current = true; void runControl({ kind: 'auto_shutdown', interval: autoShutdown as 'never' | '15min' | '30min' | '1h' | '5h' }, t('Auto shutdown setting updated.')); }}>{t('Apply auto shutdown')}</Button></div> : null}
           {canEdit ? <div className="device-control-actions device-control-actions-compact"><Button kind="secondary" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Restart this device now?'))) void runControl({ kind: 'power', action: 'reboot' }, t('Restart requested.')); }}>{t('Restart')}</Button><Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Shut down this device now?'))) void runControl({ kind: 'power', action: 'shutdown' }, t('Shutdown requested.')); }}>{t('Shut down')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={() => setWifiEditorOpen((open) => !open)}>{wifiEditorOpen ? t('Cancel') : t('Configure Wi-Fi')}</Button>{canRelease ? <Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Reset device configuration? Recordings are preserved.'))) void runControl({ kind: 'factory_reset', scope: 'configuration' }, t('Configuration reset requested.')); }}>{t('Reset configuration')}</Button> : null}</div> : null}
-          <section className="device-recording-controls" aria-label={t('Recording controls')}>
+          <section className="device-recording-controls" aria-label={t('Recording controls')} aria-busy={busy.startsWith('control:recording')}>
             <div className="device-recording-row">
-              <Button className="device-recording-action" kind={isRecording ? 'danger' : 'secondary'} disabled title={recordingControlHint}>{isRecording ? t('Stop recording') : isPaused ? t('Resume recording') : t('Start recording')}</Button>
-              <Button className="device-recording-action" kind="secondary" disabled title={!isRecording ? (lookbackMode ? t('Start a Lookback recording to preserve.') : t('Start a recording to insert a highlight.')) : recordingControlHint}>{lookbackMode ? t('Preserve') : t('Highlight')}</Button>
+              <Button className="device-recording-action" kind={isRecording ? 'danger' : 'secondary'} disabled={recordingDisabled} onClick={() => void runControl({ kind: 'recording', action: isRecording ? 'stop' : isPaused ? 'resume' : 'start' }, t('Recording control confirmed.'))}>{isRecording ? t('Stop recording') : isPaused ? t('Resume recording') : t('Start recording')}</Button>
+              <Button className="device-recording-action" kind="secondary" disabled={recordingDisabled || !isRecording || !recordingModeKnown} title={!isRecording ? (lookbackMode ? t('Start a Lookback recording to preserve.') : t('Start a recording to insert a highlight.')) : undefined} onClick={() => void runControl({ kind: 'recording', action: lookbackMode ? 'preserve' : 'highlight' }, t('Recording control confirmed.'))}>{lookbackMode ? t('Preserve') : t('Highlight')}</Button>
               <div className="device-recording-modes" role="group" aria-label={t('Recording mode')}>
-                <button type="button" className={recordingModeKnown && !lookbackMode ? 'is-active' : undefined} aria-pressed={recordingModeKnown && !lookbackMode} disabled title={recordingControlHint}>{t('Smart Capture')}</button>
-                <button type="button" className={lookbackMode ? 'is-active' : undefined} aria-pressed={lookbackMode} disabled title={recordingControlHint}>{t('Lookback')}</button>
+                <button type="button" className={recordMode === 0 ? 'is-active' : undefined} aria-pressed={recordMode === 0} disabled={recordingModeDisabled || recordMode === 0} onClick={() => changeRecordingMode('smart_capture')}>{t('Smart Capture')}</button>
+                <button type="button" className={lookbackMode ? 'is-active' : undefined} aria-pressed={lookbackMode} disabled={recordingModeDisabled || lookbackMode} onClick={() => changeRecordingMode('lookback')}>{t('Lookback')}</button>
               </div>
             </div>
           </section>

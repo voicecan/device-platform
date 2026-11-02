@@ -1,6 +1,6 @@
 export const API_VERSION = '2026-08-07';
 export const PROTOCOL_ABI = 'voicecan-v1.2';
-export const CONFORMANCE_HASH = 'sha256:679c97e5a4b4b0161f6df519c69a165e1ba7d9c8ae7ad02ff60b4b323ed2e166';
+export const CONFORMANCE_HASH = 'sha256:da036f6ab221254bfbc9aa4ba3ede9e710095627fb35181e8c2927f944dcaa2b';
 
 export type ApiSuccess<T> = {
   success: true;
@@ -167,6 +167,8 @@ export type DeviceStatusSnapshot = {
 };
 
 export type DeviceControl =
+  | { kind: 'recording'; action: 'start' | 'pause' | 'resume' | 'stop' | 'highlight' | 'preserve' }
+  | { kind: 'recording_mode'; mode: 'smart_capture' | 'lookback'; microphoneMode: 0 | 1 | 2; microphoneGainDb: number; lookbackSeconds?: number }
   | { kind: 'auto_shutdown'; interval: 'never' | '15min' | '30min' | '1h' | '5h' }
   | { kind: 'usb'; enabled: boolean }
   | { kind: 'privacy'; enabled: boolean }

@@ -76,6 +76,14 @@ function timestamp(): string { return new Date().toISOString(); }
 export function parseDeviceControl(value: unknown): DeviceControl | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
+  if (input.kind === 'recording' && typeof input.action === 'string' && ['start', 'pause', 'resume', 'stop', 'highlight', 'preserve'].includes(input.action)) return { kind: 'recording', action: input.action } as DeviceControl;
+  if (input.kind === 'recording_mode' && (input.mode === 'smart_capture' || input.mode === 'lookback')) {
+    const seconds = input.lookbackSeconds === undefined ? 0 : input.lookbackSeconds;
+    if (!Number.isInteger(input.microphoneMode) || ![0, 1, 2].includes(Number(input.microphoneMode)) ||
+        !Number.isInteger(input.microphoneGainDb) || Number(input.microphoneGainDb) < 0 || Number(input.microphoneGainDb) > 31 ||
+        !Number.isInteger(seconds) || Number(seconds) < 0 || Number(seconds) > 15 || (input.mode === 'smart_capture' && seconds !== 0)) return null;
+    return { kind: 'recording_mode', mode: input.mode, microphoneMode: input.microphoneMode, microphoneGainDb: input.microphoneGainDb, lookbackSeconds: seconds } as DeviceControl;
+  }
   if (input.kind === 'auto_shutdown' && ['never', '15min', '30min', '1h', '5h'].includes(String(input.interval))) return { kind: 'auto_shutdown', interval: input.interval as 'never' | '15min' | '30min' | '1h' | '5h' };
   if (['usb', 'privacy', 'earphone_recording'].includes(String(input.kind)) && typeof input.enabled === 'boolean') return { kind: input.kind, enabled: input.enabled } as DeviceControl;
   if (input.kind === 'power' && ['reboot', 'shutdown', 'shipmode'].includes(String(input.action))) return { kind: input.kind, action: input.action } as DeviceControl;
@@ -132,6 +140,7 @@ class DeviceActor {
   #controlTimer: ReturnType<typeof setTimeout> | null = null;
   #controlQueue: Array<{ commandId: string; input: DeviceControl }> = [];
   #activeControl: { commandId: string; input: DeviceControl } | null = null;
+  #recordingStatusRefreshPending = false;
   #activeOta: { commandId: string; firmware: GatewayOtaPackage; nextOffset: number; streaming: boolean } | null = null;
   #otaTimer: ReturnType<typeof setTimeout> | null = null;
   #livenessTimer: ReturnType<typeof setInterval> | null = null;
@@ -370,6 +379,10 @@ class DeviceActor {
 
   #startNextStatusQuery(): void {
     if (this.#closed || !this.#confirmed || this.#activeStatusQuery || this.#inventory || this.#pendingInventories.length > 0 || this.#activeTransfer || this.#activeControl || this.#controlQueue.length > 0 || this.#activeOta) return;
+    if (this.#recordingStatusRefreshPending) {
+      this.#recordingStatusRefreshPending = false;
+      this.#statusQueue = [{ eventKind: 'device_status', request: this.core.requestDeviceStatus() }, ...this.#statusQueue.filter((query) => query.eventKind !== 'device_status')];
+    }
     const next = this.#statusQueue.shift(); if (!next) return;
     this.#activeStatusQuery = next.eventKind;
     this.#activeStatusRequest = next.request;
@@ -539,13 +552,16 @@ class DeviceActor {
       return;
     }
     if (event.kind === 'device_command_result') {
+      const recordingResult = event.command === 'recording' || event.command === 'recording_mode';
+      if (recordingResult) this.#recordingStatusRefreshPending = true;
       const active = this.#activeControl;
-      if (!active || active.input.kind !== event.command) return;
+      if (!active || active.input.kind !== event.command) { this.#startNextStatusQuery(); return; }
       if (this.#controlTimer) { clearTimeout(this.#controlTimer); this.#controlTimer = null; }
       const completedAt = timestamp(); const succeeded = event.result === 0;
       const changed = await this.db.run(`UPDATE commands SET status=?,result_code=?,error_code=?,completed_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status IN ('dispatched','running') AND connection_epoch=?`, [succeeded ? 'succeeded' : 'failed', succeeded ? 'DEVICE_COMMAND_COMPLETED' : null, succeeded ? null : `DEVICE_RESULT_${event.result.toString(16).padStart(2, '0').toUpperCase()}`, completedAt, completedAt, active.commandId, this.connectionEpoch]);
-      if (changed.changes === 1) { const [command, device] = await Promise.all([this.db.get<Row>('SELECT * FROM commands WHERE id=?', [active.commandId]), this.db.get<Row>('SELECT * FROM devices WHERE id=?', [this.deviceId])]); if (command && device) await this.emitEvent(device, succeeded ? 'command.succeeded' : 'command.failed', { command: mapPublicCommand(command) }); }
+      if (changed.changes === 1) { const [command, device] = await Promise.all([this.db.get<Row>('SELECT * FROM commands WHERE id=?', [active.commandId]), this.db.get<Row>('SELECT * FROM devices WHERE id=?', [this.deviceId])]); if (command && device) await this.emitEvent(device, succeeded ? 'command.succeeded' : 'command.failed', { command: mapPublicCommand(command), ...(recordingResult ? { device_result: event.result, ...(event.sessionId === undefined ? {} : { session_id: event.sessionId }) } : {}) }); }
       this.#activeControl = null;
+      this.#startNextStatusQuery();
       await this.#startNextControl(); this.#startNextInventory(); await this.#startNextTransfer();
       return;
     }
@@ -1086,6 +1102,7 @@ class DeviceActor {
     const changed = await this.db.run("UPDATE commands SET status='failed',error_code='DEVICE_COMMAND_TIMEOUT',completed_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status IN ('dispatched','running') AND connection_epoch=?", [completedAt, completedAt, commandId, this.connectionEpoch]);
     if (changed.changes === 1) { const [command, device] = await Promise.all([this.db.get<Row>('SELECT * FROM commands WHERE id=?', [commandId]), this.db.get<Row>('SELECT * FROM devices WHERE id=?', [this.deviceId])]); if (command && device) await this.emitEvent(device, 'command.failed', { command: mapPublicCommand(command) }); }
     this.#activeControl = null; this.debug('device control timed out', { device_id: this.deviceId, command_id: commandId, connection_epoch: this.connectionEpoch });
+    this.#startNextStatusQuery();
     await this.#startNextControl(); this.#startNextInventory(); await this.#startNextTransfer();
   }
 
