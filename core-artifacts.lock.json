@@ -1,11 +1,11 @@
 {
   "package": "@voicecan/device-core",
-  "version": "0.1.0-preview.20",
-  "file": "vendor/voicecan-device-core-0.1.0-preview.20.tgz",
-  "sha256": "538c908c822a7eeb65983b0dfd04066644dcffa8ca19e333e49d363291c9c663",
-  "protocol_abi": "voicecan-v1.2",
-  "supported_range": "1.2.x",
-  "conformance_hash": "sha256:da036f6ab221254bfbc9aa4ba3ede9e710095627fb35181e8c2927f944dcaa2b",
-  "browser_wasm_digest": "sha256:99fd7122a51c143d173f193751d236a5b4ed2ae727cbd1e209c2e62008558ea4",
-  "node_wasm_digest": "sha256:99fd7122a51c143d173f193751d236a5b4ed2ae727cbd1e209c2e62008558ea4"
+  "version": "0.1.0-preview.21",
+  "file": "vendor/voicecan-device-core-0.1.0-preview.21.tgz",
+  "sha256": "13151319215c9326b361f30a0486afe13a2043f600fc3edd7b32bd3946593695",
+  "protocol_abi": "voicecan-v1.3",
+  "supported_range": "1.2.x || 1.3.x",
+  "conformance_hash": "sha256:060bf9e3711dde8d50175a866319d98665ab6e20d789743c104c72c1cd483d9b",
+  "browser_wasm_digest": "sha256:34ad89a7fd1fd7c125ddf0b058d0a8b040970d13d79565521f3f97f85fccf56a",
+  "node_wasm_digest": "sha256:34ad89a7fd1fd7c125ddf0b058d0a8b040970d13d79565521f3f97f85fccf56a"
 }

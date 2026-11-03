@@ -78,11 +78,11 @@ export function parseDeviceControl(value: unknown): DeviceControl | null {
   const input = value as Record<string, unknown>;
   if (input.kind === 'recording' && typeof input.action === 'string' && ['start', 'pause', 'resume', 'stop', 'highlight', 'preserve'].includes(input.action)) return { kind: 'recording', action: input.action } as DeviceControl;
   if (input.kind === 'recording_mode' && (input.mode === 'smart_capture' || input.mode === 'lookback')) {
-    const seconds = input.lookbackSeconds === undefined ? 0 : input.lookbackSeconds;
-    if (!Number.isInteger(input.microphoneMode) || ![0, 1, 2].includes(Number(input.microphoneMode)) ||
+    const seconds = input.lookbackDurationIndex === undefined ? 0 : input.lookbackDurationIndex;
+    if (!Number.isInteger(input.microphoneMode) || ![0, 1, 2, 3].includes(Number(input.microphoneMode)) ||
         !Number.isInteger(input.microphoneGainDb) || Number(input.microphoneGainDb) < 0 || Number(input.microphoneGainDb) > 31 ||
-        !Number.isInteger(seconds) || Number(seconds) < 0 || Number(seconds) > 15 || (input.mode === 'smart_capture' && seconds !== 0)) return null;
-    return { kind: 'recording_mode', mode: input.mode, microphoneMode: input.microphoneMode, microphoneGainDb: input.microphoneGainDb, lookbackSeconds: seconds } as DeviceControl;
+        !Number.isInteger(seconds) || Number(seconds) < 0 || Number(seconds) > 3 || (input.mode === 'smart_capture' && seconds !== 0) || 'lookbackSeconds' in input) return null;
+    return { kind: 'recording_mode', mode: input.mode, microphoneMode: input.microphoneMode, microphoneGainDb: input.microphoneGainDb, lookbackDurationIndex: seconds } as DeviceControl;
   }
   if (input.kind === 'auto_shutdown' && ['never', '15min', '30min', '1h', '5h'].includes(String(input.interval))) return { kind: 'auto_shutdown', interval: input.interval as 'never' | '15min' | '30min' | '1h' | '5h' };
   if (['usb', 'privacy', 'earphone_recording'].includes(String(input.kind)) && typeof input.enabled === 'boolean') return { kind: input.kind, enabled: input.enabled } as DeviceControl;
@@ -141,7 +141,7 @@ class DeviceActor {
   #controlQueue: Array<{ commandId: string; input: DeviceControl }> = [];
   #activeControl: { commandId: string; input: DeviceControl } | null = null;
   #recordingStatusRefreshPending = false;
-  #activeOta: { commandId: string; firmware: GatewayOtaPackage; nextOffset: number; streaming: boolean } | null = null;
+  #activeOta: { commandId: string; firmware: GatewayOtaPackage; nextOffset: number; streaming: boolean; approved: boolean; offsetReceived: boolean } | null = null;
   #otaTimer: ReturnType<typeof setTimeout> | null = null;
   #livenessTimer: ReturnType<typeof setInterval> | null = null;
   #lastInboundAt = Date.now();
@@ -231,10 +231,8 @@ class DeviceActor {
     this.#tail = this.#tail.then(() => this.#process(frame, enqueuedAt)).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       if (message === 'UNSUPPORTED_DEVICE_EVENT') {
-        // Newer firmware emits notifications (for example the U-disk ready
-        // notification) that this pinned core ABI does not know. They are not
-        // needed for synchronization; ignore them instead of dropping the
-        // whole gateway connection.
+        // Ignore future events outside the reviewed semantic surface without
+        // dropping an otherwise healthy gateway connection.
         this.debug('device gateway frame ignored', {
           device_id: this.deviceId, connection_epoch: this.connectionEpoch, error: message,
         }, 'warn');
@@ -316,7 +314,7 @@ class DeviceActor {
     const startedAt = timestamp();
     const changed = await this.db.run("UPDATE commands SET status='running',started_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status='dispatched' AND connection_epoch=?", [startedAt, startedAt, commandId, this.connectionEpoch]);
     if (changed.changes !== 1) return false;
-    this.#activeOta = { commandId, firmware, nextOffset: 0, streaming: false };
+    this.#activeOta = { commandId, firmware, nextOffset: 0, streaming: false, approved: false, offsetReceived: false };
     this.socket.send(this.core.requestOta({ version: firmware.version, size: firmware.size, crc16: firmware.crc16, ...(firmware.force === undefined ? {} : { force: firmware.force }) }));
     this.#otaTimer = setTimeout(() => { this.#background(this.#finishOta(false, 'DEVICE_OTA_TIMEOUT')); }, 15 * 60_000); this.#otaTimer.unref();
     this.debug('device OTA requested', { device_id: this.deviceId, command_id: commandId, version: firmware.version, firmware_size: firmware.size, firmware_crc16: firmware.crc16, connection_epoch: this.connectionEpoch });
@@ -357,14 +355,15 @@ class DeviceActor {
     this.#inventoryTimer.unref();
   }
 
-  async #expireInventory(inventory: InventoryState): Promise<void> {
+  async #expireInventory(inventory: InventoryState, errorCode = 'FILE_LIST_TIMEOUT'): Promise<void> {
     if (this.#closed || this.#inventory !== inventory) return;
+    if (this.#inventoryTimer) clearTimeout(this.#inventoryTimer);
     this.#inventoryTimer = null; this.#inventory = null;
     const completedAt = timestamp();
-    this.debug('device file inventory timed out', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, command_id: inventory.commandId, request_start: inventory.requestStart, batch_offset: inventory.nextOffset, timeout_ms: this.inventoryTimeoutMs }, 'warn');
+    this.debug('device file inventory failed', { device_id: this.deviceId, connection_epoch: this.connectionEpoch, command_id: inventory.commandId, request_start: inventory.requestStart, batch_offset: inventory.nextOffset, error_code: errorCode, timeout_ms: this.inventoryTimeoutMs }, 'warn');
     try {
       if (inventory.commandId) {
-        const changed = await this.db.run("UPDATE commands SET status='failed',error_code='FILE_LIST_TIMEOUT',completed_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status IN ('dispatched','running') AND connection_epoch=?", [completedAt, completedAt, inventory.commandId, this.connectionEpoch]);
+        const changed = await this.db.run("UPDATE commands SET status='failed',error_code=?,completed_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status IN ('dispatched','running') AND connection_epoch=?", [errorCode, completedAt, completedAt, inventory.commandId, this.connectionEpoch]);
         if (changed.changes === 1) {
           const [command, device] = await Promise.all([this.db.get<Row>('SELECT * FROM commands WHERE id=?', [inventory.commandId]), this.db.get<Row>('SELECT * FROM devices WHERE id=?', [this.deviceId])]);
           if (command && device) await this.emitEvent(device, 'command.failed', { command: mapPublicCommand(command) });
@@ -556,6 +555,7 @@ class DeviceActor {
       if (recordingResult) this.#recordingStatusRefreshPending = true;
       const active = this.#activeControl;
       if (!active || active.input.kind !== event.command) { this.#startNextStatusQuery(); return; }
+      if (active.input.kind === 'recording' && event.action && active.input.action !== event.action) return;
       if (this.#controlTimer) { clearTimeout(this.#controlTimer); this.#controlTimer = null; }
       const completedAt = timestamp(); const succeeded = event.result === 0;
       const changed = await this.db.run(`UPDATE commands SET status=?,result_code=?,error_code=?,completed_at=?,resource_version=resource_version+1,updated_at=? WHERE id=? AND status IN ('dispatched','running') AND connection_epoch=?`, [succeeded ? 'succeeded' : 'failed', succeeded ? 'DEVICE_COMMAND_COMPLETED' : null, succeeded ? null : `DEVICE_RESULT_${event.result.toString(16).padStart(2, '0').toUpperCase()}`, completedAt, completedAt, active.commandId, this.connectionEpoch]);
@@ -567,30 +567,38 @@ class DeviceActor {
     }
     if (event.kind === 'ota_check') {
       if (!this.#activeOta) return;
-      if (event.result === 0) { this.debug('device accepted OTA', { device_id: this.deviceId, command_id: this.#activeOta.commandId }); return; }
+      if (event.result === 0) { this.#activeOta.approved = true; this.#startOtaStream(); this.debug('device accepted OTA', { device_id: this.deviceId, command_id: this.#activeOta.commandId }); return; }
       if (event.result === 1) { await this.#finishOta(true, 'OTA_ALREADY_CURRENT'); return; }
       await this.#finishOta(false, `DEVICE_OTA_CHECK_${event.result.toString(16).padStart(2, '0').toUpperCase()}`); return;
     }
     if (event.kind === 'ota_transfer_request') {
       const active = this.#activeOta; if (!active) return;
-      if (!Number.isSafeInteger(event.offset) || event.offset < 0 || event.offset >= active.firmware.size) { await this.#finishOta(false, 'DEVICE_OTA_OFFSET_INVALID'); return; }
+      if (!Number.isSafeInteger(event.offset) || event.offset < 0 || event.offset > active.firmware.size) { await this.#finishOta(false, 'DEVICE_OTA_OFFSET_INVALID'); return; }
       // The Device sends one request at the start (offset 0) and re-requests a
       // specific offset when its receive queue overflows (flow control). Treat
       // every request as "resume streaming from this offset": rewind nextOffset
       // and make sure the stream is running.
       active.nextOffset = event.offset;
+      active.offsetReceived = true;
       this.#startOtaStream();
       return;
     }
     if (event.kind === 'ota_status') {
       if (!this.#activeOta) return;
-      if (event.result === 0) {
-        this.socket.send(this.core.requestDeviceControl({ kind: 'power', action: 'reboot' }));
-        this.debug('device OTA validated; reboot requested', { device_id: this.deviceId, command_id: this.#activeOta.commandId });
-        await this.#finishOta(true, 'OTA_REBOOT_REQUESTED'); return;
-      }
+      if ((event.result === 0 || event.result === 2) && (!this.#activeOta.approved || !this.#activeOta.offsetReceived || this.#activeOta.nextOffset !== this.#activeOta.firmware.size)) { await this.#finishOta(false, 'DEVICE_OTA_PREMATURE_STATUS'); return; }
+      if (event.result === 0) { await this.#finishOta(true, 'OTA_VALIDATED'); return; }
       if (event.result === 2) { await this.#finishOta(true, 'OTA_REBOOTING'); return; }
       await this.#finishOta(false, `DEVICE_OTA_STATUS_${event.result.toString(16).padStart(2, '0').toUpperCase()}`); return;
+    }
+    if (event.kind === 'filesystem_ready') {
+      this.requestInventory(null, 0);
+      this.requestStatus();
+      return;
+    }
+    if (event.kind === 'file_list_error') {
+      const inventory = this.#inventory;
+      if (inventory && inventory.requestStart === event.requestStart) await this.#expireInventory(inventory, `DEVICE_FILE_LIST_${event.result.toString(16).padStart(2, '0').toUpperCase()}`);
+      return;
     }
     if (event.kind === 'new_file') {
       this.debug('device new file notified', {
@@ -632,10 +640,10 @@ class DeviceActor {
       await this.appendRelay(active.fileId, event.offset, event.content, active.expectedSize);
       this.#armTransferTimeout(active);
     } else if (event.result === 0 && event.content.byteLength === 0) {
-      // Direct S3 uploads report progress as an empty-content result whose
-      // offset is between 0 and the expected size. The terminal result uses
-      // offset 0 or offset === expectedSize, so keep those completing paths.
-      if (event.offset > 0 && event.offset < active.expectedSize) {
+      if (event.size !== active.expectedSize || event.offset < 0 || event.offset > active.expectedSize) throw new Error('DEVICE_REPORTED_SIZE_MISMATCH');
+      // Empty batches report uploaded bytes, including initial progress at zero.
+      // Completion requires all expected bytes, not merely a success result.
+      if (event.offset < active.expectedSize) {
         this.recordTransferProgress(active.fileId, event.offset, active.expectedSize);
         this.#armTransferTimeout(active);
         this.debug('device file transfer progress received', {
@@ -1114,12 +1122,14 @@ class DeviceActor {
     if (changed.changes === 1) { const [command, device] = await Promise.all([this.db.get<Row>('SELECT * FROM commands WHERE id=?', [active.commandId]), this.db.get<Row>('SELECT * FROM devices WHERE id=?', [this.deviceId])]); if (command && device) await this.emitEvent(device, succeeded ? 'command.succeeded' : 'command.failed', { command: mapPublicCommand(command) }); }
     this.debug('device OTA lane released', { device_id: this.deviceId, command_id: active.commandId, succeeded, code });
     if (succeeded) { this.#deviceInfoCached = false; await this.db.run('UPDATE device_status SET info_updated_at=NULL WHERE device_id=?', [this.deviceId]); }
-    this.#activeOta = null; this.#startNextInventory(); await this.#startNextControl(); await this.#startNextTransfer();
+    this.#activeOta = null;
+    if (code === 'OTA_REBOOTING') { this.#confirmed = false; return; }
+    this.#startNextInventory(); await this.#startNextControl(); await this.#startNextTransfer();
   }
 
   #startOtaStream(): void {
     const active = this.#activeOta;
-    if (!active || active.streaming) return;
+    if (!active || active.streaming || !active.approved || !active.offsetReceived) return;
     active.streaming = true;
     this.#background(this.#otaStreamLoop());
   }

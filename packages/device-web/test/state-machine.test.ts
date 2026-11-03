@@ -198,6 +198,7 @@ test('Bluetooth transport logs frame metadata without exposing protocol payloads
     });
     const transport = await factory.requestDevice();
     const responsePromise = transport.exchange(Uint8Array.from([0x01, 0x0a, 0xff]));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(writes, [Uint8Array.from([0x01, 0x0a, 0xff])]);
     reader.value = new DataView(Uint8Array.from([0x02, 0x10, 0xab, 0xcd]).buffer);
     reader.dispatchEvent(new Event('characteristicvaluechanged'));

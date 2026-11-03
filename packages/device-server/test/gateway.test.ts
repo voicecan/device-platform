@@ -16,6 +16,38 @@ class TestSocket extends EventEmitter {
   close(code?: number, reason?: string): void { this.closes.push({ ...(code === undefined ? {} : { code }), ...(reason === undefined ? {} : { reason }) }); this.emit('close'); }
 }
 
+test('gateway keeps the connection on filesystem rejection and rescans after USB exit', async () => {
+  const device = { id: 'device-1', group_id: 'group-1', connection_epoch: 7, credential_epoch: 1, claim_status: 'active', model: 'CAPSO', hardware_version: 'B100', firmware_version: 'v0.6.4' };
+  const database = {
+    get: async (sql: string) => sql.startsWith('UPDATE devices SET online=0') ? { connection_epoch: 7 } : sql.includes('SELECT info_updated_at') ? { info_updated_at: '2026-11-03T00:00:00Z' } : sql.includes('SELECT * FROM devices') ? device : null,
+    all: async () => [], run: async () => ({ changes: 1 }), batch: async () => [{ changes: 1 }, { changes: 1 }, { changes: 1 }],
+  } as unknown as Database;
+  const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
+    [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.6.4' } }],
+    [11, { event: { kind: 'file_list_error', result: 1, requestStart: 0 } }],
+    [12, { event: { kind: 'filesystem_ready' }, response: Uint8Array.of(30) }],
+    [13, { event: { kind: 'file_list', requestStart: 0, totalCount: 0, batchOffset: 0, files: [] } }],
+  ]);
+  const core: GatewayProtocolCore = {
+    createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
+    requestDeviceInfo: () => Uint8Array.of(5), requestDeviceStatus: () => Uint8Array.of(6), requestDeviceStorage: () => Uint8Array.of(7), requestDeviceBattery: () => Uint8Array.of(8), requestDeviceControl: () => Uint8Array.of(9),
+    requestOta: () => Uint8Array.of(20), createOtaChunk: () => Uint8Array.of(21), requestOtaStatus: () => Uint8Array.of(22), process: (frame) => events.get(frame[0]!)!,
+  };
+  const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024);
+  const socket = new TestSocket();
+  try {
+    await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
+    socket.emit('message', Uint8Array.of(10)); socket.emit('message', Uint8Array.of(11));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(socket.closes.length, 0);
+    socket.emit('message', Uint8Array.of(12)); socket.emit('message', Uint8Array.of(13));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(socket.sent.filter((frame) => frame[0] === 2).length, 2);
+    assert.ok(socket.sent.some((frame) => frame[0] === 30));
+    assert.equal(socket.closes.length, 0);
+  } finally { socket.close(); }
+});
+
 test('gateway applies socket backpressure instead of closing on a relay-sized inbound burst', async () => {
   let releaseHeartbeat!: () => void;
   let heartbeatGate: Promise<void> | null = new Promise<void>((resolve) => { releaseHeartbeat = resolve; });
@@ -665,7 +697,7 @@ test('gateway fails a silent file inventory and releases the command lane', asyn
   const gateway = new DeviceGateway(database, core, async () => 'event', async () => null, async () => undefined, async () => undefined, 1024, () => undefined, { inventoryTimeoutMs: 5, statusQueryTimeoutMs: 5 });
   const socket = new TestSocket(); await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
   socket.emit('message', Uint8Array.of(10)); await new Promise((resolve) => setTimeout(resolve, 25));
-  assert.ok(runs.some((entry) => entry.sql.includes("error_code='FILE_LIST_TIMEOUT'")), 'a missing file-list response must fail explicitly');
+  assert.ok(runs.some((entry) => entry.sql.includes("error_code=?") && entry.params[0] === 'FILE_LIST_TIMEOUT'), 'a missing file-list response must fail explicitly');
   assert.equal(gateway.requestStatus('device-1'), true, 'the timed-out inventory must not keep the device command lane locked');
   socket.close();
 });
@@ -693,9 +725,9 @@ test('gateway serializes recording transfers per device and advances after a ter
   const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
     [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
     [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 2, batchOffset: 0, files: [{ sessionId: 100, attribute: 0, size: 12 }, { sessionId: 101, attribute: 0, size: 13 }] } }],
-    [12, { event: { kind: 'file_transfer', result: 0, sessionId: 101, size: 13, offset: 0, content: new Uint8Array() } }],
+    [12, { event: { kind: 'file_transfer', result: 0, sessionId: 101, size: 13, offset: 13, content: new Uint8Array() } }],
     [13, { event: { kind: 'new_file', sessionId: 102, attribute: 0, size: 11 } }],
-    [14, { event: { kind: 'file_transfer', result: 0, sessionId: 102, size: 11, offset: 0, content: new Uint8Array() } }],
+    [14, { event: { kind: 'file_transfer', result: 0, sessionId: 102, size: 11, offset: 11, content: new Uint8Array() } }],
   ]);
   const core: GatewayProtocolCore = {
     createBindRequest: () => Uint8Array.of(1),
@@ -745,8 +777,8 @@ test('gateway drains queued transfers before a pending inventory command', async
   const events = new Map<number, ReturnType<GatewayProtocolCore['process']>>([
     [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
     [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 2, batchOffset: 0, files: [{ sessionId: 100, attribute: 0, size: 12 }, { sessionId: 101, attribute: 0, size: 13 }] } }],
-    [12, { event: { kind: 'file_transfer', result: 0, sessionId: 101, size: 13, offset: 0, content: new Uint8Array() } }],
-    [13, { event: { kind: 'file_transfer', result: 0, sessionId: 100, size: 12, offset: 0, content: new Uint8Array() } }],
+    [12, { event: { kind: 'file_transfer', result: 0, sessionId: 101, size: 13, offset: 13, content: new Uint8Array() } }],
+    [13, { event: { kind: 'file_transfer', result: 0, sessionId: 100, size: 12, offset: 12, content: new Uint8Array() } }],
   ]);
   const core: GatewayProtocolCore = {
     createBindRequest: () => Uint8Array.of(1), requestFileList: () => { fileListRequests += 1; return Uint8Array.of(2); },
@@ -790,7 +822,7 @@ test('gateway retries the same file when the device reports a transient busy res
     [10, { event: { kind: 'bind_confirmed', firmwareVersion: 'v0.5.2' } }],
     [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 2, batchOffset: 0, files: [{ sessionId: 100, attribute: 0, size: 12 }, { sessionId: 101, attribute: 0, size: 13 }] } }],
     [12, { event: { kind: 'file_transfer', result: 0x05, sessionId: 101, size: 0, offset: 0, content: new Uint8Array() } }],
-    [13, { event: { kind: 'file_transfer', result: 0, sessionId: 101, size: 13, offset: 0, content: new Uint8Array() } }],
+    [13, { event: { kind: 'file_transfer', result: 0, sessionId: 101, size: 13, offset: 13, content: new Uint8Array() } }],
   ]);
   const core: GatewayProtocolCore = {
     createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2),
@@ -833,6 +865,7 @@ test('gateway records direct-upload progress without completing the file', async
     [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 1, batchOffset: 0, files: [{ sessionId: 100, attribute: 0, size: 12 }] } }],
     [12, { event: { kind: 'file_transfer', result: 0, sessionId: 100, size: 12, offset: 5, content: new Uint8Array() } }],
     [13, { event: { kind: 'file_transfer', result: 0, sessionId: 100, size: 12, offset: 12, content: new Uint8Array() } }],
+    [14, { event: { kind: 'file_transfer', result: 0, sessionId: 100, size: 12, offset: 0, content: new Uint8Array() } }],
   ]);
   const core: GatewayProtocolCore = {
     createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2),
@@ -844,8 +877,10 @@ test('gateway records direct-upload progress without completing the file', async
   const socket = new TestSocket(); await gateway.attach(socket, 'device-1', Buffer.alloc(32, 7));
   socket.emit('message', Uint8Array.of(10)); socket.emit('message', Uint8Array.of(11)); await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(requested, [100]);
+  socket.emit('message', Uint8Array.of(14)); await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(completions, [], 'offset zero is initial progress, not completion');
   socket.emit('message', Uint8Array.of(12)); await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(progress, [{ fileId: 'file-100', transferred: 5, expectedSize: 12 }], 'an intermediate offset is progress, not completion');
+  assert.deepEqual(progress, [{ fileId: 'file-100', transferred: 0, expectedSize: 12 }, { fileId: 'file-100', transferred: 5, expectedSize: 12 }], 'an intermediate offset is progress, not completion');
   assert.deepEqual(completions, [], 'progress must not complete the upload');
   socket.emit('message', Uint8Array.of(13)); await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(completions, [{ fileId: 'file-100', reportedSize: 12 }], 'the terminal result completes the upload');
@@ -1064,7 +1099,7 @@ test('gateway transfers verified OTA content only after the device requests an o
     [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 0, batchOffset: 0, files: [] } }],
     [12, { event: { kind: 'ota_check', result: 0 } }],
     [13, { event: { kind: 'ota_transfer_request', offset: 0 } }],
-    [14, { event: { kind: 'ota_status', result: 0 } }],
+    [14, { event: { kind: 'ota_status', result: 2 } }],
   ]);
   const core: GatewayProtocolCore = {
     createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
@@ -1081,8 +1116,8 @@ test('gateway transfers verified OTA content only after the device requests an o
   assert.deepEqual(chunks, []);
   socket.emit('message', Uint8Array.of(12)); socket.emit('message', Uint8Array.of(13)); socket.emit('message', Uint8Array.of(14)); await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(chunks, [{ offset: 0, content }]);
-  assert.deepEqual(controls, [{ kind: 'power', action: 'reboot' }]);
-  assert.ok(runs.some((entry) => entry.sql.includes('SET status=?') && entry.params[0] === 'succeeded' && entry.params[1] === 'OTA_REBOOT_REQUESTED'));
+  assert.deepEqual(controls, []);
+  assert.ok(runs.some((entry) => entry.sql.includes('SET status=?') && entry.params[0] === 'succeeded' && entry.params[1] === 'OTA_REBOOTING'));
 });
 
 test('gateway streams a multi-chunk OTA image in order after the device requests an offset', async () => {
@@ -1105,7 +1140,7 @@ test('gateway streams a multi-chunk OTA image in order after the device requests
     [11, { event: { kind: 'file_list', requestStart: 0, totalCount: 0, batchOffset: 0, files: [] } }],
     [12, { event: { kind: 'ota_check', result: 0 } }],
     [13, { event: { kind: 'ota_transfer_request', offset: 0 } }],
-    [14, { event: { kind: 'ota_status', result: 0 } }],
+    [14, { event: { kind: 'ota_status', result: 2 } }],
   ]);
   const core: GatewayProtocolCore = {
     createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
@@ -1129,6 +1164,6 @@ test('gateway streams a multi-chunk OTA image in order after the device requests
   ]);
   assert.deepEqual(controls, []);
   socket.emit('message', Uint8Array.of(14)); await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(controls, [{ kind: 'power', action: 'reboot' }]);
-  assert.ok(runs.some((entry) => entry.sql.includes('SET status=?') && entry.params[0] === 'succeeded' && entry.params[1] === 'OTA_REBOOT_REQUESTED'));
+  assert.deepEqual(controls, []);
+  assert.ok(runs.some((entry) => entry.sql.includes('SET status=?') && entry.params[0] === 'succeeded' && entry.params[1] === 'OTA_REBOOTING'));
 });

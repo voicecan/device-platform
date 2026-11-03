@@ -41,7 +41,7 @@ try {
   const node = await import(pathToFileURL(resolve(inspection, 'package/private/node/semantic_core.cjs')).href);
   if (Object.keys(browser).sort().join(',') !== 'default,loadSemanticCore') throw new Error(`BROWSER_CORE_EXPORT_SURFACE_INVALID: ${Object.keys(browser).join(',')}`);
   const nodeExports = Object.keys(node).filter((name) => !['default', 'module.exports'].includes(name)).sort().join(',');
-  if (nodeExports !== 'loadSemanticCore,loadSemanticGatewayCore') throw new Error(`NODE_CORE_EXPORT_SURFACE_INVALID: ${nodeExports}`);
+  if (nodeExports !== 'loadSemanticCore,loadSemanticGatewayCore,prepareSemanticFirmware') throw new Error(`NODE_CORE_EXPORT_SURFACE_INVALID: ${nodeExports}`);
 } finally {
   await rm(inspection, { recursive: true, force: true });
 }

@@ -66,9 +66,7 @@ export async function connectBoundDevice(input: { rawToken: Uint8Array; expected
       configureWifi: async (configuration): Promise<DeviceStatus> => { await activeSession.configureWifi(configuration); return refresh(); },
       configureServer: async (wssUrl): Promise<void> => { await activeSession.configureServer({ wssUrl, token: serverToken }); },
       installFirmware: async (firmware, onProgress, signal): Promise<FirmwareInstallResult> => {
-        const result = await activeSession.installFirmware(firmware, onProgress, signal);
-        if (result === 'validated') await activeSession.power('reboot', signal);
-        return result;
+        return activeSession.installFirmware(firmware, onProgress, signal);
       },
       close: async () => { try { await activeSession.close(); } finally { serverToken.fill(0); } },
     };

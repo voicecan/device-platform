@@ -214,9 +214,9 @@ components:
           properties:
             kind: { const: recording_mode }
             mode: { type: string, enum: [smart_capture, lookback] }
-            microphoneMode: { type: integer, enum: [0, 1, 2] }
+            microphoneMode: { type: integer, enum: [0, 1, 2, 3] }
             microphoneGainDb: { type: integer, minimum: 0, maximum: 31 }
-            lookbackSeconds: { type: integer, minimum: 0, maximum: 15, default: 0, description: Must be zero or omitted for smart_capture. }
+            lookbackDurationIndex: { type: integer, minimum: 0, maximum: 3, default: 0, description: Firmware duration selection (no seconds mapping). Must be zero or omitted for smart_capture. }
         - type: object
           additionalProperties: false
           required: [kind, interval]

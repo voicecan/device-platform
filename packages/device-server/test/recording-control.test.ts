@@ -14,9 +14,11 @@ import { migrate } from '../src/migrate.js';
 test('recording API accepts semantic operations and rejects invalid mode configuration', () => {
   for (const action of ['start', 'pause', 'resume', 'stop', 'highlight', 'preserve']) assert.deepEqual(parseDeviceControl({ kind: 'recording', action }), { kind: 'recording', action });
   const mode = { kind: 'recording_mode', mode: 'lookback', microphoneMode: 2, microphoneGainDb: 31 };
-  assert.deepEqual(parseDeviceControl(mode), { ...mode, lookbackSeconds: 0 });
+  assert.deepEqual(parseDeviceControl(mode), { ...mode, lookbackDurationIndex: 0 });
+  assert.deepEqual(parseDeviceControl({ ...mode, microphoneMode: 3, lookbackDurationIndex: 3 }), { ...mode, microphoneMode: 3, lookbackDurationIndex: 3 });
+  assert.equal(parseDeviceControl({ ...mode, lookbackSeconds: 3 }), null);
   for (const invalid of [{ action: 'erase' }, { action: null }, { action: ['start'] }]) assert.equal(parseDeviceControl({ kind: 'recording', ...invalid }), null);
-  for (const invalid of [{ microphoneMode: '2' }, { microphoneMode: 3 }, { microphoneGainDb: -1 }, { microphoneGainDb: 32 }, { microphoneGainDb: 1.5 }, { lookbackSeconds: null }, { lookbackSeconds: 16 }, { mode: 'smart_capture', lookbackSeconds: 1 }]) assert.equal(parseDeviceControl({ ...mode, ...invalid }), null);
+  for (const invalid of [{ microphoneMode: '2' }, { microphoneMode: 4 }, { microphoneGainDb: -1 }, { microphoneGainDb: 32 }, { microphoneGainDb: 1.5 }, { lookbackDurationIndex: null }, { lookbackDurationIndex: 4 }, { mode: 'smart_capture', lookbackDurationIndex: 1 }]) assert.equal(parseDeviceControl({ ...mode, ...invalid }), null);
 });
 
 test('recording HTTP controls keep authorization, idempotency and command polling contracts', async (t) => {
@@ -51,7 +53,7 @@ test('recording HTTP controls keep authorization, idempotency and command pollin
   const mode = { kind: 'recording_mode', mode: 'lookback', microphoneMode: 2, microphoneGainDb: 17 };
   const modeReply = await app.inject({ method: 'POST', url, headers: { ...headers, 'idempotency-key': 'recording-mode' }, payload: { control: mode, reason: 'Recording card mode test' } });
   assert.equal(modeReply.statusCode, 202, modeReply.body);
-  assert.deepEqual(modeReply.json().data.control, { ...mode, lookbackSeconds: 0 });
+  assert.deepEqual(modeReply.json().data.control, { ...mode, lookbackDurationIndex: 0 });
   const invalid = await app.inject({ method: 'POST', url, headers: { ...headers, 'idempotency-key': 'invalid-recording-mode' }, payload: { control: { ...mode, microphoneGainDb: 32 }, reason: 'Invalid mode' } });
   assert.equal(invalid.statusCode, 400, invalid.body);
   assert.equal(invalid.json().code, 'INVALID_DEVICE_CONTROL');
@@ -91,6 +93,7 @@ test('recording gateway confirms commands, retains session IDs in events, and re
     [12, { kind: 'device_command_result', command: 'recording', result: 0, sessionId: 0 }],
     [13, status],
     [14, { kind: 'device_command_result', command: 'recording', result: 5 }],
+    [15, { kind: 'device_command_result', command: 'recording', result: 0, sessionId: 42, action: 'stop' }],
   ]);
   const core: GatewayProtocolCore = {
     createBindRequest: () => Uint8Array.of(1), requestFileList: () => Uint8Array.of(2), requestFileTransfer: () => Uint8Array.of(3), requestTimeSync: () => Uint8Array.of(4),
@@ -104,6 +107,8 @@ test('recording gateway confirms commands, retains session IDs in events, and re
     socket.emit('message', Uint8Array.of(10)); socket.emit('message', Uint8Array.of(11)); await flush();
     assert.equal(await gateway.dispatchControl('dev-1', 'cmd-1', { kind: 'recording', action: 'start' }), true); await flush();
     assert.deepEqual(controls, [{ kind: 'recording', action: 'start' }]);
+    socket.emit('message', Uint8Array.of(15)); await flush();
+    assert.ok(!runs.some(({ sql }) => sql.includes('UPDATE commands SET status=?')), 'a physical stop cannot acknowledge a pending start');
     socket.emit('message', Uint8Array.of(12)); await flush();
     assert.ok(emitted.some((event) => event.kind === 'command.succeeded' && event.data.session_id === 0 && event.data.device_result === 0));
     assert.equal(socket.sent.at(-1)?.[0], 6, 'acknowledgement triggers a fresh status query');

@@ -5,9 +5,9 @@ export type RecordingControlCommand = { id: string; status: string; error_code: 
 export function recordingModeControl(mode: 'smart_capture' | 'lookback', status: { microphone_mode: number | null; microphone_gain_db: number | null }): DeviceControl {
   const microphoneMode = status.microphone_mode;
   const microphoneGainDb = status.microphone_gain_db;
-  if (microphoneMode === null || ![0, 1, 2].includes(microphoneMode) ||
+  if (microphoneMode === null || ![0, 1, 2, 3].includes(microphoneMode) ||
       microphoneGainDb === null || !Number.isInteger(microphoneGainDb) || microphoneGainDb < 0 || microphoneGainDb > 31) throw new Error('RECORDING_SETTINGS_UNAVAILABLE');
-  return { kind: 'recording_mode', mode, microphoneMode: microphoneMode as 0 | 1 | 2, microphoneGainDb };
+  return { kind: 'recording_mode', mode, microphoneMode: microphoneMode as 0 | 1 | 2 | 3, microphoneGainDb };
 }
 
 export function recordingResultMessage(code: string, modeChange = false): string {

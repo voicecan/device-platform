@@ -185,6 +185,7 @@ class WebBluetoothTransport implements ProtocolTransport {
   #nextExchangeId = 0;
   #closed = false;
   #receiveTail: Promise<void> = Promise.resolve();
+  #writeTail: Promise<void> = Promise.resolve();
   readonly #notificationListener = (event: Event) => {
     const view = (event as BluetoothValueEvent).target?.value;
     if (!view) { deviceDebug('BLE RX notification has no value', { exchange_id: this.#pending?.exchangeId ?? null, command_pending: Boolean(this.#pending) }); return; }
@@ -218,7 +219,7 @@ class WebBluetoothTransport implements ProtocolTransport {
       if (this.#pending !== pending) return;
       pending.frames.push(frame); pending.current = new Uint8Array();
       clearTimeout(pending.timer); pending.timer = setTimeout(() => this.#fail(new DeviceSdkError('COMMAND_TIMEOUT', 'Bluetooth command timed out')), this.timeoutMs);
-      if (interaction.response) { deviceDebug('BLE TX interactive frame', { exchange_id: pending.exchangeId, bytes: interaction.response.byteLength }); await this.writer.writeValueWithoutResponse(Uint8Array.from(interaction.response).buffer); }
+      if (interaction.response) { deviceDebug('BLE TX interactive frame', { exchange_id: pending.exchangeId, bytes: interaction.response.byteLength }); await this.write(interaction.response); }
       deviceDebug('BLE RX protocol frame accepted', { exchange_id: pending.exchangeId, response_frame_index: pending.frames.length, bytes: frame.byteLength, response_complete: interaction.complete });
       if (interaction.complete) { this.#pending = null; clearTimeout(pending.timer); deviceDebug('BLE response completed', { exchange_id: pending.exchangeId, frames: pending.frames.length, notifications: pending.notificationCount, bytes: pending.frames.reduce((total, item) => total + item.byteLength, 0) }); pending.resolve(pending.frames); }
     } catch (error) {
@@ -234,25 +235,39 @@ class WebBluetoothTransport implements ProtocolTransport {
   async collect(request: Uint8Array, complete: (response: Uint8Array) => boolean, signal?: AbortSignal): Promise<Uint8Array[]> {
     return this.interact(request, async (response) => ({ complete: complete(response) }), signal);
   }
+  write(request: Uint8Array, signal?: AbortSignal): Promise<void> {
+    const run = this.#writeTail.then(async () => {
+      signal?.throwIfAborted();
+      if (this.#closed || this.device.gatt?.connected === false) throw new DeviceSdkError('DEVICE_DISCONNECTED', 'Bluetooth device disconnected');
+      await this.writer.writeValueWithoutResponse(Uint8Array.from(request).buffer);
+      if (this.#pending) {
+        clearTimeout(this.#pending.timer);
+        this.#pending.timer = setTimeout(() => this.#fail(new DeviceSdkError('COMMAND_TIMEOUT', 'Bluetooth command timed out')), this.timeoutMs);
+      }
+    });
+    this.#writeTail = run.catch(() => undefined);
+    return run;
+  }
   async interact(request: Uint8Array, consume: (response: Uint8Array) => ProtocolInteraction | Promise<ProtocolInteraction>, signal?: AbortSignal): Promise<Uint8Array[]> {
     if (this.#closed || this.device.gatt?.connected === false) throw new DeviceSdkError('DEVICE_DISCONNECTED', 'Bluetooth device disconnected');
     if (this.#pending) throw new DeviceSdkError('COMMAND_PENDING', 'A Bluetooth command is already in flight');
     signal?.throwIfAborted();
     const exchangeId = ++this.#nextExchangeId;
+    const onAbort = () => { if (this.#pending?.exchangeId === exchangeId) this.#fail(new DeviceSdkError('COMMAND_ABORTED', 'Bluetooth command was aborted')); };
     const result = new Promise<Uint8Array[]>((resolve, reject) => {
       const timer = setTimeout(() => this.#fail(new DeviceSdkError('COMMAND_TIMEOUT', 'Bluetooth command timed out')), this.timeoutMs);
       this.#pending = { exchangeId, notificationCount: 0, frames: [], current: new Uint8Array(), consume: async (response) => consume(response), resolve, reject, timer };
-      signal?.addEventListener('abort', () => this.#fail(new DeviceSdkError('COMMAND_ABORTED', 'Bluetooth command was aborted')), { once: true });
+      signal?.addEventListener('abort', onAbort, { once: true });
     });
     try {
       deviceDebug('BLE TX frame', { exchange_id: exchangeId, bytes: request.byteLength });
-      await this.writer.writeValueWithoutResponse(Uint8Array.from(request).buffer);
+      await this.write(request, signal);
       deviceDebug('BLE TX frame written', { exchange_id: exchangeId, bytes: request.byteLength });
     } catch (error) {
       deviceDebug('BLE TX frame write failed', { exchange_id: exchangeId, bytes: request.byteLength, ...bluetoothErrorDetails(error) });
       this.#fail(error instanceof Error ? error : new Error(String(error)));
     }
-    return result;
+    return result.finally(() => signal?.removeEventListener('abort', onAbort));
   }
   async exchange(request: Uint8Array, signal?: AbortSignal): Promise<Uint8Array> {
     const frames = await this.collect(request, () => true, signal);
@@ -437,7 +452,7 @@ export class WebBluetoothTransportFactory implements DeviceTransportFactory {
       phase = 'ready';
       deviceDebug('BLE notifications enabled', { elapsed_ms: Date.now() - startedAt, server_connected: server.connected ?? 'unknown' });
       deviceDebug('GATT initialization completed', { elapsed_ms: Date.now() - startedAt, device_name: device.name ?? 'unknown', device_id: device.id ?? 'unavailable' });
-      return new WebBluetoothTransport(device, writer, reader, this.options.timeoutMs ?? 15_000, this.options.onDisconnected);
+      return new WebBluetoothTransport(device, writer, reader, this.options.timeoutMs ?? 30_000, this.options.onDisconnected);
     } finally {
       device.removeEventListener('gattserverdisconnected', initializationDisconnectListener);
     }
