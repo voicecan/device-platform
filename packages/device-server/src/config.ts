@@ -38,6 +38,7 @@ export type ServerConfig = {
   allowPrivateWebhooks: boolean;
   allowHttpWebhooks: boolean;
   simulatorEnabled: boolean;
+  viewerAllowPasswordChange: boolean;
   storageDriver: 'filesystem_http' | 's3_direct' | 'server_relay';
   maxFileBytes: number;
   maxStorageBytes: number;
@@ -251,6 +252,8 @@ export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): 
     if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) throw new Error('VOICECAN_DATABASE_URL must use postgres:// or postgresql://');
   }
   const bootstrapSetupToken = environment.VOICECAN_SETUP_TOKEN?.trim();
+  const viewerPasswordSetting = environment.VOICECAN_VIEWER_ALLOW_PASSWORD_CHANGE ?? 'true';
+  if (!['true', 'false'].includes(viewerPasswordSetting)) throw new Error('VOICECAN_VIEWER_ALLOW_PASSWORD_CHANGE must be true or false');
   if (bootstrapSetupToken !== undefined && bootstrapSetupToken.length < 32) throw new Error('VOICECAN_SETUP_TOKEN must contain at least 32 characters');
   const downloadGrantDefaultTtlSeconds = integer('VOICECAN_DOWNLOAD_GRANT_DEFAULT_TTL_SECONDS', 300);
   const downloadGrantMinTtlSeconds = integer('VOICECAN_DOWNLOAD_GRANT_MIN_TTL_SECONDS', 60);
@@ -317,6 +320,7 @@ export async function loadConfig(environment: NodeJS.ProcessEnv = process.env): 
     allowPrivateWebhooks,
     allowHttpWebhooks,
     simulatorEnabled: environment.VOICECAN_SIMULATOR === 'true',
+    viewerAllowPasswordChange: viewerPasswordSetting === 'true',
     storageDriver,
     maxFileBytes: integer('VOICECAN_MAX_FILE_BYTES', 2 * 1024 * 1024 * 1024),
     maxStorageBytes: integer('VOICECAN_MAX_STORAGE_BYTES', 100 * 1024 * 1024 * 1024),

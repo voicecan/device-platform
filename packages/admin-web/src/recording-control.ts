@@ -2,6 +2,18 @@ import type { DeviceControl } from '@voicecan/device-connect-web';
 
 export type RecordingControlCommand = { id: string; status: string; error_code: string | null };
 
+/** The pinned Core preview.22 supports start-only automatic segmentation. */
+export const recordingSegmentDurationSupported = true;
+export const recordingSegmentOptions = [0, 15, 30, 45, 60] as const;
+
+export function recordingSegmentLabel(minutes: number): string {
+  return minutes === 0 ? 'Unlimited' : `${minutes} minutes`;
+}
+
+export function recordingPrimaryControl(action: 'start' | 'resume' | 'stop', maxDurationMinutes = 0): DeviceControl {
+  return action === 'start' ? { kind: 'recording', action, maxDurationMinutes } : { kind: 'recording', action };
+}
+
 export function recordingModeControl(mode: 'smart_capture' | 'lookback', status: { microphone_mode: number | null; microphone_gain_db: number | null }): DeviceControl {
   const microphoneMode = status.microphone_mode;
   const microphoneGainDb = status.microphone_gain_db;

@@ -108,6 +108,8 @@ export async function migratePostgres(connectionString: string): Promise<void> {
       await client.query('BEGIN');
       try {
         await client.query(postgresSchema());
+        await client.query(`ALTER TABLE group_memberships DROP CONSTRAINT IF EXISTS group_memberships_role_check;
+          ALTER TABLE group_memberships ADD CONSTRAINT group_memberships_role_check CHECK (role IN ('group_admin','member','viewer'));`);
         await client.query(`ALTER TABLE recording_files
           ADD COLUMN IF NOT EXISTS legal_hold BIGINT NOT NULL DEFAULT 0 CHECK (legal_hold IN (0,1)),
           ADD COLUMN IF NOT EXISTS legal_hold_reason TEXT,

@@ -11,7 +11,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         entryFileNames: 'app.js',
-        assetFileNames: 'style.css',
+        assetFileNames: (assetInfo) => assetInfo.name?.endsWith('.wasm') ? 'lc3-wasm.wasm' : 'style.css',
         inlineDynamicImports: true,
       },
     },

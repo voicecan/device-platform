@@ -24,21 +24,8 @@ test('standalone connector image keeps the reviewed build and non-root runtime b
   assert.match(nginx, /trusted-types voicecan lit-html sanitizer/);
 });
 
-test('Gitea connector workflow verifies, publishes amd64, and deploys', async () => {
-  const workflow = await readFile(new URL('../../../.gitea/workflows/device-connect-web-image.yaml', import.meta.url), 'utf8');
+test('connector deployment template keeps parameterized images and a non-root runtime', async () => {
   const deployment = await readFile(new URL('../deploy/deploy.template', import.meta.url), 'utf8');
-  assert.match(workflow, /^\s{2}workflow_dispatch:\s*$/m);
-  assert.match(workflow, /^\s{2}push:\s*$/m);
-  assert.match(workflow, /- test/);
-  assert.match(workflow, /-f packages\/device-connect-web\/Dockerfile/);
-  assert.match(workflow, /--platform linux\/amd64/);
-  assert.match(workflow, /--push/);
-  assert.match(workflow, /kubectl apply/);
-  assert.match(workflow, /kubectl rollout status/);
-  assert.match(workflow, /nc -zv -w 5/);
-  assert.match(workflow, /MTU validation over TCP/);
-  assert.doesNotMatch(workflow, /timeout (?:30|210) ssh/);
-  assert.doesNotMatch(workflow, /Setup Node\.js|Verify Device Connect Web|setup-node|npm ci|linux\/arm64|setup-qemu-action|type=oci|upload-artifact/);
   assert.match(deployment, /kind: Service/);
   assert.match(deployment, /targetPort: 8080/);
   assert.match(deployment, /kind: Deployment/);

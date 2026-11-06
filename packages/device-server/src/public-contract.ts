@@ -18,31 +18,34 @@ function positiveInteger(value: unknown): number | null {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
-export function reviewedRecordingMedia(device: Row): RecordingMediaDescriptor {
+const LC3_MEDIA: RecordingMediaDescriptor = {
+  schema_version: 'recording.media.v1',
+  container: 'lc3',
+  codec: 'lc3',
+  content_type: 'audio/lc3',
+  filename_extension: 'lc3',
+  sample_rate_hz: null,
+  channels: null,
+  bit_depth: null,
+  duration_ms: null,
+  encoding_profile: 'voicecan-lc3-v1',
+  source: 'firmware_mapping',
+};
+
+export function reviewedRecordingMedia(device: Row, attribute?: number): RecordingMediaDescriptor {
+  if (attribute === 0) return LC3_MEDIA;
   const model = nullableString(device.model)?.toUpperCase();
   const firmware = nullableString(device.firmware_version);
-  if (model === 'CAPSO' && firmware && /^v?0\.5\./.test(firmware)) {
-    return {
-      schema_version: 'recording.media.v1',
-      container: 'lc3',
-      codec: 'lc3',
-      content_type: 'audio/lc3',
-      filename_extension: 'lc3',
-      sample_rate_hz: null,
-      channels: null,
-      bit_depth: null,
-      duration_ms: null,
-      encoding_profile: 'voicecan-lc3-v1',
-      source: 'firmware_mapping',
-    };
-  }
+  if (model === 'CAPSO' && firmware && /^v?0\.5\./.test(firmware)) return LC3_MEDIA;
   return { schema_version: 'recording.media.v1', container: null, codec: null, content_type: 'application/octet-stream', filename_extension: 'bin', sample_rate_hz: null, channels: null, bit_depth: null, duration_ms: null, encoding_profile: null, source: 'unknown' };
 }
 
 export function recordingMedia(row: Row): RecordingMediaDescriptor {
+  const explicitContainer = nullableString(row.media_container);
+  if (!explicitContainer && Number(row.attribute) === 0) return LC3_MEDIA;
   return {
     schema_version: 'recording.media.v1',
-    container: nullableString(row.media_container),
+    container: explicitContainer,
     codec: nullableString(row.media_codec),
     content_type: nullableString(row.media_content_type) ?? 'application/octet-stream',
     filename_extension: nullableString(row.media_filename_extension) ?? 'bin',

@@ -48,10 +48,12 @@ test('independent server setup, immutable upload, group isolation and device tra
     assert.equal(asset.statusCode, 200, `${url}: ${asset.body}`);
     assert.equal(asset.headers['cache-control'], 'no-store', `${url} must not serve stale unversioned runtime code`);
   }
-  for (const url of ['/admin', '/admin/app.js', '/admin/style.css']) {
+  for (const url of ['/admin', '/admin/app.js', '/admin/style.css', '/admin/lc3-wasm.wasm']) {
     const asset = await app.inject({ method: 'GET', url });
     assert.equal(asset.statusCode, 200, `${url}: ${asset.body}`);
   }
+  const wasmAsset = await app.inject({ method: 'GET', url: '/admin/lc3-wasm.wasm' });
+  assert.equal(wasmAsset.headers['content-type'], 'application/wasm');
   const root = await app.inject({ method: 'GET', url: '/' });
   assert.equal(root.statusCode, 302);
   assert.equal(root.headers.location, '/admin');

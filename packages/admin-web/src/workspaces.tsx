@@ -6,7 +6,7 @@ import { api, errorMessage } from './api.js';
 import { EmbeddedDeviceProvisioner, RemoteDeviceProvisioner } from './device-integration.js';
 import type { StartRemoteProvisioning } from './device-integration.js';
 import type { Locale } from './i18n.js';
-import { Button, collectionOf, DataTable, Field, FlowHeader, Icon, ResourcePicker, Stepper } from './ui.js';
+import { Button, ReadOnlyActions, collectionOf, DataTable, Field, FlowHeader, Icon, ResourcePicker, Stepper } from './ui.js';
 import type { DeviceWsCandidate, Translate } from './ui.js';
 import { NativeHandoffPanel } from './native-handoff-panel.js';
 import { BindingPreparation } from './binding-preparation.js';
@@ -45,8 +45,10 @@ function Tabs({ options, value, onChange, t }: { options: readonly string[]; val
 
 function Actions({ children }: { children: ReactNode }) { return <div className="form-actions">{children}</div>; }
 
-export function AdminWorkspace({ view, t, run, locale, onNavigateDevice, canExportBackup, headerActions, isSystemAdmin, isGroupAdmin }: { view: View; t: Translate; run: Runner; locale: Locale; onNavigateDevice: (deviceId: string) => void; canExportBackup: boolean; headerActions: HTMLElement | null; isSystemAdmin: boolean; isGroupAdmin: boolean }) {
-  if (view === 'open-platform') return <OpenPlatformWorkspace t={t} run={run} />;
+function WorkspaceContent({ view, t, run, locale, onNavigateDevice, canExportBackup, headerActions, isSystemAdmin, isGroupAdmin, readOnly = false }: { view: View; t: Translate; run: Runner; locale: Locale; onNavigateDevice: (deviceId: string) => void; canExportBackup: boolean; headerActions: HTMLElement | null; isSystemAdmin: boolean; isGroupAdmin: boolean; readOnly?: boolean }) {
+  if (readOnly && (view === 'groups' || view === 'users')) return <ReadOnlyDirectory view={view} t={t}/>;
+  if (readOnly && view === 'provision') return <BindingPreview t={t}/>;
+  if (view === 'open-platform') return <OpenPlatformWorkspace t={t} run={run} readOnly={readOnly}/>;
   if (view === 'groups') return isSystemAdmin || isGroupAdmin ? <GroupsWorkspace t={t} run={run} isSystemAdmin={isSystemAdmin}/> : <div className="inline-alert inline-alert-error">{t('Group Administrator access is required.')}</div>;
   if (view === 'users') return isSystemAdmin ? <UsersWorkspace t={t} run={run} /> : <div className="inline-alert inline-alert-error">{t('System Administrator access is required.')}</div>;
   if (view === 'provision') return <ProvisionWorkspace headerActions={headerActions} t={t} run={run} locale={locale} onNavigateDevice={onNavigateDevice} canExportBackup={canExportBackup} />;
@@ -55,6 +57,42 @@ export function AdminWorkspace({ view, t, run, locale, onNavigateDevice, canExpo
   if (view === 'storage') return <StorageWorkspace t={t} run={run} />;
   if (view === 'security-alerts') return <SecurityAlertsWorkspace t={t} run={run} />;
   return null;
+}
+
+export function AdminWorkspace(props: Parameters<typeof WorkspaceContent>[0]) {
+  return <ReadOnlyActions.Provider value={props.readOnly ? props.t('Read-only access: changes and credential creation are disabled.') : null}><WorkspaceContent {...props}/></ReadOnlyActions.Provider>;
+}
+
+function ReadOnlyDirectory({ view, t }: { view: 'groups' | 'users'; t: Translate }) {
+  const [data, setData] = useState<unknown>();
+  const [members, setMembers] = useState<unknown>();
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    void api(view === 'groups' ? '/user-groups' : '/users').then(async (value) => {
+      if (!active) return;
+      setData(value);
+      const group = collectionOf(value)[0];
+      if (view === 'groups' && group) {
+        const rows = await api(`/user-groups/${encodeURIComponent(String(group.id))}/members`);
+        if (active) setMembers(rows);
+      }
+    }).catch((cause) => { if (active) setError(errorMessage(cause)); });
+    return () => { active = false; };
+  }, [view]);
+  return <div className="operation-layout">{error ? <p role="alert" className="inline-alert inline-alert-error">{error}</p> : null}<section className="content-card"><h2>{t(labels[view])}</h2><p>{t('Only active members of your own group are visible. Access changes require an administrator.')}</p><DataTable data={data} t={t}/></section>{view === 'groups' ? <section className="content-card"><h2>{t('Manage members')}</h2><DataTable data={members} t={t}/><Button disabled>{t('Save member role')}</Button></section> : null}</div>;
+}
+
+function BindingPreview({ t }: { t: Translate }) {
+  const [step, setStep] = useState(0);
+  const steps = ['Select device', 'Configure Wi-Fi', 'Confirm connection', 'Device connected'];
+  const descriptions = [
+    'Choose Web Bluetooth or the native app to discover a nearby recorder and confirm its identity.',
+    'Choose an existing network or provide Wi-Fi settings over the local Bluetooth connection.',
+    'The server confirms device ownership and the authenticated device connection before completing binding.',
+    'Open device details to inspect status, recording controls, synchronization and firmware management.',
+  ];
+  return <div className="flow-layout"><FlowHeader eyebrow={t('Bind device')} title={t('Device binding preview')} description={t('Explore the binding steps without connecting hardware or creating a provisioning session.')} icon="provision"/><Stepper steps={steps} current={step} t={t}/><section className="operation-card"><Tabs options={steps} value={steps[step]!} onChange={(value) => setStep(steps.indexOf(value))} t={t}/><h2>{t(steps[step]!)}</h2><p>{t(descriptions[step]!)}</p><div className="form-actions"><Button readOnlySafe kind="secondary" disabled={step === 0} onClick={() => setStep(step - 1)}>{t('Previous')}</Button><Button readOnlySafe disabled={step === steps.length - 1} onClick={() => setStep(step + 1)}>{t('Next')}</Button><Button disabled>{t('Bind device')}</Button></div></section></div>;
 }
 
 type SecurityAlert = Record<string, unknown> & { id: string; application_id?: string | null; severity?: string; code?: string; status?: string; details_json?: string; created_at?: string; resolved_at?: string | null };
@@ -117,8 +155,8 @@ function SecurityAlertsWorkspace({ t, run }: { t: Translate; run: Runner }) {
       {notice ? <p role="status" className="inline-alert inline-alert-success">{notice}</p> : null}
     </section>
     <section className="content-card">
-      <header className="fleet-heading"><div><h2>{t('Security alerts')}</h2><p>{t('{count} open alerts', { count: open ?? 0 })}</p></div><Button kind="ghost" icon="refresh" disabled={loading} onClick={() => void load()}>{t('Refresh')}</Button></header>
-      {error ? <div className="inline-alert inline-alert-error" role="alert"><p>{error}</p><Button kind="secondary" onClick={() => void load()}>{t('Try again')}</Button></div> : null}
+      <header className="fleet-heading"><div><h2>{t('Security alerts')}</h2><p>{t('{count} open alerts', { count: open ?? 0 })}</p></div><Button readOnlySafe kind="ghost" icon="refresh" disabled={loading} onClick={() => void load()}>{t('Refresh')}</Button></header>
+      {error ? <div className="inline-alert inline-alert-error" role="alert"><p>{error}</p><Button readOnlySafe kind="secondary" onClick={() => void load()}>{t('Try again')}</Button></div> : null}
       {loading && !alerts.length ? <div className="loading-panel" role="status"><span className="spinner"/><span>{t('Loading security alerts…')}</span></div> : alerts.length ? <div className="fleet-table-wrap"><table className="data-table security-alert-table"><thead><tr>{['Severity','Code','Application','Created','Status','Actions'].map((label) => <th key={label}>{t(label)}</th>)}</tr></thead><tbody>{alerts.map((alert) => <tr key={String(alert.id)}>
         <td data-label={t('Severity')}><span className={`status-pill ${alertSeverityClass(alert.severity)}`}>{t(String(alert.severity ?? 'warning'))}</span></td>
         <td data-label={t('Code')}><strong>{String(alert.code ?? '—')}</strong><small className="security-alert-details">{alertDetails(alert.details_json)}</small></td>
@@ -138,11 +176,12 @@ function GroupsWorkspace({ t, run, isSystemAdmin }: { t: Translate; run: Runner;
   const [userId, setUserId] = useState('');
   const [name, setName] = useState('');
   const [status, setStatus] = useState('active');
+  const [membershipRole, setMembershipRole] = useState('member');
   const [reason, setReason] = useState('');
   return <div className="operation-layout"><Tabs options={actions} value={action} onChange={setAction} t={t}/><div className="operation-card"><form className="form-grid" onSubmit={(event) => event.preventDefault()}>
     {isSystemAdmin && action === 'Create group' ? <><Field id="group-name" label={t('Group name')} value={name} onChange={setName} required/><ResourcePicker id="group-admin-user" label={t('Initial Group Admin')} endpoint="/users" value={userId} onChange={setUserId} t={t} required/><Actions><Button id="create-group" icon="group" onClick={() => void run(() => api('/user-groups', { method: 'POST', body: JSON.stringify({ name: name.trim(), group_admin_user_id: userId }) }))}>{t('Create group')}</Button></Actions></> : null}
     {isSystemAdmin && action === 'Update group' ? <><ResourcePicker id="group-id" label={t('Group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required/><Field id="group-name" label={t('New group name')} value={name} onChange={setName}/><Field id="group-status" label={t('Status')} value={status} onChange={setStatus} options={[{ value: 'active', label: t('active') }, { value: 'archived', label: t('archived') }]}/><Actions><Button id="update-group" onClick={() => void run(() => api(`/user-groups/${encodeURIComponent(groupId)}`, { method: 'PATCH', body: JSON.stringify({ ...(name.trim() ? { name: name.trim() } : {}), status }) }))}>{t('Update group')}</Button></Actions></> : null}
-    {action === 'Manage members' ? <><ResourcePicker id="group-id" label={t('Group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required/><ResourcePicker id="group-member-user" label={t('User')} endpoint="/users" value={userId} onChange={setUserId} t={t} required/><Actions><Button id="add-member" onClick={() => void run(() => api(`/user-groups/${encodeURIComponent(groupId)}/members`, { method: 'PUT', body: JSON.stringify({ user_id: userId }) }))}>{t('Add member')}</Button><Button id="remove-member" kind="danger" onClick={() => { if (globalThis.confirm(t('Remove this member from the group?'))) void run(() => api(`/user-groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE', body: '{}' })); }}>{t('Remove member')}</Button></Actions></> : null}
+    {action === 'Manage members' ? <><ResourcePicker id="group-id" label={t('Group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required/><ResourcePicker id="group-member-user" label={t('User')} endpoint="/users" value={userId} onChange={setUserId} t={t} required/><Field id="membership-role" label={t('Group role')} value={membershipRole} onChange={setMembershipRole} options={[{ value: 'member', label: t('member') }, { value: 'viewer', label: t('viewer') }]}/><Actions><Button id="add-member" onClick={() => void run(() => api(`/user-groups/${encodeURIComponent(groupId)}/members`, { method: 'PUT', body: JSON.stringify({ user_id: userId, role: membershipRole }) }))}>{t('Save member role')}</Button><Button id="remove-member" kind="danger" onClick={() => { if (globalThis.confirm(t('Remove this member from the group?'))) void run(() => api(`/user-groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE', body: '{}' })); }}>{t('Remove member')}</Button></Actions></> : null}
     {action === 'Transfer administrator' ? <><ResourcePicker id="group-id" label={t('Group')} endpoint="/user-groups" value={groupId} onChange={setGroupId} t={t} required/><ResourcePicker id="group-member-user" label={t('New Group Admin')} endpoint="/users" value={userId} onChange={setUserId} t={t} required/><Field id="group-transfer-reason" label={t('Transfer reason')} value={reason} onChange={setReason} wide required/><div className="impact-note field-wide"><strong>{t('High-impact operation')}</strong><p>{t('The selected user will become the new Group Admin. This action is recorded in the audit log.')}</p></div><Actions><Button id="transfer-group-admin" kind="danger" onClick={() => { if (globalThis.confirm(t('Transfer Group Admin now?'))) void run(() => api(`/user-groups/${encodeURIComponent(groupId)}/transfer-admin`, { method: 'POST', body: JSON.stringify({ user_id: userId, reason: reason.trim() }) })); }}>{t('Transfer Group Admin')}</Button></Actions></> : null}
   </form></div><Button id="list-groups" kind="ghost" icon="refresh" onClick={() => void run(() => api('/user-groups'))}>{t('Refresh groups')}</Button></div>;
 }
@@ -333,6 +372,7 @@ function ProvisionWorkspace({ t, run, locale, onNavigateDevice, canExportBackup,
 }
 
 type StorageState = {
+  scope?: 'group' | 'platform';
   driver: 'filesystem_http' | 'server_relay' | 's3_direct';
   driver_source: 'deployment_environment';
   driver_change_requires_restart: boolean;
@@ -383,7 +423,7 @@ function StorageWorkspace({ t, run }: { t: Translate; run: Runner }) {
   };
   useEffect(() => { void refresh(); }, []);
   if (loading && !state) return <div className="loading-panel" role="status"><span className="spinner"/><span>{t('Loading storage configuration…')}</span></div>;
-  if (!state) return <div className="error-panel" role="alert"><span className="error-mark">!</span><div><strong>{t('Storage configuration could not be loaded')}</strong><p>{loadError}</p><Button kind="secondary" icon="refresh" onClick={() => void refresh()}>{t('Try again')}</Button></div></div>;
+  if (!state) return <div className="error-panel" role="alert"><span className="error-mark">!</span><div><strong>{t('Storage configuration could not be loaded')}</strong><p>{loadError}</p><Button readOnlySafe kind="secondary" icon="refresh" onClick={() => void refresh()}>{t('Try again')}</Button></div></div>;
   const logicalUsage = state.max_storage_bytes > 0 ? state.stored_bytes / state.max_storage_bytes : 0;
   const physicalUsage = state.capacity?.usedRatio ?? null;
   const displayUsage = Math.max(0, Math.min(1, logicalUsage));
@@ -403,15 +443,15 @@ function StorageWorkspace({ t, run }: { t: Translate; run: Runner }) {
     {loadError ? <div className="inline-alert inline-alert-error" role="alert">{loadError}</div> : null}
     <section className="storage-overview-grid">
       <article className="content-card storage-capacity-card">
-        <header><div><p className="eyebrow">{t('Platform storage usage')}</p><h2>{formatStorageBytes(state.stored_bytes)} <small>{t('stored')}</small></h2></div><span className={`storage-health storage-health-${storageAtRisk}`}>{t(storageAtRisk === 'stop' ? 'Writes stopped' : storageAtRisk === 'warning' ? 'Near capacity' : 'Capacity healthy')}</span></header>
-        <div className="storage-meter" role="progressbar" aria-label={t('Platform storage usage')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Number((displayUsage * 100).toFixed(1)))}><span style={{ width: `${displayUsage * 100}%` }}/></div>
-        <div className="storage-meter-labels"><span>{t('{percent} of the configured limit used', { percent: formatStoragePercent(logicalUsage) })}</span><span>{t('{remaining} remaining within the configured limit', { remaining: formatStorageBytes(Math.max(0, state.max_storage_bytes - state.stored_bytes)) })}</span></div>
-        {physicalUsage !== null && state.capacity ? <div className="physical-capacity"><div><span>{t('Host disk usage')}</span><strong>{formatStoragePercent(physicalUsage)}</strong></div><div className="physical-capacity-meter" role="progressbar" aria-label={t('Host disk usage')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(physicalUsage * 100)}><span style={{ width: `${Math.min(1, physicalUsage) * 100}%` }}/><i className="warning-mark" style={{ left: `${state.warning_ratio * 100}%` }}/><i className="stop-mark" style={{ left: `${state.stop_ratio * 100}%` }}/></div><small>{t('{available} physical space available; this includes files outside Voicecan.', { available: formatStorageBytes(state.capacity.available) })}</small></div> : <div className="physical-capacity physical-capacity-external"><span>{t('Physical capacity is managed by the object store')}</span></div>}
+        <header><div><p className="eyebrow">{t(state.scope === 'group' ? 'Group storage usage' : 'Platform storage usage')}</p><h2>{formatStorageBytes(state.stored_bytes)} <small>{t('stored')}</small></h2></div><span className={`storage-health storage-health-${storageAtRisk}`}>{t(storageAtRisk === 'stop' ? 'Writes stopped' : storageAtRisk === 'warning' ? 'Near capacity' : 'Capacity healthy')}</span></header>
+        <div className="storage-meter" role="progressbar" aria-label={t(state.scope === 'group' ? 'Group storage usage' : 'Platform storage usage')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Number((displayUsage * 100).toFixed(1)))}><span style={{ width: `${displayUsage * 100}%` }}/></div>
+        <div className="storage-meter-labels"><span>{t('{percent} of the configured limit used', { percent: formatStoragePercent(logicalUsage) })}</span><span>{state.scope === 'group' ? t('Usage is scoped to your group; capacity limits are shared by the deployment.') : t('{remaining} remaining within the configured limit', { remaining: formatStorageBytes(Math.max(0, state.max_storage_bytes - state.stored_bytes)) })}</span></div>
+        {physicalUsage !== null && state.capacity ? <div className="physical-capacity"><div><span>{t('Host disk usage')}</span><strong>{formatStoragePercent(physicalUsage)}</strong></div><div className="physical-capacity-meter" role="progressbar" aria-label={t('Host disk usage')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(physicalUsage * 100)}><span style={{ width: `${Math.min(1, physicalUsage) * 100}%` }}/><i className="warning-mark" style={{ left: `${state.warning_ratio * 100}%` }}/><i className="stop-mark" style={{ left: `${state.stop_ratio * 100}%` }}/></div><small>{t('{available} physical space available; this includes files outside Voicecan.', { available: formatStorageBytes(state.capacity.available) })}</small></div> : <div className="physical-capacity physical-capacity-external"><span>{t(state.scope === 'group' ? 'Host disk usage is restricted to administrators.' : 'Physical capacity is managed by the object store')}</span></div>}
         <dl className="storage-stat-grid"><div><dt>{t('Configured upper limit')}</dt><dd>{formatStorageBytes(state.max_storage_bytes)}</dd></div><div><dt>{t('Single file limit')}</dt><dd>{formatStorageBytes(state.max_file_bytes)}</dd></div><div><dt>{t('Active transfers')}</dt><dd>{state.active_transfers.toLocaleString()}</dd></div></dl>
       </article>
       <aside className="content-card storage-driver-card"><span className="storage-driver-icon"><Icon name="storage" size={24}/></span><p className="eyebrow">{t('Storage type')}</p><h2>{t(drivers[state.driver].title)}</h2><p>{t(drivers[state.driver].description)}</p><dl><div><dt>{t('Configuration source')}</dt><dd>{t('Deployment environment')}</dd></div><div><dt>{t('Deployment profile')}</dt><dd>{t(state.deployment_profile)}</dd></div></dl><div className="impact-note"><strong>{t('Restart required to change storage type')}</strong><p>{t('Set VOICECAN_STORAGE_DRIVER and the matching storage credentials in the deployment environment, then restart the server. Runtime limits below do not require a restart.')}</p></div></aside>
     </section>
-    <section className="content-card storage-types-card"><header><div><p className="eyebrow">{t('Available storage types')}</p><h2>{t('Choose the deployment model before changing the driver')}</h2></div><Button kind="ghost" icon="refresh" disabled={loading} onClick={() => void refresh()}>{t('Refresh status')}</Button></header><div className="storage-type-grid">{state.supported_drivers.map((driver) => <article className={driver === state.driver ? 'active' : undefined} key={driver}><span><Icon name="storage" size={18}/></span><div><strong>{t(drivers[driver].title)}</strong><p>{t(drivers[driver].description)}</p></div>{driver === state.driver ? <b>{t('Current')}</b> : <small>{t('Deployment change')}</small>}</article>)}</div></section>
+    <section className="content-card storage-types-card"><header><div><p className="eyebrow">{t('Available storage types')}</p><h2>{t('Choose the deployment model before changing the driver')}</h2></div><Button readOnlySafe kind="ghost" icon="refresh" disabled={loading} onClick={() => void refresh()}>{t('Refresh status')}</Button></header><div className="storage-type-grid">{state.supported_drivers.map((driver) => <article className={driver === state.driver ? 'active' : undefined} key={driver}><span><Icon name="storage" size={18}/></span><div><strong>{t(drivers[driver].title)}</strong><p>{t(drivers[driver].description)}</p></div>{driver === state.driver ? <b>{t('Current')}</b> : <small>{t('Deployment change')}</small>}</article>)}</div></section>
     <section className="operation-card storage-policy-card"><div className="settings-intro"><span className="settings-mark"><Icon name="storage" size={20}/></span><div><h2>{t('Runtime capacity policy')}</h2><p>{t('These settings are stored by the Device Server, audited, and applied to new uploads immediately on every instance.')}</p></div></div><form className="form-grid" onSubmit={(event) => event.preventDefault()}>
       <Field id="storage-max-gb" label={t('Storage upper limit (GB)')} hint={t('Must be at least the configured single-file limit of {limit}.', { limit: formatStorageBytes(state.max_file_bytes) })}><input id="storage-max-gb" type="number" min={state.max_file_bytes / 1024 ** 3} step="0.25" value={maxStorageGb} onChange={(event) => setMaxStorageGb(event.target.value)}/></Field>
       <Field id="storage-warning-percent" label={t('Capacity warning threshold (%)')} hint={t('Warn operators when physical disk usage reaches this level.')}><input id="storage-warning-percent" type="number" min="1" max="98" step="0.1" value={warningPercent} onChange={(event) => setWarningPercent(event.target.value)}/></Field>
@@ -434,5 +474,5 @@ function ReleaseWorkspace({ t, run }: { t: Translate; run: Runner }) {
 
 function InspectorWorkspace({ t, run }: { t: Translate; run: Runner }) {
   const [endpointId, setEndpointId] = useState(''); const [status, setStatus] = useState('dead'); const [deliveryId, setDeliveryId] = useState(''); const [reason, setReason] = useState('');
-  return <div className="operation-layout"><FlowHeader eyebrow={t('Operations')} title={t('Delivery inspector')} description={t('Inspect delivery metadata without exposing signing secrets.')} icon="pulse"/><div className="operation-card"><form className="form-grid" onSubmit={(event) => event.preventDefault()}><ResourcePicker id="inspector-endpoint" label={t('Endpoint')} endpoint="/event-endpoints" value={endpointId} onChange={setEndpointId} t={t} required/><Field id="inspector-status" label={t('Status')} value={status} onChange={setStatus} options={['dead', 'pending', 'delivered', 'canceled'].map((value) => ({ value, label: t(value) }))}/><Actions><Button id="inspect-deliveries" onClick={() => void run(() => api(`/event-endpoints/${encodeURIComponent(endpointId)}/deliveries?status=${encodeURIComponent(status)}`))}>{t('Inspect deliveries')}</Button></Actions><div className="section-divider field-wide"><span>{t('Replay one delivery')}</span></div><Field id="replay-delivery" label={t('Delivery ID to replay')} value={deliveryId} onChange={setDeliveryId}/><Field id="replay-reason" label={t('Replay reason')} value={reason} onChange={setReason}/><Actions><Button id="replay-delivery-button" kind="secondary" onClick={() => void run(() => api(`/event-deliveries/${encodeURIComponent(deliveryId)}/replay`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }))}>{t('Replay delivery')}</Button></Actions></form></div></div>;
+  return <div className="operation-layout"><FlowHeader eyebrow={t('Operations')} title={t('Delivery inspector')} description={t('Inspect delivery metadata without exposing signing secrets.')} icon="pulse"/><div className="operation-card"><form className="form-grid" onSubmit={(event) => event.preventDefault()}><ResourcePicker id="inspector-endpoint" label={t('Endpoint')} endpoint="/event-endpoints" value={endpointId} onChange={setEndpointId} t={t} required/><Field id="inspector-status" label={t('Status')} value={status} onChange={setStatus} options={['dead', 'pending', 'delivered', 'canceled'].map((value) => ({ value, label: t(value) }))}/><Actions><Button readOnlySafe id="inspect-deliveries" onClick={() => void run(() => api(`/event-endpoints/${encodeURIComponent(endpointId)}/deliveries?status=${encodeURIComponent(status)}`))}>{t('Inspect deliveries')}</Button></Actions><div className="section-divider field-wide"><span>{t('Replay one delivery')}</span></div><Field id="replay-delivery" label={t('Delivery ID to replay')} value={deliveryId} onChange={setDeliveryId}/><Field id="replay-reason" label={t('Replay reason')} value={reason} onChange={setReason}/><Actions><Button id="replay-delivery-button" kind="secondary" onClick={() => void run(() => api(`/event-deliveries/${encodeURIComponent(deliveryId)}/replay`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }))}>{t('Replay delivery')}</Button></Actions></form></div></div>;
 }

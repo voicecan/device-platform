@@ -1,6 +1,10 @@
-# Core runtime upgrade — 2026-11-03
+# Core runtime upgrade — 2026-11-06
 
-The platform pins `@voicecan/device-core@0.1.0-preview.21`, ABI `voicecan-v1.3`. The vendored package and `core-artifacts.lock.json` pin the tarball, conformance digest and matching Browser/Node WASM digests. Private protocol sources and fixtures remain outside this repository.
+The platform pins `@voicecan/device-core@0.1.0-preview.22`, ABI `voicecan-v1.3`. The vendored package and `core-artifacts.lock.json` pin the tarball, conformance digest and matching Browser/Node WASM digests. Private protocol sources and fixtures remain outside this repository.
+
+Core preview.22 adds optional `maxDurationMinutes` to recording start through `gateway.requestDeviceControl`, `session.controlRecording('start', options?, signal?)`, and `session.startRecording(options?, signal?)`. Values must be integers from 0 to 255; 0 or omission keeps the existing no-segmentation behavior. Non-start actions reject the duration field, including 0. Existing BLE signatures that pass an AbortSignal directly remain supported.
+
+The recording segment selector is enabled with Unlimited (0), 15, 30, 45, and 60 minutes. Start forwards the selected minutes over WSS and BLE; Stop and Resume do not carry a duration. `parseDeviceControl` validates and preserves the start-only integer field, and the command payload retains it for polling, queued dispatch, and idempotency checks. Public TypeScript contracts and OpenAPI expose the same limits. Both transports call semantic Core APIs. Firmware logs and actual timed segmentation still require physical-device validation.
 
 Recording results may include the firmware-reported `action`. A result for a different action cannot complete the active recording command. Results still have no unique request identifier, so concurrent operations of the same action remain ambiguous; status readback is authoritative.
 
@@ -14,17 +18,4 @@ BLE OTA now requires the Core transport's concurrent `write` and `interact` capa
 
 OTA completion no longer sends a redundant restart command through BLE or WSS. `OTA_REBOOTING` confirms the transfer/restart stage; verify running firmware after reconnect before treating an upgrade as fully validated. Physical-device verification remains pending.
 
-Validation on Windows / Node 24.19.0:
-
-| Check | Result |
-| --- | --- |
-| Core Rust workspace tests | 57 passed |
-| Core Browser/Node WASM tests, including OTA/OTAP | 18 passed |
-| Rust format / Clippy with warnings denied | Passed |
-| Platform build / typecheck | Passed |
-| Artifact checksums, conformance and public boundary | Passed; 17 artifact files inspected |
-| Recording, Gateway, Web Bluetooth and maintenance regression group | 57 passed |
-| Gateway group after direct-upload progress correction | 31 passed |
-| Platform full suite | 243 tests: 235 passed, 4 skipped, 4 failed |
-
-The full-suite failures are outside this protocol change: `admin-ui.test.ts` expects a `DeviceWsCandidatePicker` fragment absent from the unchanged `device-management.tsx`; `mcp-quick-connect.e2e.test.ts`, `server.e2e.test.ts` and `studio-quick-connect.e2e.test.ts` assert POSIX file modes that Windows does not report. These assertions and their production source paths were not changed to make the suite green. Physical-device verification remains pending.
+Validation covers the packaged Browser/Node runtime, start-only duration types and validation, default/zero compatibility, cancellation, command persistence/idempotency, and forwarding through WSS and BLE. Public artifact checks verify tarball checksums, the conformance hash, matching WASM digests, and the absence of private protocol sources. Physical-device validation remains pending.

@@ -16,10 +16,20 @@ function writeStoredToken(value: string): void {
 }
 
 let csrfToken = readStoredToken();
+type UnauthorizedHandler = (path: string) => void;
+let unauthorizedHandler: UnauthorizedHandler | undefined;
 
 export function setCsrfToken(value: string): void {
   csrfToken = value;
   writeStoredToken(value);
+}
+
+export function setUnauthorizedHandler(handler?: UnauthorizedHandler): void {
+  unauthorizedHandler = handler;
+}
+
+function notifyUnauthorized(path: string, status: number, code: string): void {
+  if (status === 401 && code === 'UNAUTHENTICATED' && path !== '/auth/login') unauthorizedHandler?.(path);
 }
 
 function csrfCookie(): string {
@@ -41,6 +51,7 @@ async function request<T>(path: string, options: RequestInit, allowCsrfRefresh: 
     },
   });
   const payload = parseApiEnvelope<T>(response.status, await response.text());
+  notifyUnauthorized(path, response.status, payload.code);
   if (allowCsrfRefresh && response.status === 403 && payload.code === 'CSRF_FAILED') {
     const refreshed = await request<{ csrf_token: string }>('/auth/csrf', {}, false);
     setCsrfToken(refreshed.csrf_token);
@@ -60,6 +71,7 @@ export async function apiBinary(path: string): Promise<Response> {
   let message = `HTTP ${response.status}`;
   try {
     const payload = parseApiEnvelope<unknown>(response.status, await response.text());
+    notifyUnauthorized(path, response.status, payload.code);
     message = `${payload.code || 'REQUEST_FAILED'}: ${payload.message || message}`;
   } catch (error) {
     // Preserve the HTTP fallback for a non-JSON proxy response, but keep a
@@ -74,6 +86,7 @@ export async function apiBinaryUpload<T>(path: string, content: Blob, allowCsrfR
   if (cookieToken && cookieToken !== csrfToken) setCsrfToken(cookieToken);
   const response = await fetch(`/api/v1${path}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}) }, body: content });
   const payload = parseApiEnvelope<T>(response.status, await response.text());
+  notifyUnauthorized(path, response.status, payload.code);
   if (allowCsrfRefresh && response.status === 403 && payload.code === 'CSRF_FAILED') {
     const refreshed = await request<{ csrf_token: string }>('/auth/csrf', {}, false); setCsrfToken(refreshed.csrf_token);
     return apiBinaryUpload<T>(path, content, false);

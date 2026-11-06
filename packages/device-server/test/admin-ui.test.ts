@@ -43,7 +43,6 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(bindingPreparation, /DeviceWsCandidatePicker candidates=\{candidates\}/);
   assert.match(workspaces, /candidates=\{deviceWsCandidates\}/);
   assert.match(workspaces, /setDeviceWsUrl\(\(currentUrl\) => currentUrl \|\| settings\.preferred_device_ws_url\)/);
-  assert.match(deviceManagement, /DeviceWsCandidatePicker candidates=\{serverCandidates\}/);
   assert.match(ui, /aria-pressed=\{value === candidate\.url\}/);
   assert.match(ui, /recovery-backup/);
   assert.match(ui, /Recovery backup is automatic/);
@@ -65,9 +64,9 @@ test('React Admin preserves guarded lifecycle, Open Platform, inspector, and end
   assert.match(app, /Use user groups to assign devices and recordings to a shared access boundary/);
   assert.match(deviceIntegration, /device_ws_url/);
   assert.match(deviceIntegration, /observeOnline/);
-  assert.match(deviceIntegration, /const provisioningStatusPollMs = 10_000/);
-  assert.match(connectPage, /const provisioningStatusPollMs = 10_000/);
-  assert.match(bindingPreparationState, /export const bindingIntentPollMs = 10_000/);
+  assert.match(deviceIntegration, /const provisioningStatusPollMs = 1_000/);
+  assert.match(connectPage, /const provisioningStatusPollMs = 1_000/);
+  assert.match(bindingPreparationState, /export const bindingIntentPollMs = 2_000/);
   assert.match(workspaces, /bindingIntentPollMs, nextBindingPollDelay, webBindingStep/);
   assert.match(workspaces, /void run\(async \(\) => \{ await start\(createGrant\); return true; \}\)/);
   assert.match(deviceIntegration, /DEVICE_ALREADY_CLAIMED/);

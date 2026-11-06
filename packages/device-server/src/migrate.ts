@@ -5,7 +5,37 @@ import { SCHEMA_VERSION, schemaSql } from './schema.js';
 export function migrate(config: ServerConfig): void {
   const database = new DatabaseSync(config.databaseFile, { enableForeignKeyConstraints: true });
   try {
+    if (database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get()) {
+      const current = database.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number | null };
+      if (Number(current.version ?? 0) > SCHEMA_VERSION) throw new Error(`Database schema ${current.version} is newer than supported ${SCHEMA_VERSION}`);
+    }
     database.exec(schemaSql);
+    const membershipDefinition = database.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='group_memberships'").get() as { sql: string };
+    if (!membershipDefinition.sql.includes("'viewer'")) {
+      // Memberships are a leaf table. Rebuild its CHECK constraint atomically,
+      // preserving IDs, inactive history, and both uniqueness constraints.
+      try {
+        database.exec(`BEGIN IMMEDIATE;
+          CREATE TABLE group_memberships_v22 (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            group_id TEXT NOT NULL REFERENCES user_groups(id),
+            role TEXT NOT NULL CHECK (role IN ('group_admin','member','viewer')),
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          INSERT INTO group_memberships_v22 SELECT id,user_id,group_id,role,active,created_at,updated_at FROM group_memberships;
+          DROP TABLE group_memberships;
+          ALTER TABLE group_memberships_v22 RENAME TO group_memberships;
+          CREATE UNIQUE INDEX one_active_membership_per_user ON group_memberships(user_id) WHERE active=1;
+          CREATE UNIQUE INDEX one_active_group_admin ON group_memberships(group_id) WHERE active=1 AND role='group_admin';
+          COMMIT;`);
+      } catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+      }
+    }
     const addColumn = (table: string, column: string, definition: string): void => {
       const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
       if (!columns.some((candidate) => candidate.name === column)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);

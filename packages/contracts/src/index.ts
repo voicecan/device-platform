@@ -1,6 +1,6 @@
 export const API_VERSION = '2026-08-07';
 export const PROTOCOL_ABI = 'voicecan-v1.3';
-export const CONFORMANCE_HASH = 'sha256:060bf9e3711dde8d50175a866319d98665ab6e20d789743c104c72c1cd483d9b';
+export const CONFORMANCE_HASH = 'sha256:0a3aa3b7d35395bc0553a5ed32ded3269582e999160ec27c2f2a188a6d97ecb5';
 
 export type ApiSuccess<T> = {
   success: true;
@@ -18,7 +18,7 @@ export type ApiFailure = {
 };
 
 export type UserRole = 'system_admin' | 'user';
-export type MembershipRole = 'group_admin' | 'member';
+export type MembershipRole = 'group_admin' | 'member' | 'viewer';
 
 export const OPEN_PLATFORM_PERMISSIONS = [
   { code: 'devices:read', resource: 'devices', action: 'read', risk: 'low', description: 'Read device metadata.' },
@@ -119,6 +119,8 @@ export type AuthUser = {
   role: UserRole;
   group_id: string | null;
   membership_role: MembershipRole | null;
+  can_change_password?: boolean;
+  can_mutate_group?: boolean;
 };
 
 export type Device = {
@@ -167,7 +169,8 @@ export type DeviceStatusSnapshot = {
 };
 
 export type DeviceControl =
-  | { kind: 'recording'; action: 'start' | 'pause' | 'resume' | 'stop' | 'highlight' | 'preserve' }
+  | { kind: 'recording'; action: 'start'; maxDurationMinutes?: number }
+  | { kind: 'recording'; action: 'pause' | 'resume' | 'stop' | 'highlight' | 'preserve'; maxDurationMinutes?: never }
   | { kind: 'recording_mode'; mode: 'smart_capture' | 'lookback'; microphoneMode: 0 | 1 | 2 | 3; microphoneGainDb: number; lookbackDurationIndex?: number }
   | { kind: 'auto_shutdown'; interval: 'never' | '15min' | '30min' | '1h' | '5h' }
   | { kind: 'usb'; enabled: boolean }

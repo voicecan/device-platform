@@ -9,6 +9,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@caitun/lc3": "1.0.0",
     "@voicecan/device-connect-web": "0.1.0-preview.0",
     "@voicecan/device-web": "0.1.0-preview.0",
     "qrcode": "1.5.4",
