@@ -6,6 +6,15 @@
 
 Voicecan Device Platform is a self-hosted platform for connecting Voicecan-compatible devices, managing recordings, and giving applications secure access to device data. It can run at the edge, on a private server, or as a containerized service without depending on Voicecan accounts, family services, model services, or the existing business API.
 
+### Live demo
+
+[Try the live demo](https://demo-device.voice-can.com/admin)
+
+- Username: `demo`
+- Password: `9csla0ZB23AvCoFVPRdqXlw0`
+
+This public shared account can inspect group devices, sample audio, Application permissions, REST/MCP/OAuth/Webhook configuration, call logs, download grants, security alerts, members, group storage usage and audit history, and preview binding and transfer flows. Example credentials are revoked, the OAuth client is suspended and the webhook is disabled; historical records are synthetic samples. Password changes, configuration changes, credential creation and device controls remain disabled.
+
 ### What you can do
 
 - **Connect devices** — provision, claim, monitor, and control devices through a browser or WebSocket connection.
@@ -125,6 +134,15 @@ Install `@voicecan/device-platform` when you are deploying the self-hosted Serve
 ## 中文
 
 Voicecan Device Platform 是一个自托管设备平台，用于连接 Voicecan 兼容设备、管理录音，并为应用提供安全的数据访问能力。它可以运行在边缘设备、私有服务器或容器化环境中，不依赖 Voicecan 账户、家庭服务、模型服务或现有业务 API。
+
+### 在线体验
+
+[打开在线 Demo](https://demo-device.voice-can.com/admin)
+
+- 账号：`demo`
+- 密码：`9csla0ZB23AvCoFVPRdqXlw0`
+
+这是预置示例数据的公开只读共享账号，可浏览本组设备、播放或下载示例音频，查看应用权限、REST/MCP/OAuth/Webhook 配置、调用日志、下载授权、安全告警、组成员、存储用量和审计记录，并预览绑定与转移流程。示例凭据已撤销、OAuth 客户端已暂停、Webhook 已禁用；历史记录均明确标注为演示数据。修改密码、配置修改、创建凭据和设备控制仍然禁用。
 
 ### 你可以做什么
 
