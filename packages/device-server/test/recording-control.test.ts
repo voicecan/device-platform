@@ -21,6 +21,23 @@ test('recording API accepts semantic operations and rejects invalid mode configu
   for (const invalid of [{ microphoneMode: '2' }, { microphoneMode: 4 }, { microphoneGainDb: -1 }, { microphoneGainDb: 32 }, { microphoneGainDb: 1.5 }, { lookbackDurationIndex: null }, { lookbackDurationIndex: 4 }, { mode: 'smart_capture', lookbackDurationIndex: 1 }]) assert.equal(parseDeviceControl({ ...mode, ...invalid }), null);
 });
 
+test('recording duration is preserved only for start and must be an integer from 0 to 255', () => {
+  const start = { kind: 'recording', action: 'start' };
+  for (const maxDurationMinutes of [0, 1, 30, 255]) {
+    const control = { ...start, maxDurationMinutes };
+    assert.deepEqual(parseDeviceControl(control), control);
+  }
+  for (const maxDurationMinutes of [-1, 256, 1.5, NaN, Infinity, -Infinity, '30', null, true, [], {}, undefined]) {
+    assert.equal(parseDeviceControl({ ...start, maxDurationMinutes }), null);
+  }
+  for (const action of ['pause', 'resume', 'stop', 'highlight', 'preserve']) {
+    for (const maxDurationMinutes of [0, 30]) assert.equal(parseDeviceControl({ kind: 'recording', action, maxDurationMinutes }), null);
+  }
+  for (const control of [{ kind: 'usb', enabled: true }, { kind: 'recording_mode', mode: 'smart_capture', microphoneMode: 0, microphoneGainDb: 0 }]) {
+    assert.equal(parseDeviceControl({ ...control, maxDurationMinutes: 0 }), null);
+  }
+});
+
 test('recording HTTP controls keep authorization, idempotency and command polling contracts', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'voicecan-recording-control-'));
   const config = await loadConfig({ VOICECAN_DATA_DIR: directory, VOICECAN_PUBLIC_BASE_URL: 'http://127.0.0.1:8787', VOICECAN_SIMULATOR: 'true', VOICECAN_LOG_LEVEL: 'silent' });
@@ -37,19 +54,28 @@ test('recording HTTP controls keep authorization, idempotency and command pollin
   const url = `/api/v1/devices/${device.json().data.device.id}/control`;
   const requests: unknown[] = [];
   t.mock.method(DeviceGateway.prototype, 'dispatchControl', async (_deviceId: string, _commandId: string, control: unknown) => { requests.push(control); return true; });
-  const control = { kind: 'recording', action: 'start' };
+  const control = { kind: 'recording', action: 'start', maxDurationMinutes: 30 };
   const commandHeaders = { ...headers, 'idempotency-key': 'recording-start' };
   const first = await app.inject({ method: 'POST', url, headers: commandHeaders, payload: { control, reason: 'Recording card test' } });
   assert.equal(first.statusCode, 202, first.body);
   const duplicate = await app.inject({ method: 'POST', url, headers: commandHeaders, payload: { control, reason: 'Recording card retry' } });
   assert.equal(duplicate.json().data.id, first.json().data.id);
   assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0], control, 'the selected minutes reach WSS dispatch');
   const polled = await app.inject({ method: 'GET', url: `/api/v1/commands/${first.json().data.id}`, headers });
   assert.equal(polled.statusCode, 200, polled.body);
   assert.equal(polled.json().data.type, 'device.recording');
   assert.deepEqual(polled.json().data.control, control);
   const conflict = await app.inject({ method: 'POST', url, headers: commandHeaders, payload: { control: { kind: 'recording', action: 'stop' }, reason: 'Different operation' } });
   assert.equal(conflict.statusCode, 409, conflict.body);
+  const durationConflict = await app.inject({ method: 'POST', url, headers: commandHeaders, payload: { control: { ...control, maxDurationMinutes: 60 }, reason: 'Different segment length' } });
+  assert.equal(durationConflict.statusCode, 409, durationConflict.body);
+  for (const extraControl of [{ kind: 'recording', action: 'start' }, ...[0, 255].map((maxDurationMinutes) => ({ ...control, maxDurationMinutes }))]) {
+    const reply = await app.inject({ method: 'POST', url, headers: { ...headers, 'idempotency-key': `recording-start-${'maxDurationMinutes' in extraControl ? extraControl.maxDurationMinutes : 'default'}` }, payload: { control: extraControl, reason: 'Segment length test' } });
+    assert.equal(reply.statusCode, 202, reply.body);
+    assert.deepEqual(reply.json().data.control, extraControl);
+    assert.deepEqual(requests.at(-1), extraControl);
+  }
   const mode = { kind: 'recording_mode', mode: 'lookback', microphoneMode: 2, microphoneGainDb: 17 };
   const modeReply = await app.inject({ method: 'POST', url, headers: { ...headers, 'idempotency-key': 'recording-mode' }, payload: { control: mode, reason: 'Recording card mode test' } });
   assert.equal(modeReply.statusCode, 202, modeReply.body);
@@ -57,9 +83,17 @@ test('recording HTTP controls keep authorization, idempotency and command pollin
   const invalid = await app.inject({ method: 'POST', url, headers: { ...headers, 'idempotency-key': 'invalid-recording-mode' }, payload: { control: { ...mode, microphoneGainDb: 32 }, reason: 'Invalid mode' } });
   assert.equal(invalid.statusCode, 400, invalid.body);
   assert.equal(invalid.json().code, 'INVALID_DEVICE_CONTROL');
+  for (const [index, invalidControl] of [
+    ...[-1, 256, 1.5, '30', null, true].map((maxDurationMinutes) => ({ ...control, maxDurationMinutes })),
+    { kind: 'recording', action: 'stop', maxDurationMinutes: 0 },
+  ].entries()) {
+    const reply = await app.inject({ method: 'POST', url, headers: { ...headers, 'idempotency-key': `invalid-segment-${index}` }, payload: { control: invalidControl, reason: 'Invalid segment length' } });
+    assert.equal(reply.statusCode, 400, reply.body);
+    assert.equal(reply.json().code, 'INVALID_DEVICE_CONTROL');
+  }
   const unauthenticated = await app.inject({ method: 'POST', url, payload: { control, reason: 'No authorization' } });
   assert.notEqual(unauthenticated.statusCode, 202);
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 5, 'invalid requests must not reach the gateway');
 });
 
 class Socket extends EventEmitter {
@@ -105,8 +139,8 @@ test('recording gateway confirms commands, retains session IDs in events, and re
   try {
     await gateway.attach(socket, 'dev-1', Buffer.alloc(32, 7));
     socket.emit('message', Uint8Array.of(10)); socket.emit('message', Uint8Array.of(11)); await flush();
-    assert.equal(await gateway.dispatchControl('dev-1', 'cmd-1', { kind: 'recording', action: 'start' }), true); await flush();
-    assert.deepEqual(controls, [{ kind: 'recording', action: 'start' }]);
+    assert.equal(await gateway.dispatchControl('dev-1', 'cmd-1', { kind: 'recording', action: 'start', maxDurationMinutes: 30 }), true); await flush();
+    assert.deepEqual(controls, [{ kind: 'recording', action: 'start', maxDurationMinutes: 30 }]);
     socket.emit('message', Uint8Array.of(15)); await flush();
     assert.ok(!runs.some(({ sql }) => sql.includes('UPDATE commands SET status=?')), 'a physical stop cannot acknowledge a pending start');
     socket.emit('message', Uint8Array.of(12)); await flush();

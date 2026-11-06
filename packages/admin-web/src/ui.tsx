@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { api, errorMessage } from './api.js';
 
 export type Translate = (message: string, values?: Readonly<Record<string, string | number>>) => string;
 
-type IconName = 'overview' | 'device' | 'file' | 'group' | 'user' | 'token' | 'webhook' | 'pulse' | 'storage' | 'battery' | 'wifi' | 'microphone' | 'shield' | 'clock' | 'server' | 'audit' | 'code' | 'provision' | 'transfer' | 'menu' | 'close' | 'refresh' | 'arrow' | 'check' | 'copy' | 'logout' | 'globe' | 'edit';
+type IconName = 'overview' | 'device' | 'file' | 'group' | 'user' | 'token' | 'webhook' | 'pulse' | 'storage' | 'battery' | 'wifi' | 'microphone' | 'shield' | 'clock' | 'server' | 'audit' | 'code' | 'provision' | 'transfer' | 'menu' | 'close' | 'refresh' | 'arrow' | 'check' | 'copy' | 'logout' | 'globe' | 'edit' | 'play' | 'pause' | 'trash';
 
 const iconPaths: Record<IconName, ReactNode> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
@@ -36,14 +36,23 @@ const iconPaths: Record<IconName, ReactNode> = {
   logout: <><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M14 8l4 4-4 4M8 12h10"/></>,
   globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></>,
   edit: <><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="m13.5 6.5 3 3"/></>,
+  play: <path d="m8 5 11 7-11 7z"/>,
+  pause: <><path d="M8 5v14M16 5v14"/></>,
+  trash: <><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13M10 11v5M14 11v5"/></>,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{iconPaths[name]}</svg>;
 }
 
-export function Button({ children, icon, kind = 'primary', className = '', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon?: IconName; kind?: 'primary' | 'secondary' | 'ghost' | 'danger' }) {
-  return <button {...props} className={`button button-${kind} ${className}`.trim()}>{icon ? <Icon name={icon} /> : null}<span>{children}</span></button>;
+// In a read-only workspace, actions must explicitly opt into local navigation
+// or GET-only inspection. Backend authorization remains authoritative.
+export const ReadOnlyActions = createContext<string | null>(null);
+
+export function Button({ children, icon, readOnlySafe = false, kind = 'primary', className = '', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon?: IconName; readOnlySafe?: boolean; kind?: 'primary' | 'secondary' | 'ghost' | 'danger' }) {
+  const readOnlyMessage = useContext(ReadOnlyActions);
+  const blocked = Boolean(readOnlyMessage) && !readOnlySafe;
+  return <button {...props} disabled={props.disabled || blocked} title={blocked ? readOnlyMessage ?? undefined : props.title} className={`button button-${kind} ${className}`.trim()}>{icon ? <Icon name={icon} /> : null}<span>{children}</span></button>;
 }
 
 export type SelectOption = { value: string; label: string; description?: string | undefined; meta?: string | undefined; disabled?: boolean | undefined };
@@ -205,7 +214,7 @@ export function DataTable({ data, t, emptyMessage, onSelect, maxRows, pageSize =
     : [], [data]);
   if (!records.length && details.length) return <dl className="detail-grid">{details.map(([key, value]) => <div key={key}><dt>{t(key.replaceAll('_', ' '))}</dt><dd>{isStatusColumn(key) ? <span className={`status-pill status-${String(value).toLowerCase().replaceAll('_', '-')}`}>{displayValue(key, value, t)}</span> : displayValue(key, value, t)}</dd></div>)}</dl>;
   if (!records.length) return <div className="empty-state"><div className="empty-orbit"><Icon name="pulse" size={24} /></div><h3>{t('Nothing here yet')}</h3><p>{emptyMessage ?? t('New resources will appear here when they are created.')}</p></div>;
-  return <div className={`table-wrap ${className}`.trim()}><table className="data-table"><thead><tr>{columns.map((column) => <th key={column}>{t(column.replaceAll('_', ' '))}</th>)}<th><span className="sr-only">{t('Actions')}</span></th></tr></thead><tbody>{visibleRecords.map((record, index) => { const key = String(record.id ?? currentPage * pageSize + index); const isExpanded = expanded === key; return <Fragment key={key}><tr className="row-interactive" onClick={() => onSelect ? onSelect(record) : setExpanded(isExpanded ? '' : key)}>{columns.map((column) => <td key={column}>{isStatusColumn(column) ? <span className={`status-pill status-${String(record[column]).toLowerCase().replaceAll('_', '-')}`}>{displayValue(column, record[column], t)}</span> : displayValue(column, record[column], t)}</td>)}<td className={`row-arrow ${isExpanded ? 'is-expanded' : ''}`}><Icon name="arrow" /></td></tr>{isExpanded && !onSelect ? <tr className="table-detail-row"><td colSpan={columns.length + 1}><div className="table-record-detail"><dl>{Object.entries(record).filter(([field]) => !secretKey.test(field)).map(([field, value]) => <div key={field}><dt>{t(field.replaceAll('_', ' '))}</dt><dd>{idKey.test(field) ? <code>{String(value ?? '—')}</code> : displayValue(field, value, t)}</dd></div>)}</dl></div></td></tr> : null}</Fragment>; })}</tbody></table>{maxRows && records.length > maxRows ? <div className="table-limit-note">{t('Showing the latest {count} items.', { count: maxRows })}</div> : null}{!maxRows && totalPages > 1 ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={currentPage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>{t('Previous')}</Button><span>{t('Page {page} of {total}', { page: currentPage + 1, total: totalPages })}</span><Button kind="ghost" disabled={currentPage >= totalPages - 1} onClick={() => setPage((value) => Math.min(totalPages - 1, value + 1))}>{t('Next')}</Button></nav> : null}</div>;
+  return <div className={`table-wrap ${className}`.trim()}><table className="data-table"><thead><tr>{columns.map((column) => <th key={column}>{t(column.replaceAll('_', ' '))}</th>)}<th><span className="sr-only">{t('Actions')}</span></th></tr></thead><tbody>{visibleRecords.map((record, index) => { const key = String(record.id ?? currentPage * pageSize + index); const isExpanded = expanded === key; return <Fragment key={key}><tr className="row-interactive" onClick={() => onSelect ? onSelect(record) : setExpanded(isExpanded ? '' : key)}>{columns.map((column) => <td key={column}>{isStatusColumn(column) ? <span className={`status-pill status-${String(record[column]).toLowerCase().replaceAll('_', '-')}`}>{displayValue(column, record[column], t)}</span> : displayValue(column, record[column], t)}</td>)}<td className={`row-arrow ${isExpanded ? 'is-expanded' : ''}`}><Icon name="arrow" /></td></tr>{isExpanded && !onSelect ? <tr className="table-detail-row"><td colSpan={columns.length + 1}><div className="table-record-detail"><dl>{Object.entries(record).filter(([field]) => !secretKey.test(field)).map(([field, value]) => <div key={field}><dt>{t(field.replaceAll('_', ' '))}</dt><dd>{idKey.test(field) ? <code>{String(value ?? '—')}</code> : displayValue(field, value, t)}</dd></div>)}</dl></div></td></tr> : null}</Fragment>; })}</tbody></table>{maxRows && records.length > maxRows ? <div className="table-limit-note">{t('Showing the latest {count} items.', { count: maxRows })}</div> : null}{!maxRows && totalPages > 1 ? <nav className="table-pagination" aria-label={t('Pagination')}><Button readOnlySafe kind="ghost" disabled={currentPage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>{t('Previous')}</Button><span>{t('Page {page} of {total}', { page: currentPage + 1, total: totalPages })}</span><Button readOnlySafe kind="ghost" disabled={currentPage >= totalPages - 1} onClick={() => setPage((value) => Math.min(totalPages - 1, value + 1))}>{t('Next')}</Button></nav> : null}</div>;
 }
 
 export function ResourcePicker({ label, endpoint, value, onChange, t, id, required = false, emptyLabel, selectFirst = false, disabled = false }: { label: string; endpoint: string; value: string; onChange: (value: string) => void; t: Translate; id: string; required?: boolean; emptyLabel?: string; selectFirst?: boolean; disabled?: boolean }) {

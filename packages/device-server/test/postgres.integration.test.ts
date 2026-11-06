@@ -16,6 +16,8 @@ test('PostgreSQL migration and two-instance CAS/lease fencing', { skip: !connect
     await pool.query('DROP SCHEMA public CASCADE');
     await pool.query('CREATE SCHEMA public');
     await migratePostgres(connectionString!);
+    await pool.query(`ALTER TABLE group_memberships DROP CONSTRAINT group_memberships_role_check;
+      ALTER TABLE group_memberships ADD CONSTRAINT group_memberships_role_check CHECK (role IN ('group_admin','member'));`);
     await migratePostgres(connectionString!);
 
     assert.equal(first.dialect, 'postgres');
@@ -48,6 +50,8 @@ test('PostgreSQL migration and two-instance CAS/lease fencing', { skip: !connect
       { sql: 'INSERT INTO event_deliveries(id,event_id,endpoint_id,status,next_attempt_at,created_at) VALUES(?,?,?,?,?,?)', params: ['delivery_test', 'event_test', 'endpoint_test', 'pending', timestamp, timestamp] },
       { sql: 'INSERT INTO commands(id,device_id,kind,status,caller_scope,request_hash,deadline_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)', params: ['command_test', 'device_test', 'sync', 'queued', 'test', 'hash', new Date(Date.now() + 60_000).toISOString(), timestamp, timestamp] },
     ]);
+    await first.run('INSERT INTO group_memberships(id,user_id,group_id,role,created_at,updated_at) VALUES(?,?,?,?,?,?)', ['gm_viewer_test', 'user_test', 'group_test', 'viewer', timestamp, timestamp]);
+    assert.equal((await second.get<{ role: string }>('SELECT role FROM group_memberships WHERE id=?', ['gm_viewer_test']))?.role, 'viewer');
 
     const claimAt = new Date().toISOString();
     const claimUntil = new Date(Date.now() + 30_000).toISOString();

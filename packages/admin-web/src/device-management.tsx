@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { connectBoundDevice, type BluetoothDeviceHandle, type BoundDeviceMaintenance, type DeviceControl } from '@voicecan/device-connect-web';
 import { api, apiBinary, apiBinaryUpload, errorMessage } from './api.js';
 import { randomUuidV4 } from './random.js';
-import { recordingModeControl, recordingResultMessage, waitForRecordingCommand, type RecordingControlCommand } from './recording-control.js';
+import { recordingModeControl, recordingPrimaryControl, recordingResultMessage, recordingSegmentDurationSupported, recordingSegmentLabel, recordingSegmentOptions, waitForRecordingCommand, type RecordingControlCommand } from './recording-control.js';
+import { InlineLc3Player } from './recording-player.js';
 import { formatIsoTimestamp, formatSessionTimestamp, isoTimestampTitle, sessionTimestamp, sessionTimestampTitle } from './recording-timestamp.js';
 import { deviceConnectionState, recordingSyncCounts, currentDeviceOptions } from './device-connection-state.js';
 import { Button, DataTable, Field, Icon, Select, collectionOf, formatLocalDateTime, type Translate } from './ui.js';
@@ -75,7 +76,7 @@ function percentageLabel(value: number | null): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}%`;
 }
 
-export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRefresh }: { devices: unknown; t: Translate; canEdit: boolean; canRelease: boolean; onDevicesRefresh: () => void }) {
+export function DeviceManagement({ devices, t, canEdit, canRelease, canSync = true, onDevicesRefresh }: { devices: unknown; t: Translate; canEdit: boolean; canRelease: boolean; canSync?: boolean; onDevicesRefresh: () => void }) {
   const items = collectionOf(devices);
   const requested = new URLSearchParams(globalThis.location.search).get('device') ?? '';
   const [deviceId, setDeviceId] = useState(requested);
@@ -92,6 +93,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const [connectionReadings, setConnectionReadings] = useState<ConnectionReading[]>([]);
   const [wifiEditorOpen, setWifiEditorOpen] = useState(false);
   const [autoShutdown, setAutoShutdown] = useState('never');
+  const [recordingSegment, setRecordingSegment] = useState('0');
   const autoShutdownTouched = useRef(false);
   const bleSession = useRef<BoundDeviceMaintenance | undefined>(undefined);
   const recordingControlAbort = useRef<AbortController | undefined>(undefined);
@@ -244,7 +246,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   // device was just granted to this origin, so getDevices() can reconnect by
   // its advertised name without opening the chooser again.
   useEffect(() => {
-    if (!deviceId || busy || bleConnected || bleSession.current || bleConnecting.current || bleManualDisconnect.current) return;
+    if (!deviceId || !canEdit || busy || bleConnected || bleSession.current || bleConnecting.current || bleManualDisconnect.current) return;
     if (bleIdentity.current.id || bleIdentity.current.name) return;
     const name = String(workspace?.device?.display_name ?? workspace?.device?.model ?? items.find((device) => String(device.id) === deviceId)?.display_name ?? '').trim();
     if (!name || bleNameAutoAttempt.current === `${deviceId}:${name}`) return;
@@ -494,6 +496,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   };
   const refreshDeviceStatus = async (): Promise<void> => {
     if (busy) return;
+    if (!canEdit) { await load(); return; }
     setBusy('status-refresh'); setError('');
     try {
       const session = bleSession.current;
@@ -565,8 +568,15 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const isPaused = recordState === 2;
   const recordingModeKnown = typeof recordMode === 'number';
   const lookbackMode = recordingModeKnown && (recordMode & 0x10) !== 0;
-  const recordingDisabled = controlDisabled || !canEdit || ![0, 1, 2].includes(recordState ?? -1);
+  const activeTransfer = workspace?.active_transfer;
+  const recordingStateUnknown = ![0, 1, 2].includes(recordState ?? -1);
+  const recordingDisabled = controlDisabled || !canEdit || recordingStateUnknown;
   const recordingModeDisabled = recordingDisabled || status?.microphone_mode === null || status?.microphone_gain_db === null;
+  const recordingSegmentDisabled = !recordingSegmentDurationSupported || recordingDisabled || isRecording || isPaused;
+  const recordingStateHint = canEdit && controlConnected && recordingStateUnknown ? t('Recording state is not available yet. Refresh the device status before using recording controls.') : undefined;
+  const recordingSegmentHint = !recordingSegmentDurationSupported ? t('Segment length is not available in this protocol runtime; recordings start without a limit.') : recordingStateHint;
+  const recordingNote = recordingStateHint;
+  const recordingSegmentSelectOptions = recordingSegmentOptions.map((minutes) => ({ value: String(minutes), label: t(recordingSegmentLabel(minutes)) }));
   const changeRecordingMode = (mode: 'smart_capture' | 'lookback'): void => {
     try {
       if (!status) throw new Error('RECORDING_SETTINGS_UNAVAILABLE');
@@ -585,7 +595,6 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
   const batteryState = status?.battery_state;
   const batteryTone = batteryState === 'charging' ? 'charging' : batteryState === 'full' ? 'full' : batteryState === 'low' ? 'low' : batteryState ? 'normal' : 'unknown';
   const batteryStateLabel = batteryState === 'charging' ? t('Charging') : batteryState === 'full' ? t('Fully charged') : batteryState === 'low' ? t('Low battery') : batteryState === 'normal' ? t('Discharging') : '—';
-  const activeTransfer = workspace?.active_transfer;
   const activeBytes = activeTransfer?.transferred_bytes ?? 0;
   const currentFilePercent = activeTransfer && activeTransfer.transferred_bytes !== null && activeTransfer.expected_size > 0 ? percentage(activeBytes / activeTransfer.expected_size * 100) : null;
   const roundTotal = summary?.round_total ?? 0;
@@ -659,7 +668,7 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
         <div className="device-status-header-actions">
           <span className={`status-pill ${bleConnected ? 'status-ready' : 'status-neutral'}`}>{bleConnected ? t('BLE connected') : !status ? t('Not read yet') : t(status.source === 'ble' ? 'Last read by BLE' : 'Last read through server')}</span>
           <Button kind="secondary" icon="refresh" disabled={Boolean(busy)} onClick={() => void refreshDeviceStatus()}>{busy === 'status-refresh' ? t('Refreshing…') : t('Refresh')}</Button>
-          <Button kind="secondary" disabled={Boolean(busy)} onClick={() => void toggleBle()}>{bleConnected ? t('Disconnect BLE') : t('Connect BLE')}</Button>
+          {canEdit ? <Button kind="secondary" disabled={Boolean(busy)} onClick={() => void toggleBle()}>{bleConnected ? t('Disconnect BLE') : t('Connect BLE')}</Button> : null}
         </div>
       </header>
       <div className="device-status-grid">
@@ -687,18 +696,23 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
         </div>
         <aside className="device-control-stack">
           <header><span className="device-vital-icon"><Icon name="pulse" size={20}/></span><div><strong>{t('Device controls')}</strong><small>{controlConnected ? t('Connection ready') : t('Connection required')}</small></div></header>
+          {!canSync ? <div className="device-control-actions device-control-actions-compact" title={t('Read-only access: changes and credential creation are disabled.')}>{['Connect BLE', 'Enable USB', 'Apply auto shutdown', 'Restart', 'Shut down', 'Configure Wi-Fi', 'Reset configuration'].map((label) => <Button key={label} kind="secondary" disabled>{t(label)}</Button>)}</div> : null}
           {canEdit ? <div className="device-control-actions device-control-actions-compact"><Button kind="secondary" disabled={controlDisabled} onClick={() => void runControl({ kind: 'usb', enabled: !(status?.usb_state === 1 || status?.usb_state === 2) }, status?.usb_state === 1 || status?.usb_state === 2 ? t('USB mode disabled.') : t('USB mode enabled.'))}>{status?.usb_state === 1 || status?.usb_state === 2 ? t('Disable USB') : t('Enable USB')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={toggleAttention}>{attentionMuted ? t('Unmute attention') : t('Mute attention')}</Button></div> : null}
           {canEdit ? <div className="device-control-actions device-auto-shutdown-actions"><Select ariaLabel={t('Auto shutdown')} value={autoShutdown} onChange={(value) => { autoShutdownTouched.current = true; setAutoShutdown(value); }} options={[['never', 'Never'], ['15min', '15 minutes'], ['30min', '30 minutes'], ['1h', '1 hour'], ['5h', '5 hours']].map(([value, label]) => ({ value: value!, label: t(label!) }))}/><Button kind="secondary" disabled={controlDisabled} onClick={() => { autoShutdownTouched.current = true; void runControl({ kind: 'auto_shutdown', interval: autoShutdown as 'never' | '15min' | '30min' | '1h' | '5h' }, t('Auto shutdown setting updated.')); }}>{t('Apply auto shutdown')}</Button></div> : null}
           {canEdit ? <div className="device-control-actions device-control-actions-compact"><Button kind="secondary" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Restart this device now?'))) void runControl({ kind: 'power', action: 'reboot' }, t('Restart requested.')); }}>{t('Restart')}</Button><Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Shut down this device now?'))) void runControl({ kind: 'power', action: 'shutdown' }, t('Shutdown requested.')); }}>{t('Shut down')}</Button><Button kind="secondary" disabled={Boolean(busy)} onClick={() => setWifiEditorOpen((open) => !open)}>{wifiEditorOpen ? t('Cancel') : t('Configure Wi-Fi')}</Button>{canRelease ? <Button kind="danger" disabled={controlDisabled} onClick={() => { if (globalThis.confirm(t('Reset device configuration? Recordings are preserved.'))) void runControl({ kind: 'factory_reset', scope: 'configuration' }, t('Configuration reset requested.')); }}>{t('Reset configuration')}</Button> : null}</div> : null}
           <section className="device-recording-controls" aria-label={t('Recording controls')} aria-busy={busy.startsWith('control:recording')}>
-            <div className="device-recording-row">
-              <Button className="device-recording-action" kind={isRecording ? 'danger' : 'secondary'} disabled={recordingDisabled} onClick={() => void runControl({ kind: 'recording', action: isRecording ? 'stop' : isPaused ? 'resume' : 'start' }, t('Recording control confirmed.'))}>{isRecording ? t('Stop recording') : isPaused ? t('Resume recording') : t('Start recording')}</Button>
-              <Button className="device-recording-action" kind="secondary" disabled={recordingDisabled || !isRecording || !recordingModeKnown} title={!isRecording ? (lookbackMode ? t('Start a Lookback recording to preserve.') : t('Start a recording to insert a highlight.')) : undefined} onClick={() => void runControl({ kind: 'recording', action: lookbackMode ? 'preserve' : 'highlight' }, t('Recording control confirmed.'))}>{lookbackMode ? t('Preserve') : t('Highlight')}</Button>
-              <div className="device-recording-modes" role="group" aria-label={t('Recording mode')}>
+            <div className="device-recording-grid">
+              <div className="device-recording-segment" title={recordingSegmentHint}>
+                <Select ariaLabel={t('Segment length')} value={recordingSegment} onChange={setRecordingSegment} options={recordingSegmentSelectOptions} disabled={recordingSegmentDisabled}/>
+              </div>
+              <Button className="device-recording-action" kind={isRecording ? 'danger' : 'secondary'} disabled={recordingDisabled} title={recordingStateHint} onClick={() => void runControl(recordingPrimaryControl(isRecording ? 'stop' : isPaused ? 'resume' : 'start', Number(recordingSegment)), t('Recording control confirmed.'))}>{isRecording ? t('Stop recording') : isPaused ? t('Resume recording') : t('Start recording')}</Button>
+              <div className="device-recording-modes" role="group" aria-label={t('Recording mode')} title={recordingStateHint}>
                 <button type="button" className={recordMode === 0 ? 'is-active' : undefined} aria-pressed={recordMode === 0} disabled={recordingModeDisabled || recordMode === 0} onClick={() => changeRecordingMode('smart_capture')}>{t('Smart Capture')}</button>
                 <button type="button" className={lookbackMode ? 'is-active' : undefined} aria-pressed={lookbackMode} disabled={recordingModeDisabled || lookbackMode} onClick={() => changeRecordingMode('lookback')}>{t('Lookback')}</button>
               </div>
+              <Button className="device-recording-action" kind="secondary" disabled={recordingDisabled || !isRecording || !recordingModeKnown} title={recordingStateHint ?? (!isRecording ? (lookbackMode ? t('Start a Lookback recording to preserve.') : t('Start a recording to insert a highlight.')) : undefined)} onClick={() => void runControl({ kind: 'recording', action: lookbackMode ? 'preserve' : 'highlight' }, t('Recording control confirmed.'))}>{lookbackMode ? t('Preserve') : t('Highlight')}</Button>
             </div>
+            {recordingNote ? <div className="device-recording-notes"><small>{recordingNote}</small></div> : null}
           </section>
         </aside>
       </div>
@@ -732,9 +746,10 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
       {!workspace ? <div className="loading-panel"><span className="spinner"/><span>{t('Loading…')}</span></div> : workspace.files.length === 0 ? <div className="empty-state"><h3>{t('No recordings discovered')}</h3><p>{t('Run a recording scan while the device is online.')}</p></div> : <div className="table-wrap"><table className="data-table sync-table"><colgroup><col className="sync-col-status"/><col className="sync-col-session"/><col className="sync-col-size"/><col className="sync-col-timestamp"/><col className="sync-col-upload"/><col className="sync-col-actions"/></colgroup><thead><tr><th>{t('Status')}</th><th>{t('Session')}</th><th>{t('Size')}</th><th>{t('Timestamp')}</th><th>{t('Upload time')}</th><th>{t('Actions')}</th></tr></thead><tbody>{visibleFiles.map((file) => {
         const stamp = sessionTimestamp(file.session_id); const language = globalThis.document?.documentElement.lang;
         return <tr key={file.id} title={file.id}><td><span className={`status-pill status-${file.status}`} title={file.error_code ?? undefined}>{t(file.status)}</span></td><td><strong>{file.session_id}</strong></td><td>{formatBytes(file.actual_size ?? file.expected_size)}</td><td><time dateTime={stamp?.iso} title={sessionTimestampTitle(file.session_id, language)}>{formatSessionTimestamp(file.session_id, language)}</time></td><td><time dateTime={file.synced_at ?? undefined} title={isoTimestampTitle(file.synced_at, language)}>{formatIsoTimestamp(file.synced_at, language)}</time></td><td><div className="sync-row-actions">
-          {file.status === 'pending' ? <Button kind="secondary" disabled={!wsConnected || syncActive || Boolean(busy)} onClick={() => syncFile(file)}>{busy === 'sync' ? t('Requesting…') : t('Sync now')}</Button> : null}
-          {file.status === 'failed' ? <Button kind="secondary" disabled={Boolean(busy)} onClick={() => syncFile(file)}>{busy === `retry:${file.id}` ? t('Retrying…') : t('Retry')}</Button> : null}
-          {file.status === 'synced' && canRelease ? <Button kind="danger" disabled={Boolean(busy)} onClick={() => requestDeleteFile(file)}>{busy === `delete:${file.id}` ? t('Deleting…') : t('Delete')}</Button> : null}
+          {file.status === 'pending' && canSync ? <Button kind="secondary" disabled={!wsConnected || syncActive || Boolean(busy)} onClick={() => syncFile(file)}>{busy === 'sync' ? t('Requesting…') : t('Sync now')}</Button> : null}
+          {file.status === 'failed' && canSync ? <Button kind="secondary" disabled={Boolean(busy)} onClick={() => syncFile(file)}>{busy === `retry:${file.id}` ? t('Retrying…') : t('Retry')}</Button> : null}
+          {file.status === 'synced' && canRelease ? <Button className="icon-action" kind="danger" icon="trash" aria-label={t('Delete')} title={t('Delete')} disabled={Boolean(busy)} onClick={() => requestDeleteFile(file)}><span className="sr-only">{busy === `delete:${file.id}` ? t('Deleting…') : t('Delete')}</span></Button> : null}
+          {file.status === 'synced' && file.attribute === 0 ? <InlineLc3Player fileId={file.id} t={t}/> : null}
         </div></td></tr>;
       })}</tbody></table>{recordingPageCount > 1 ? <nav className="table-pagination" aria-label={t('Pagination')}><Button kind="ghost" disabled={currentRecordingPage === 0} onClick={() => setRecordingPage((page) => Math.max(0, page - 1))}>{t('Previous')}</Button><span>{t('Page {page} of {total}', { page: currentRecordingPage + 1, total: recordingPageCount })}</span><Button kind="ghost" disabled={currentRecordingPage >= recordingPageCount - 1} onClick={() => setRecordingPage((page) => Math.min(recordingPageCount - 1, page + 1))}>{t('Next')}</Button></nav> : null}</div>}
     </section>
@@ -744,11 +759,12 @@ export function DeviceManagement({ devices, t, canEdit, canRelease, onDevicesRef
       <div className="firmware-actions"><Select ariaLabel={t('Release channel')} value={firmwareChannel} onChange={(value) => { setFirmwareChannel(value as 'production' | 'developer'); setFirmware(undefined); }} options={[{ value: 'production', label: t('Production'), description: t('Stable firmware intended for end users.') }, { value: 'developer', label: t('Developer'), description: t('Developer firmware for explicit testing and integration.') }]}/><Button kind="secondary" disabled={!current?.hardware_version || Boolean(busy)} title={!current?.hardware_version ? t('Connect through WebSocket or BLE first so the hardware version can be identified.') : undefined} onClick={() => void checkFirmware()}>{busy === 'firmware-check' ? t('Checking…') : t('Check local')}</Button>{canRelease ? <Button kind="secondary" disabled={!current?.hardware_version || Boolean(busy)} title={!current?.hardware_version ? t('Connect through WebSocket or BLE first so the hardware version can be identified.') : undefined} onClick={() => void importOfficialFirmware()}>{busy === 'firmware-import' ? t('Importing…') : t('Import official')}</Button> : null}{canRelease && firmware ? <Button disabled={!controlConnected || Boolean(busy)} onClick={() => { if (globalThis.confirm(t('Install firmware {version} from the {channel} channel now?', { version: firmware.firmware.version, channel: t(firmwareChannel === 'developer' ? 'Developer' : 'Production') }))) void installFirmware(); }}>{busy === 'firmware-install' ? (otaProgress === null ? t('Starting…') : `${otaProgress}%`) : firmware.firmware.up_to_date ? t('Reinstall') : t('Install update')}</Button> : null}</div>
       {!current?.hardware_version ? <div className="firmware-requirement-note"><strong>{t('Hardware version is not available yet')}</strong><span>{t('Bring the device online through WebSocket, or connect it through BLE below. Firmware actions will unlock after device information is refreshed.')}</span></div> : null}
     </section>
+    {!canSync ? <section className="operation-card"><h3>{t('Firmware and synchronization controls')}</h3><p>{t('Read-only access: changes and credential creation are disabled.')}</p><div className="form-actions">{['Import official', 'Upload custom firmware', 'Install update', 'Sync now', 'Retry', 'Reset sync state'].map((label) => <Button key={label} kind="secondary" disabled>{t(label)}</Button>)}</div></section> : null}
     {canRelease ? <details className="firmware-repository-card"><summary>{t('Upload custom firmware')}</summary><div className="firmware-upload-grid"><div className="file-input-field"><label htmlFor="firmware-file">{t('Firmware file')}</label><input id="firmware-file" type="file" accept=".bin,application/octet-stream" onChange={(event) => setUploadFile(event.target.files?.[0])}/><small>{uploadFile ? `${uploadFile.name} · ${formatBytes(uploadFile.size)}` : t('The uploaded package is stored locally and verified again before every OTA transfer.')}</small></div><Field id="firmware-version" label={t('Firmware version')} value={uploadVersion} onChange={setUploadVersion} placeholder="v0.5.4-dev"/><Field id="firmware-crc16" label="CRC16" value={uploadCrc16} onChange={setUploadCrc16} placeholder="0–65535"/><Field id="firmware-max-chunk" label={t('Maximum BLE chunk')} value={uploadMaxBleChunk} onChange={setUploadMaxBleChunk} placeholder="0"/><Field id="firmware-notes" label={t('Release notes')} value={uploadNotes} onChange={setUploadNotes}/><div className="firmware-upload-action"><small>{t('Hardware {hardware} · {channel} channel', { hardware: String(current?.hardware_version ?? '—'), channel: t(firmwareChannel === 'developer' ? 'Developer' : 'Production') })}</small><Button disabled={!uploadFile || !uploadVersion.trim() || !uploadCrc16.trim() || Boolean(busy)} onClick={() => void uploadFirmware()}>{busy === 'firmware-upload' ? t('Uploading…') : t('Upload to local repository')}</Button></div></div></details> : null}
-    <section className="sync-control-card">
+    {canSync ? <section className="sync-control-card">
       <div><h3>{t('Synchronization recovery')}</h3><p>{t('Reset failed or stale synchronization attempts without deleting recordings, then request a fresh device inventory.')}</p></div>
       <div><Button kind="secondary" disabled={!summary?.failed || Boolean(busy)} onClick={() => { if (globalThis.confirm(t('Reset failed synchronization attempts and scan again?'))) void run('reset-failed', () => api(`/devices/${encodeURIComponent(deviceId)}/recording-sync/reset`, { method: 'POST', body: JSON.stringify({ mode: 'failed', reason: 'Administrator reset failed synchronization attempts' }) }), t('Failed synchronization attempts were reset.')); }}>{t('Reset failed')}</Button><Button kind="danger" disabled={Boolean(busy)} onClick={() => { if (globalThis.confirm(t('Reset failed and stale synchronization attempts? Recording objects will not be deleted.'))) void run('reset-stale', () => api(`/devices/${encodeURIComponent(deviceId)}/recording-sync/reset`, { method: 'POST', body: JSON.stringify({ mode: 'failed_and_stale', reason: 'Administrator reset failed and stale synchronization attempts' }) }), t('Failed and stale synchronization attempts were reset.')); }}>{t('Reset failed and stale')}</Button></div>
-    </section>
+    </section> : null}
     <section className="device-lower-grid"><article><p className="eyebrow">{t('Latest semantic command')}</p><DataTable data={workspace?.latest_command ?? commands} t={t} emptyMessage={t('No reviewed commands have been requested for this device.')}/></article><article><p className="eyebrow">{t('Public capability manifest')}</p><DataTable data={capabilities} t={t}/></article></section>
     </details>
     {deleteFileTarget ? <div className="secret-dialog-backdrop"><section className="secret-dialog device-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-recording-title">

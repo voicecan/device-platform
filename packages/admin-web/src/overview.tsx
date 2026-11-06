@@ -97,13 +97,14 @@ function eventMeta(item: EventItem): string {
   return value === undefined ? '' : String(value);
 }
 
-export function Overview({ t, health, onNavigate, onSelectDevice, isSystemAdmin, isGroupAdmin, hasGroup }: {
+export function Overview({ t, health, onNavigate, onSelectDevice, isSystemAdmin, isGroupAdmin, isViewer = false, hasGroup }: {
   t: Translate;
   health: string;
   onNavigate: (view: View, options?: NavigateOptions) => void;
   onSelectDevice: (deviceId: string) => void;
   isSystemAdmin: boolean;
   isGroupAdmin: boolean;
+  isViewer?: boolean;
   hasGroup: boolean;
 }) {
   const [data, setData] = useState<OverviewData>({});
@@ -113,8 +114,8 @@ export function Overview({ t, health, onNavigate, onSelectDevice, isSystemAdmin,
   const [refresh, setRefresh] = useState(0);
 
   const canSeeGroupData = isSystemAdmin || hasGroup;
-  const canSeePlatform = isSystemAdmin || isGroupAdmin;
-  const canSeeStorage = isSystemAdmin;
+  const canSeePlatform = isSystemAdmin || isGroupAdmin || isViewer;
+  const canSeeStorage = isSystemAdmin || isViewer;
   const canProvision = isSystemAdmin || isGroupAdmin;
   const noGroup = !canSeeGroupData;
 

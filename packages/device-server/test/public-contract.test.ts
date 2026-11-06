@@ -9,6 +9,8 @@ import {
 } from '../src/public-contract.js';
 
 test('recording media uses only reviewed facts and normalizes invalid values to unknown', () => {
+  assert.equal(reviewedRecordingMedia({ model: 'unreviewed', firmware_version: '99.0' }, 0).codec, 'lc3');
+  assert.equal(recordingMedia({ attribute: 0 }).codec, 'lc3');
   assert.deepEqual(reviewedRecordingMedia({ model: 'unreviewed', firmware_version: '99.0' }), {
     schema_version: 'recording.media.v1', container: null, codec: null,
     content_type: 'application/octet-stream', filename_extension: 'bin', sample_rate_hz: null,

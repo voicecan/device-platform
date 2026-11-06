@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 export const schemaSql = `
 PRAGMA journal_mode = WAL;
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS group_memberships (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
   group_id TEXT NOT NULL REFERENCES user_groups(id),
-  role TEXT NOT NULL CHECK (role IN ('group_admin','member')),
+  role TEXT NOT NULL CHECK (role IN ('group_admin','member','viewer')),
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

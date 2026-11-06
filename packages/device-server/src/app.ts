@@ -8,7 +8,7 @@ import Fastify, { LogController, type FastifyInstance, type FastifyReply, type F
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { API_VERSION, normalizeOpenPlatformPermissions, type AuthUser, type Device, type DeviceControl, type DeviceStatusSnapshot, type RecordingFile } from '@voicecan/contracts';
-import { AccessDeniedError, requireGroup, requireGroupAdmin, requireScope, requireSystemAdmin, sqlGroupGuard, type AccessContext } from '@voicecan/access-control';
+import { AccessDeniedError, isGroupViewer, requireGroup, requireGroupAdmin, requireGroupReader, requireScope, requireSystemAdmin, sqlGroupGuard, type AccessContext } from '@voicecan/access-control';
 import { loadNodeGatewayCore, prepareFirmwarePackage } from '@voicecan/device-core/node';
 import { currentDeviceAdvertiseHosts, type ServerConfig } from './config.js';
 import { DatabaseActor, type Database, type SqlStatement } from './database.js';
@@ -27,7 +27,7 @@ import { registerOAuthMcpRoutes } from './oauth-mcp.js';
 import { registerQuickStudioRoutes } from './studio-quick-connect.js';
 import { registerQuickMcpRoutes } from './mcp-quick-connect.js';
 import { BlockList, isIP } from 'node:net';
-import { mapPublicCommand, mapPublicRecording, recordingEventFacts, reviewedRecordingMedia } from './public-contract.js';
+import { mapPublicCommand, mapPublicRecording, recordingEventFacts, recordingFilename, reviewedRecordingMedia } from './public-contract.js';
 import { createServerLogger } from './logging.js';
 import { NativeHandoffError, registerNativeHandoffRoutes } from './native-handoff.js';
 import { RecoveryBackups } from './recovery-backup.js';
@@ -391,6 +391,8 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
 
   const browserCookieOptions = { secure: config.publicBaseUrl.startsWith('https:'), sameSite: 'strict' as const, path: '/' };
+  const humanSessionTtlMs = 12 * 60 * 60_000;
+  const humanSessionCookieMaxAgeSeconds = humanSessionTtlMs / 1_000;
 
   const audit = async (request: FastifyRequest, context: AccessContext, action: string, resourceType: string, resourceId?: string, groupId?: string, reason?: string): Promise<void> => {
     await db.run('INSERT INTO audit_logs(id,actor_id,action,resource_type,resource_id,group_id,application_id,credential_id,principal_id,request_id,result,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -452,7 +454,17 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.disabled_at IS NULL`, [tokenHash(raw), now()]);
     if (!row) throw new HttpError(401, 'UNAUTHENTICATED', 'Authentication required');
     if (mutation && !constantTimeHexEqual(row.csrf_hash!, tokenHash(String(request.headers['x-csrf-token'] ?? '')))) throw new HttpError(403, 'CSRF_FAILED', 'CSRF token is invalid');
-    const context: AccessContext = { actorId: row.user_id!, actorType: 'user', isSystemAdmin: row.role === 'system_admin', groupId: row.group_id ?? null, isGroupAdmin: row.membership_role === 'group_admin', scopes: new Set<string>(), channel: 'admin' }; requestAccess.set(request, context); return context;
+    const context: AccessContext = { actorId: row.user_id!, actorType: 'user', isSystemAdmin: row.role === 'system_admin', groupId: row.group_id ?? null, isGroupAdmin: row.membership_role === 'group_admin', membershipRole: (row.membership_role ?? null) as Exclude<AccessContext['membershipRole'], undefined>, scopes: new Set<string>(), channel: 'admin' };
+    if (mutation && isGroupViewer(context)) {
+      // Match registered routes, never caller-controlled URLs. These operations
+      // manage the caller's session or grant read access, not business writes.
+      const viewerRoutes = new Set([
+        '/api/v1/auth/refresh', '/api/v1/auth/logout', '/api/v1/auth/change-password',
+        '/api/v1/recordings/:id/download-links', '/oauth/authorize',
+      ]);
+      if (!viewerRoutes.has(request.routeOptions.url ?? '')) throw new HttpError(403, 'VIEWER_READ_ONLY', 'Group viewers have read-only access');
+    }
+    requestAccess.set(request, context); return context;
   };
 
   const requireDevice = async (context: AccessContext, deviceId: string): Promise<Row> => {
@@ -477,13 +489,14 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     };
   };
 
-  const readStorageState = async (): Promise<Record<string, unknown>> => {
+  const readStorageState = async (viewerGroupId?: string): Promise<Record<string, unknown>> => {
     const [policy, active, capacity] = await Promise.all([
       readStoragePolicy(),
-      db.get<Row>("SELECT COALESCE(SUM(CASE WHEN status='syncing' THEN 1 ELSE 0 END),0) AS active_transfers,COALESCE(SUM(CASE WHEN status='synced' AND deletion_status<>'object_deleted' THEN actual_size ELSE 0 END),0) AS stored_bytes FROM recording_files"),
-      config.storageDriver === 's3_direct' ? Promise.resolve(null) : storage.capacity(),
+      db.get<Row>(`SELECT COALESCE(SUM(CASE WHEN status='syncing' THEN 1 ELSE 0 END),0) AS active_transfers,COALESCE(SUM(CASE WHEN status='synced' AND deletion_status<>'object_deleted' THEN actual_size ELSE 0 END),0) AS stored_bytes FROM recording_files f JOIN devices d ON d.id=f.device_id ${viewerGroupId ? 'WHERE d.group_id=?' : ''}`, viewerGroupId ? [viewerGroupId] : []),
+      viewerGroupId || config.storageDriver === 's3_direct' ? Promise.resolve(null) : storage.capacity(),
     ]);
     return {
+      scope: viewerGroupId ? 'group' : 'platform',
       driver: config.storageDriver,
       driver_source: 'deployment_environment',
       driver_change_requires_restart: true,
@@ -724,7 +737,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   app.get('/', async (_request, reply) => {
     return reply.header('Cache-Control', 'no-store').redirect('/admin');
   });
-  const adminAsset = (name: 'index.html' | 'style.css' | 'app.js') => readFile(new URL(`../../admin-web/dist/${name}`, import.meta.url));
+  const adminAsset = (name: 'index.html' | 'style.css' | 'app.js' | 'lc3-wasm.wasm') => readFile(new URL(`../../admin-web/dist/${name}`, import.meta.url));
   app.get('/admin', async (_request, reply) => {
     const [html, css] = await Promise.all([adminAsset('index.html'), adminAsset('style.css')]);
     const styleVersion = createHash('sha256').update(css).digest('hex').slice(0, 16);
@@ -733,6 +746,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
   app.get('/admin/style.css', async (_request, reply) => reply.type('text/css; charset=utf-8').header('Cache-Control', 'no-store').send(await adminAsset('style.css')));
   app.get('/admin/app.js', async (_request, reply) => reply.type('text/javascript; charset=utf-8').header('Cache-Control', 'no-store').send(await adminAsset('app.js')));
+  app.get('/admin/lc3-wasm.wasm', async (_request, reply) => reply.type('application/wasm').header('Cache-Control', 'no-store').send(await adminAsset('lc3-wasm.wasm')));
   const requireHumanAssetAccess = async (request: FastifyRequest): Promise<void> => {
     const context = await resolveAccess(request);
     if (context.actorType !== 'user') throw new HttpError(403, 'HUMAN_SESSION_REQUIRED', 'Human session required');
@@ -812,16 +826,28 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       { sql: 'DELETE FROM login_attempts WHERE identity_hash=? AND ip_hash=?', params: [ipRateLimitIdentityHash, ipHash] },
     ]);
     const sessionToken = opaqueToken(); const csrfToken = opaqueToken();
-    await db.run('INSERT INTO user_sessions(id,user_id,token_hash,csrf_hash,expires_at,created_at) VALUES(?,?,?,?,?,?)', [id('session'), row.id, tokenHash(sessionToken), tokenHash(csrfToken), plus(12 * 60 * 60_000), now()]);
-    reply.setCookie('vc_session', sessionToken, { ...browserCookieOptions, httpOnly: true, maxAge: 43_200 });
-    reply.setCookie('vc_csrf', csrfToken, { ...browserCookieOptions, httpOnly: false, maxAge: 43_200 });
+    await db.run('INSERT INTO user_sessions(id,user_id,token_hash,csrf_hash,expires_at,created_at) VALUES(?,?,?,?,?,?)', [id('session'), row.id, tokenHash(sessionToken), tokenHash(csrfToken), plus(humanSessionTtlMs), now()]);
+    reply.setCookie('vc_session', sessionToken, { ...browserCookieOptions, httpOnly: true, maxAge: humanSessionCookieMaxAgeSeconds });
+    reply.setCookie('vc_csrf', csrfToken, { ...browserCookieOptions, httpOnly: false, maxAge: humanSessionCookieMaxAgeSeconds });
     return success(reply, { csrf_token: csrfToken });
   });
 
   app.get('/api/v1/auth/me', async (request, reply) => {
     const context = await resolveAccess(request); if (context.actorType !== 'user') throw new HttpError(403, 'HUMAN_SESSION_REQUIRED', 'Human session required');
     const row = await db.get<AuthUser & Row>(`SELECT u.id,u.username,u.display_name,u.role,gm.group_id,gm.role AS membership_role FROM users u LEFT JOIN group_memberships gm ON gm.user_id=u.id AND gm.active=1 WHERE u.id=?`, [context.actorId]);
-    return success(reply, row);
+    return success(reply, { ...row, can_change_password: !isGroupViewer(context) || config.viewerAllowPasswordChange, can_mutate_group: !isGroupViewer(context) });
+  });
+
+  app.post('/api/v1/auth/refresh', async (request, reply) => {
+    const context = await resolveAccess(request, true); if (context.actorType !== 'user') throw new HttpError(403, 'HUMAN_SESSION_REQUIRED', 'Human session required');
+    const raw = request.cookies.vc_session!; const expiresAt = plus(humanSessionTtlMs);
+    const updated = await db.run('UPDATE user_sessions SET expires_at=? WHERE token_hash=? AND revoked_at IS NULL AND expires_at>?', [expiresAt, tokenHash(raw), now()]);
+    if (updated.changes !== 1) throw new HttpError(401, 'UNAUTHENTICATED', 'Authentication required');
+    reply.header('Cache-Control', 'no-store');
+    reply.setCookie('vc_session', raw, { ...browserCookieOptions, httpOnly: true, maxAge: humanSessionCookieMaxAgeSeconds });
+    const csrfCookie = request.cookies.vc_csrf;
+    if (csrfCookie) reply.setCookie('vc_csrf', csrfCookie, { ...browserCookieOptions, httpOnly: false, maxAge: humanSessionCookieMaxAgeSeconds });
+    return success(reply, { expires_at: expiresAt });
   });
 
   app.get('/api/v1/auth/csrf', async (request, reply) => {
@@ -856,6 +882,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
 
   app.post('/api/v1/auth/change-password', async (request, reply) => {
     const context = await resolveAccess(request, true); if (context.actorType !== 'user') throw new HttpError(403, 'HUMAN_SESSION_REQUIRED', 'Human session required');
+    if (isGroupViewer(context) && !config.viewerAllowPasswordChange) throw new HttpError(403, 'PASSWORD_CHANGE_DISABLED', 'Password changes for Group viewers are disabled by the server');
     const body = bodyOf(request); const current = requiredString(body, 'current_password', 256); const next = requiredString(body, 'new_password', 256);
     const row = await db.get<{ password_hash: string }>('SELECT password_hash FROM users WHERE id=?', [context.actorId]);
     if (!row || !await verifyPassword(current, row.password_hash)) throw new HttpError(401, 'INVALID_CREDENTIALS', 'Current password is invalid');
@@ -863,7 +890,12 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     await audit(request, context, 'user.password_changed', 'user', context.actorId); reply.clearCookie('vc_session', { path: '/' }); reply.clearCookie('vc_csrf', { path: '/' }); return success(reply, {});
   });
 
-  app.get('/api/v1/users', async (request, reply) => { const context = await resolveAccess(request); requireSystemAdmin(context); return success(reply, await db.all('SELECT id,username,display_name,role,disabled_at,created_at FROM users ORDER BY created_at,id')); });
+  app.get('/api/v1/users', async (request, reply) => { const context = await resolveAccess(request);
+    if (isGroupViewer(context)) {
+      requireGroupReader(context, requireGroup(context));
+      return success(reply, await db.all('SELECT u.id,u.username,u.display_name,u.role,gm.role AS membership_role,u.disabled_at,u.created_at FROM users u JOIN group_memberships gm ON gm.user_id=u.id WHERE gm.group_id=? AND gm.active=1 ORDER BY u.created_at,u.id', [context.groupId]));
+    }
+    requireSystemAdmin(context); return success(reply, await db.all('SELECT id,username,display_name,role,disabled_at,created_at FROM users ORDER BY created_at,id')); });
   app.post('/api/v1/users', async (request, reply) => {
     const context = await resolveAccess(request, true); requireSystemAdmin(context); const body = bodyOf(request); const timestamp = now(); const userId = id('user');
     await db.run('INSERT INTO users(id,username,normalized_username,display_name,role,password_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)', [userId, requiredString(body, 'username', 64), normalizeUsername(requiredString(body, 'username', 64)), optionalString(body, 'display_name', 128), body.role === 'system_admin' ? 'system_admin' : 'user', await hashPassword(requiredString(body, 'password', 256)), timestamp, timestamp]);
@@ -915,13 +947,20 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     await audit(request, context, status === 'archived' ? 'group.archived' : 'group.updated', 'group', groupId); return success(reply, {});
   });
   app.get('/api/v1/user-groups/:id/members', async (request, reply) => {
-    const context = await resolveAccess(request); const groupId = String((request.params as Row).id); requireGroupAdmin(context, groupId);
+    const context = await resolveAccess(request); const groupId = String((request.params as Row).id); requireGroupReader(context, groupId);
     return success(reply, await db.all('SELECT u.id,u.username,u.display_name,gm.role FROM group_memberships gm JOIN users u ON u.id=gm.user_id WHERE gm.group_id=? AND gm.active=1 ORDER BY gm.created_at', [groupId]));
   });
   app.put('/api/v1/user-groups/:id/members', async (request, reply) => {
-    const context = await resolveAccess(request, true); const groupId = String((request.params as Row).id); requireGroupAdmin(context, groupId); const userId = requiredString(bodyOf(request), 'user_id', 80);
-    const membershipId = id('membership'); const timestamp = now(); await db.run('INSERT INTO group_memberships(id,user_id,group_id,role,created_at,updated_at) VALUES(?,?,?,?,?,?)', [membershipId, userId, groupId, 'member', timestamp, timestamp]);
-    await audit(request, context, 'group.member_added', 'membership', membershipId, groupId); return success(reply, { id: membershipId }, 201);
+    const context = await resolveAccess(request, true); const groupId = String((request.params as Row).id); requireGroupAdmin(context, groupId); const body = bodyOf(request); const userId = requiredString(body, 'user_id', 80);
+    const role = body.role ?? 'member';
+    if (role !== 'member' && role !== 'viewer') throw new HttpError(400, 'INVALID_MEMBERSHIP_ROLE', 'Membership role must be member or viewer');
+    const existing = await db.get<{ id: string; role: string; group_id: string }>('SELECT id,role,group_id FROM group_memberships WHERE user_id=? AND active=1', [userId]);
+    if (existing && (existing.group_id !== groupId || existing.role === 'group_admin')) throw new HttpError(409, 'MEMBERSHIP_CONFLICT', 'Use the administrator transfer flow or remove the existing membership first');
+    const membershipId = existing?.id ?? id('membership'); const timestamp = now();
+    if (existing) await db.run("UPDATE group_memberships SET role=?,updated_at=? WHERE id=? AND active=1 AND role<>'group_admin'", [role, timestamp, membershipId]);
+    else await db.run('INSERT INTO group_memberships(id,user_id,group_id,role,created_at,updated_at) VALUES(?,?,?,?,?,?)', [membershipId, userId, groupId, role, timestamp, timestamp]);
+    await audit(request, context, existing ? 'group.member_role_updated' : 'group.member_added', 'membership', membershipId, groupId);
+    return success(reply, { id: membershipId, role }, existing ? 200 : 201);
   });
   app.delete('/api/v1/user-groups/:id/members/:userId', async (request, reply) => {
     const context = await resolveAccess(request, true); const params = request.params as Row; const groupId = String(params.id); requireGroupAdmin(context, groupId);
@@ -1306,7 +1345,14 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
         if (['never', '15min', '30min', '1h', '5h'].includes(String(payload.interval))) autoShutdown = { interval: String(payload.interval), updated_at: lastAutoShutdown.completed_at };
       } catch { /* ignore malformed historical command payloads */ }
     }
-    return success(reply, { device: mapDevice(device), status: mapDeviceStatus(status, deviceId), auto_shutdown: autoShutdown, refresh_available: Boolean(device.online), polling_interval_seconds: 60 });
+    // Admin clients poll this endpoint. A local recording-button/mode change
+    // does not always produce a device notification, so refresh a stale WSS
+    // snapshot on demand; the gateway coalesces requests and defers them while
+    // a transfer owns the device command lane.
+    const statusUpdatedAt = status?.status_updated_at ? Date.parse(String(status.status_updated_at)) : Number.NaN;
+    const statusAgeMs = Number.isFinite(statusUpdatedAt) ? Date.now() - statusUpdatedAt : Number.POSITIVE_INFINITY;
+    if (Boolean(device.online) && statusAgeMs > 5_000) gateway.requestStatus(deviceId);
+    return success(reply, { device: mapDevice(device), status: mapDeviceStatus(status, deviceId), auto_shutdown: autoShutdown, refresh_available: Boolean(device.online), polling_interval_seconds: 5 });
   });
   app.post('/api/v1/devices/:id/status/refresh', async (request, reply) => {
     const context = await resolveAccess(request, true); if (context.actorType !== 'user') throw new AccessDeniedError(); const deviceId = String((request.params as Row).id); const device = await requireDevice(context, deviceId); requireGroupAdmin(context, String(device.group_id));
@@ -1617,14 +1663,14 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
   });
   app.get('/api/v1/files/:id', async (request, reply) => { const context = await resolveAccess(request); requireScope(context, 'files:read'); const guard = sqlGroupGuard(context); const row = await db.get<Row>(`SELECT f.* FROM recording_files f JOIN devices d ON d.id=f.device_id WHERE f.id=? AND ${guard.clause}${context.isSystemAdmin ? '' : " AND f.deletion_status='active'"}`, [String((request.params as Row).id), ...guard.params]); if (!row) throw new AccessDeniedError(); return success(reply, mapFile(row)); });
   app.get('/api/v1/files/:id/content', async (request, reply) => {
-    const context = await resolveAccess(request); if (context.actorType === 'application_token' || context.actorType === 'oauth') throw new HttpError(410, 'CONTENT_ROUTE_DEPRECATED', 'Create a short-lived recording download link instead'); requireScope(context, 'recordings:read'); reply.header('deprecation', 'true').header('sunset', 'Wed, 06 Aug 2027 00:00:00 GMT').header('link', '</api/v1/recordings/{id}/download-links>; rel="successor-version"'); const guard = sqlGroupGuard(context); const row = await db.get<{ storage_locator: string; id: string; actual_size: number; sha256: string; group_id: string }>(`SELECT f.id,f.storage_locator,f.actual_size,f.sha256,d.group_id FROM recording_files f JOIN devices d ON d.id=f.device_id WHERE f.id=? AND f.status='synced' AND f.deletion_status='active' AND ${guard.clause}`, [String((request.params as Row).id), ...guard.params]); if (!row?.storage_locator) throw new AccessDeniedError(); const size = Number(row.actual_size); let range: { start: number; end: number } | undefined; const requestedRange = request.headers.range;
+    const context = await resolveAccess(request); if (context.actorType === 'application_token' || context.actorType === 'oauth') throw new HttpError(410, 'CONTENT_ROUTE_DEPRECATED', 'Create a short-lived recording download link instead'); requireScope(context, 'recordings:read'); reply.header('deprecation', 'true').header('sunset', 'Wed, 06 Aug 2027 00:00:00 GMT').header('link', '</api/v1/recordings/{id}/download-links>; rel="successor-version"'); const guard = sqlGroupGuard(context); const row = await db.get<{ storage_locator: string; id: string; actual_size: number; sha256: string; group_id: string; media_content_type: string; media_filename_extension: string }>(`SELECT f.id,f.storage_locator,f.actual_size,f.sha256,f.media_content_type,f.media_filename_extension,d.group_id FROM recording_files f JOIN devices d ON d.id=f.device_id WHERE f.id=? AND f.status='synced' AND f.deletion_status='active' AND ${guard.clause}`, [String((request.params as Row).id), ...guard.params]); if (!row?.storage_locator) throw new AccessDeniedError(); const size = Number(row.actual_size); let range: { start: number; end: number } | undefined; const requestedRange = request.headers.range;
     if (requestedRange) {
       const match = /^bytes=(\d*)-(\d*)$/.exec(requestedRange); if (!match || (!match[1] && !match[2])) { reply.header('content-range', `bytes */${size}`); throw new HttpError(416, 'RANGE_NOT_SATISFIABLE', 'Only one valid byte range is supported'); }
       let start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2])); let end = match[2] && match[1] ? Number(match[2]) : size - 1;
       if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= size || end < start) { reply.header('content-range', `bytes */${size}`); throw new HttpError(416, 'RANGE_NOT_SATISFIABLE', 'Requested range is outside the file'); }
       end = Math.min(end, size - 1); range = { start, end }; reply.code(206).header('content-range', `bytes ${start}-${end}/${size}`).header('content-length', String(end - start + 1));
     } else reply.header('content-length', String(size));
-    reply.header('accept-ranges', 'bytes').header('content-type', 'application/octet-stream').header('cache-control', 'private, no-store').header('content-disposition', `attachment; filename="${basename(row.id)}.bin"`); if (row.sha256) reply.header('etag', `"sha256-${row.sha256}"`); const stream = row.storage_locator.startsWith('s3:') ? await s3Storage?.open(row.storage_locator, range) : createReadStream(storage.resolveLocator(row.storage_locator), range); if (!stream) throw new HttpError(503, 'STORAGE_UNAVAILABLE', 'Storage driver is unavailable'); await audit(request, context, range ? 'file.range_read' : 'file.downloaded', 'recording_file', row.id, row.group_id, range ? `${range.start}-${range.end}` : undefined); return reply.send(stream);
+    reply.header('accept-ranges', 'bytes').header('content-type', row.media_content_type || 'application/octet-stream').header('cache-control', 'private, no-store').header('content-disposition', `attachment; filename="${recordingFilename(row)}"`); if (row.sha256) reply.header('etag', `"sha256-${row.sha256}"`); const stream = row.storage_locator.startsWith('s3:') ? await s3Storage?.open(row.storage_locator, range) : createReadStream(storage.resolveLocator(row.storage_locator), range); if (!stream) throw new HttpError(503, 'STORAGE_UNAVAILABLE', 'Storage driver is unavailable'); await audit(request, context, range ? 'file.range_read' : 'file.downloaded', 'recording_file', row.id, row.group_id, range ? `${range.start}-${range.end}` : undefined); return reply.send(stream);
   });
 
   app.put('/api/v1/files/:id/legal-hold', async (request, reply) => {
@@ -1669,7 +1715,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     const secretId = id('secret'); const secret = `vce_${opaqueToken()}`; await db.run('UPDATE event_endpoints SET next_secret_id=?,next_secret_ciphertext=?,next_activates_at=? WHERE id=?', [secretId, encryptSecret(secret, config.masterKey, endpointId), activatesAt, endpointId]); await audit(request, context, 'event_endpoint.secret_rotation_scheduled', 'event_endpoint', endpointId, row.group_id); return success(reply, { secret_id: secretId, secret, activates_at: activatesAt });
   });
   app.get('/api/v1/event-endpoints/:id/deliveries', async (request, reply) => {
-    const context = await resolveAccess(request); const endpointId = String((request.params as Row).id); const endpoint = await db.get<{ group_id: string }>('SELECT group_id FROM event_endpoints WHERE id=?', [endpointId]); if (!endpoint) throw new AccessDeniedError(); requireGroupAdmin(context, endpoint.group_id); const status = String((request.query as Row).status ?? 'dead'); if (!['pending', 'delivered', 'dead', 'canceled'].includes(status)) throw new HttpError(400, 'INVALID_DELIVERY_STATUS', 'Unsupported delivery status');
+    const context = await resolveAccess(request); const endpointId = String((request.params as Row).id); const endpoint = await db.get<{ group_id: string }>('SELECT group_id FROM event_endpoints WHERE id=?', [endpointId]); if (!endpoint) throw new AccessDeniedError(); requireGroupReader(context, endpoint.group_id); const status = String((request.query as Row).status ?? 'dead'); if (!['pending', 'delivered', 'dead', 'canceled'].includes(status)) throw new HttpError(400, 'INVALID_DELIVERY_STATUS', 'Unsupported delivery status');
     return success(reply, await db.all(`SELECT ed.id,ed.event_id,ed.replay_namespace,ed.status,ed.attempts,ed.next_attempt_at,ed.delivered_at,ed.last_status_code,ed.last_error,ed.created_at FROM event_deliveries ed JOIN events e ON e.id=ed.event_id JOIN devices d ON d.id=e.device_id WHERE ed.endpoint_id=? AND ed.status=? AND d.group_id=? ORDER BY ed.created_at DESC,ed.id DESC LIMIT 200`, [endpointId, status, endpoint.group_id]));
   });
   app.post('/api/v1/event-deliveries/:id/replay', async (request, reply) => {
@@ -1695,7 +1741,9 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
     return success(reply, await db.all(`SELECT id,actor_id,action,resource_type,resource_id,group_id,request_id,result,reason,created_at FROM audit_logs WHERE ${where} ORDER BY created_at DESC,id DESC LIMIT 200`, params));
   });
   app.get('/api/v1/admin/storage', async (request, reply) => {
-    const context = await resolveAccess(request); requireSystemAdmin(context); return success(reply, await readStorageState());
+    const context = await resolveAccess(request);
+    if (isGroupViewer(context)) { requireGroupReader(context, requireGroup(context)); return success(reply, await readStorageState(requireGroup(context))); }
+    requireSystemAdmin(context); return success(reply, await readStorageState());
   });
   app.get('/api/v1/admin/backups/status', async (request, reply) => {
     const context = await resolveAccess(request); requireSystemAdmin(context);
@@ -1746,7 +1794,7 @@ export async function buildServer(config: ServerConfig, options: { database?: Da
       const sessionId = requiredInteger(body, 'session_id');
       const attribute = requiredInteger(body, 'attribute');
       const expectedSize = requiredInteger(body, 'content_length', 1);
-      const media = reviewedRecordingMedia(device);
+      const media = reviewedRecordingMedia(device, attribute);
       const candidate = await db.get<Row>('SELECT * FROM recording_files WHERE device_id=? AND credential_epoch=? AND session_id=? AND attribute=? ORDER BY revision DESC LIMIT 1', [deviceId, device.credential_epoch, sessionId, attribute]);
       if (candidate && Number(candidate.expected_size) !== expectedSize) {
         const conflictId = id('file');

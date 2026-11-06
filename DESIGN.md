@@ -1,8 +1,8 @@
-# Elio Admin design
+# Voicecan Admin design
 
-Scope: Devices and Users pages in the independent Elio preview. Preserve their resource ownership, forms, tables, operation handlers, permissions, confirmations and pagination.
+Scope: Devices and Users pages in the independent platform. Preserve their resource ownership, forms, tables, operation handlers, permissions, confirmations and pagination.
 
-Reference: `/Users/elio/Desktop/app/awesome-design-md/design-md/linear.app/DESIGN.md`. The requested `/Users/elio/Desktop/app/admin-web/DESIGN.md` and an existing Platform root DESIGN.md were not present when inspected.
+Use Linear as a visual reference for compact administration workflows, with the platform's own color tokens and interaction rules below.
 
 Retain the original warm white canvas (#f7f6f2), white panels, neutral text (#272622), warm hairline borders (#e3e0d9), and teal accent (#466873), as explicitly requested by the user. Use Linear only as a reference for compact typography, spacing, and control hierarchy. Keep a 4px spacing scale, system sans with Chinese fallbacks, 24px page titles, 14px body text, 8px control radii and 12px panel radii. Use surface hierarchy instead of gradients or decorative shadows. Secondary controls remain quiet; destructive actions retain explicit labels and confirmations.
 

@@ -48,6 +48,7 @@ for (const required of [
   'README.md',
   'runtime/device-server/dist/cli.js',
   'runtime/admin-web/dist/index.html',
+  'runtime/admin-web/dist/lc3-wasm.wasm',
   'runtime/device-web/dist/index.js',
   'runtime/device-ui/dist/index.js',
   'node_modules/@voicecan/access-control/dist/index.js',

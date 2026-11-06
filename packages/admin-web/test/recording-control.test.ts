@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { recordingModeControl, recordingResultMessage, waitForRecordingCommand } from '../src/recording-control.js';
+import { recordingModeControl, recordingPrimaryControl, recordingResultMessage, recordingSegmentDurationSupported, recordingSegmentLabel, recordingSegmentOptions, waitForRecordingCommand } from '../src/recording-control.js';
 
 test('recording mode uses current microphone settings and refuses unknown settings', () => {
   assert.deepEqual(recordingModeControl('lookback', { microphone_mode: 2, microphone_gain_db: 17 }), { kind: 'recording_mode', mode: 'lookback', microphoneMode: 2, microphoneGainDb: 17 });
   assert.deepEqual(recordingModeControl('lookback', { microphone_mode: 3, microphone_gain_db: 17 }), { kind: 'recording_mode', mode: 'lookback', microphoneMode: 3, microphoneGainDb: 17 });
   for (const status of [{ microphone_mode: null, microphone_gain_db: 3 }, { microphone_mode: 0, microphone_gain_db: null }, { microphone_mode: 4, microphone_gain_db: 2 }, { microphone_mode: 0, microphone_gain_db: 32 }]) assert.throws(() => recordingModeControl('smart_capture', status), /RECORDING_SETTINGS_UNAVAILABLE/);
+});
+
+test('segment selector supports the reviewed runtime and only Start sends the selected minutes', () => {
+  assert.equal(recordingSegmentDurationSupported, true);
+  assert.deepEqual([...recordingSegmentOptions], [0, 15, 30, 45, 60]);
+  assert.equal(recordingSegmentLabel(0), 'Unlimited');
+  assert.equal(recordingSegmentLabel(45), '45 minutes');
+  assert.deepEqual(recordingPrimaryControl('start'), { kind: 'recording', action: 'start', maxDurationMinutes: 0 });
+  for (const minutes of recordingSegmentOptions) {
+    assert.deepEqual(recordingPrimaryControl('start', minutes), { kind: 'recording', action: 'start', maxDurationMinutes: minutes });
+    for (const action of ['stop', 'resume'] as const) assert.deepEqual(recordingPrimaryControl(action, minutes), { kind: 'recording', action });
+  }
 });
 
 test('recording confirmation waits through dispatch and running before succeeding', async () => {

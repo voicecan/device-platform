@@ -2,7 +2,13 @@ import type { DeviceControl, SemanticProtocolSession } from '@voicecan/device-co
 
 export async function applyMaintenanceControl(session: SemanticProtocolSession, control: DeviceControl): Promise<void> {
   switch (control.kind) {
-    case 'recording': await session.controlRecording(control.action); return;
+    case 'recording':
+      if (control.action === 'start' && control.maxDurationMinutes !== undefined) {
+        await session.controlRecording('start', { maxDurationMinutes: control.maxDurationMinutes });
+      } else {
+        await session.controlRecording(control.action);
+      }
+      return;
     case 'recording_mode': await session.setRecordingMode(control); return;
     case 'auto_shutdown': await session.setAutoShutdown(control.interval); return;
     case 'usb': case 'privacy': case 'earphone_recording': await session.setFeature(control.kind, control.enabled); return;

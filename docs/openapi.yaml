@@ -81,7 +81,9 @@ components:
         display_name: { type: [string, 'null'] }
         role: { type: string, enum: [system_admin, user] }
         group_id: { type: [string, 'null'] }
-        membership_role: { type: [string, 'null'], enum: [group_admin, member, null] }
+        membership_role: { type: [string, 'null'], enum: [group_admin, member, viewer, null] }
+        can_change_password: { type: boolean }
+        can_mutate_group: { type: boolean }
     Device:
       type: object
       required: [id, display_name, manufacturer, sn, model, hardware_version, firmware_version, group_id, ownership_epoch, online, last_seen_at, created_at, updated_at]
@@ -207,7 +209,14 @@ components:
           required: [kind, action]
           properties:
             kind: { const: recording }
-            action: { type: string, enum: [start, pause, resume, stop, highlight, preserve] }
+            action: { const: start }
+            maxDurationMinutes: { type: integer, minimum: 0, maximum: 255, default: 0, description: Automatic segment length in minutes. Zero or omission disables segmentation. Only valid for recording start. }
+        - type: object
+          additionalProperties: false
+          required: [kind, action]
+          properties:
+            kind: { const: recording }
+            action: { type: string, enum: [pause, resume, stop, highlight, preserve] }
         - type: object
           additionalProperties: false
           required: [kind, mode, microphoneMode, microphoneGainDb]
@@ -590,6 +599,11 @@ paths:
         '200':
           description: Current identity
           content: { application/json: { schema: { $ref: '#/components/schemas/AuthUserEnvelope' } } }
+  /auth/refresh:
+    post:
+      summary: Extend the current human session and cookie lifetime
+      security: [{ sessionCookie: [] }]
+      responses: { '200': { description: Extended session }, '401': { description: Session expired } }
   /auth/csrf:
     get:
       summary: Refresh the CSRF token for the current human session
@@ -604,7 +618,7 @@ paths:
           description: Device access settings
           content: { application/json: { schema: { $ref: '#/components/schemas/DeviceAccessSettings' } } }
   /auth/change-password:
-    post: { summary: Change current password and revoke sessions, security: [{ sessionCookie: [] }], responses: { '200': { description: Changed } } }
+    post: { summary: Change current password and revoke sessions, description: Group viewers may be blocked by VOICECAN_VIEWER_ALLOW_PASSWORD_CHANGE., security: [{ sessionCookie: [] }], responses: { '200': { description: Changed }, '403': { description: Password changes disabled for Group viewers } } }
   /users:
     get: { summary: List local users, security: [{ sessionCookie: [] }], responses: { '200': { description: Users } } }
     post: { summary: Create a local user, security: [{ sessionCookie: [] }], responses: { '201': { description: Created } } }
@@ -620,7 +634,24 @@ paths:
     patch: { summary: Rename or archive a dependency-free group, security: [{ sessionCookie: [] }], responses: { '200': { description: Updated }, '409': { description: Group still owns devices } } }
   /user-groups/{id}/members:
     get: { summary: List active members, security: [{ sessionCookie: [] }], responses: { '200': { description: Members } } }
-    put: { summary: Add an active member, security: [{ sessionCookie: [] }], responses: { '201': { description: Added } } }
+    put:
+      summary: Add a member or update a non-admin member role
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string }
+                role: { type: string, enum: [member, viewer], default: member }
+      responses:
+        '200': { description: Role updated }
+        '201': { description: Member added }
+        '400': { description: Invalid role }
+        '409': { description: Existing Group Admin or membership in another Group }
   /user-groups/{id}/members/{userId}:
     delete: { summary: Remove a non-admin member and revoke sessions, security: [{ sessionCookie: [] }], responses: { '200': { description: Removed }, '409': { description: Member cannot be removed } } }
   /user-groups/{id}/transfer-admin:

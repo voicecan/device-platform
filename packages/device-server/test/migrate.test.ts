@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { migrate } from '../src/migrate.js';
-import { SCHEMA_VERSION } from '../src/schema.js';
+import { SCHEMA_VERSION, schemaSql } from '../src/schema.js';
 
 test('migration upgrades the v1 delivery ledger and remains idempotent', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-migrate-'));
@@ -70,5 +70,30 @@ test('migration upgrades the v1 delivery ledger and remains idempotent', async (
     assert.throws(() => writable.prepare("UPDATE audit_logs SET result='failure' WHERE id='audit_immutable'").run(), /AUDIT_LOG_IMMUTABLE/);
     assert.throws(() => writable.prepare("DELETE FROM audit_logs WHERE id='audit_immutable'").run(), /AUDIT_LOG_IMMUTABLE/);
     writable.close();
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test('v21 membership migration preserves IDs, inactive history, uniqueness and foreign keys', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'voicecan-membership-migrate-'));
+  try {
+    const config = await loadConfig({ VOICECAN_DATA_DIR: dataDir, VOICECAN_LOG_LEVEL: 'silent' });
+    const old = new DatabaseSync(config.databaseFile);
+    old.exec(schemaSql.replace("role IN ('group_admin','member','viewer')", "role IN ('group_admin','member')"));
+    old.exec(`INSERT INTO users(id,username,normalized_username,role,password_hash,created_at,updated_at) VALUES('admin','admin','admin','system_admin','hash','now','now'),('member','member','member','user','hash','now','now');
+      INSERT INTO user_groups(id,name,created_at,updated_at) VALUES('group','Group','now','now');
+      INSERT INTO group_memberships(id,user_id,group_id,role,active,created_at,updated_at) VALUES('gm_admin','admin','group','group_admin',1,'now','now'),('gm_member','member','group','member',1,'now','now'),('gm_history','member','group','member',0,'then','then');`);
+    const before = old.prepare('SELECT * FROM group_memberships ORDER BY id').all(); old.close();
+    migrate(config); migrate(config);
+    const current = new DatabaseSync(config.databaseFile, { enableForeignKeyConstraints: true });
+    try {
+      assert.deepEqual(current.prepare('SELECT * FROM group_memberships ORDER BY id').all(), before);
+      current.prepare("UPDATE group_memberships SET role='viewer' WHERE id='gm_member'").run();
+      assert.throws(() => current.prepare("UPDATE group_memberships SET role='owner' WHERE id='gm_member'").run(), /CHECK/);
+      assert.throws(() => current.prepare("UPDATE group_memberships SET role='group_admin' WHERE id='gm_member'").run(), /UNIQUE/);
+      assert.throws(() => current.prepare("UPDATE group_memberships SET active=1 WHERE id='gm_history'").run(), /UNIQUE/);
+      assert.deepEqual(current.prepare('PRAGMA foreign_key_check').all(), []);
+      current.prepare('INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)').run(SCHEMA_VERSION + 1, 'future');
+    } finally { current.close(); }
+    assert.throws(() => migrate(config), /is newer than supported/);
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
